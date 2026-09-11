@@ -21,12 +21,13 @@ import {
   Settings,
   Save,
   Github,
-  Globe
+  Globe,
+  Trash2
 } from "lucide-react";
-import { ExtractionResult, ExtractionData } from "./types";
+import { ExtractionResult, ExtractionData, BatchHistoryItem } from "./types";
 
 export default function App() {
-  const [activeTab, setActiveTab] = useState<"batch" | "single" | "search" | "guide">("batch");
+  const [activeTab, setActiveTab] = useState<"batch" | "single" | "search" | "history" | "guide">("batch");
   
   // Configuration & LocalStorage state
   const [openRouterApiKey, setOpenRouterApiKey] = useState(() => localStorage.getItem("scuola_openrouter_api_key") || "");
@@ -35,6 +36,52 @@ export default function App() {
   const [githubPat, setGithubPat] = useState(() => localStorage.getItem("scuola_github_pat") || "");
   const [isSettingsOpen, setIsSettingsOpen] = useState(false);
   const [settingsSavedMessage, setSettingsSavedMessage] = useState("");
+
+  // History state
+  const [batchHistory, setBatchHistory] = useState<BatchHistoryItem[]>(() => {
+    try {
+      const saved = localStorage.getItem("scuola_batch_history");
+      return saved ? JSON.parse(saved) : [];
+    } catch {
+      return [];
+    }
+  });
+
+  const saveBatchToHistory = (results: ExtractionResult[], filename: string) => {
+    const newItem: BatchHistoryItem = {
+      id: "batch_" + Date.now(),
+      filename: filename || "batch_urls.csv",
+      timestamp: new Date().toLocaleString("it-IT"),
+      totalUrls: results.length,
+      results
+    };
+    const updated = [newItem, ...batchHistory];
+    setBatchHistory(updated);
+    try {
+      localStorage.setItem("scuola_batch_history", JSON.stringify(updated));
+    } catch (e) {
+      console.error("Impossibile salvare lo storico in localStorage", e);
+    }
+  };
+
+  const deleteHistoryItem = (id: string, e: React.MouseEvent) => {
+    e.stopPropagation();
+    const updated = batchHistory.filter(item => item.id !== id);
+    setBatchHistory(updated);
+    localStorage.setItem("scuola_batch_history", JSON.stringify(updated));
+  };
+
+  const clearHistory = () => {
+    if (window.confirm("Sei sicuro di voler svuotare tutto lo storico delle estrazioni?")) {
+      setBatchHistory([]);
+      localStorage.removeItem("scuola_batch_history");
+    }
+  };
+
+  const loadHistoryItem = (item: BatchHistoryItem) => {
+    setBatchResults(item.results);
+    setActiveTab("batch");
+  };
 
   const saveSettings = (e: React.FormEvent) => {
     e.preventDefault();
@@ -47,6 +94,58 @@ export default function App() {
       setSettingsSavedMessage("");
       setIsSettingsOpen(false);
     }, 1500);
+  };
+
+  // Export local backup (JSON)
+  const exportLocalBackup = () => {
+    const backupData = {
+      version: 1,
+      timestamp: new Date().toISOString(),
+      openRouterApiKey,
+      githubUser,
+      githubRepo,
+      batchHistory,
+    };
+    const blob = new Blob([JSON.stringify(backupData, null, 2)], { type: "application/json" });
+    const url = URL.createObjectURL(blob);
+    const link = document.createElement("a");
+    link.setAttribute("href", url);
+    link.setAttribute("download", `scuola_ata_backup_${new Date().toISOString().slice(0, 10)}.json`);
+    document.body.appendChild(link);
+    link.click();
+    document.body.removeChild(link);
+  };
+
+  // Import local backup (JSON)
+  const importLocalBackup = (e: React.ChangeEvent<HTMLInputElement>) => {
+    const file = e.target.files?.[0];
+    if (!file) return;
+    const reader = new FileReader();
+    reader.onload = (event) => {
+      try {
+        const json = JSON.parse(event.target?.result as string);
+        if (json.batchHistory && Array.isArray(json.batchHistory)) {
+          setBatchHistory(json.batchHistory);
+          localStorage.setItem("scuola_batch_history", JSON.stringify(json.batchHistory));
+        }
+        if (json.openRouterApiKey !== undefined) {
+          setOpenRouterApiKey(json.openRouterApiKey);
+          localStorage.setItem("scuola_openrouter_api_key", json.openRouterApiKey);
+        }
+        if (json.githubUser !== undefined) {
+          setGithubUser(json.githubUser);
+          localStorage.setItem("scuola_github_user", json.githubUser);
+        }
+        if (json.githubRepo !== undefined) {
+          setGithubRepo(json.githubRepo);
+          localStorage.setItem("scuola_github_repo", json.githubRepo);
+        }
+        alert("Backup locale importato con successo sul device!");
+      } catch (err: any) {
+        alert("Errore durante l'importazione del file di backup: file JSON non valido.");
+      }
+    };
+    reader.readAsText(file);
   };
 
   // Batch processing state
@@ -310,6 +409,7 @@ export default function App() {
         }
 
         setBatchResults(results);
+        saveBatchToHistory(results, selectedFile?.name || "batch_urls.csv");
         setIsProcessingBatch(false);
         return;
       }
@@ -350,6 +450,7 @@ export default function App() {
 
         if (job.status === "completed") {
           setBatchResults(job.results);
+          saveBatchToHistory(job.results, selectedFile?.name || "batch_urls.csv");
           isDone = true;
           setIsProcessingBatch(false);
         } else if (job.status === "error") {
@@ -583,6 +684,17 @@ export default function App() {
             <span>Test URL Singolo</span>
           </button>
           <button
+            onClick={() => setActiveTab("history")}
+            className={`px-4 py-2 rounded-lg text-sm font-medium transition-all flex items-center gap-2 ${
+              activeTab === "history"
+                ? "bg-indigo-600 text-white shadow-lg shadow-indigo-600/25"
+                : "text-slate-400 hover:text-white hover:bg-slate-800/60"
+            }`}
+          >
+            <Layers className="w-4 h-4" />
+            <span>Storico ({batchHistory.length})</span>
+          </button>
+          <button
             onClick={() => setActiveTab("search")}
             className={`px-4 py-2 rounded-lg text-sm font-medium transition-all flex items-center gap-2 ${
               activeTab === "search"
@@ -691,6 +803,31 @@ export default function App() {
                     placeholder="ghp_..."
                     className="w-full bg-slate-950 border border-slate-800 rounded-xl px-4 py-2.5 text-sm text-white focus:outline-none focus:border-indigo-500"
                   />
+                </div>
+              </div>
+
+              <div className="border-t border-slate-800 pt-4 space-y-3">
+                <h4 className="text-xs font-semibold uppercase tracking-wider text-slate-400 flex items-center gap-1.5">
+                  <Database className="w-3.5 h-3.5 text-indigo-400" />
+                  <span>Salvataggio e Backup Locale sul Device</span>
+                </h4>
+                <p className="text-xs text-slate-400 leading-relaxed">
+                  Tutti i dati e lo storico delle estrazioni sono salvati in automatico nella memoria locale del browser (Device Storage). Puoi anche esportare un file di backup o ripristinarlo in qualsiasi momento.
+                </p>
+                <div className="flex flex-wrap items-center gap-3 pt-1">
+                  <button
+                    type="button"
+                    onClick={exportLocalBackup}
+                    className="bg-slate-800 hover:bg-slate-700 text-slate-200 border border-slate-700 text-xs font-medium px-4 py-2.5 rounded-xl transition-all flex items-center gap-2"
+                  >
+                    <Download className="w-3.5 h-3.5 text-indigo-400" />
+                    <span>Esporta Backup (JSON)</span>
+                  </button>
+                  <label className="bg-slate-800 hover:bg-slate-700 text-slate-200 border border-slate-700 text-xs font-medium px-4 py-2.5 rounded-xl transition-all flex items-center gap-2 cursor-pointer">
+                    <Save className="w-3.5 h-3.5 text-emerald-400" />
+                    <span>Importa Backup (JSON)</span>
+                    <input type="file" accept=".json" onChange={importLocalBackup} className="hidden" />
+                  </label>
                 </div>
               </div>
 
@@ -1080,6 +1217,91 @@ export default function App() {
                 <div className="bg-slate-950 rounded-xl p-6 text-slate-200 text-sm whitespace-pre-wrap leading-relaxed border border-slate-800 font-sans">
                   {searchResult}
                 </div>
+              </div>
+            )}
+          </div>
+        )}
+
+        {/* TAB: STORICO BATCH */}
+        {activeTab === "history" && (
+          <div className="space-y-6 animate-fadeIn max-w-5xl mx-auto">
+            <div className="flex flex-col sm:flex-row items-start sm:items-center justify-between gap-4 bg-slate-900 border border-slate-800 rounded-2xl p-6 shadow-xl">
+              <div>
+                <h2 className="text-xl font-semibold text-white flex items-center gap-2">
+                  <Layers className="w-5 h-5 text-indigo-400" />
+                  Storico Estrazioni Batch ({batchHistory.length})
+                </h2>
+                <p className="text-sm text-slate-400 mt-1">
+                  Storico locale delle sessioni di estrazione CSV salvate nel browser. Puoi ricaricare qualsiasi sessione precedente, esportarla o eliminarla.
+                </p>
+              </div>
+              {batchHistory.length > 0 && (
+                <button
+                  onClick={clearHistory}
+                  className="bg-rose-500/10 hover:bg-rose-500/20 text-rose-400 border border-rose-500/30 text-xs font-medium px-4 py-2.5 rounded-xl transition-colors flex items-center gap-2"
+                >
+                  <Trash2 className="w-4 h-4" />
+                  <span>Svuota Storico</span>
+                </button>
+              )}
+            </div>
+
+            {batchHistory.length === 0 ? (
+              <div className="bg-slate-900 border border-slate-800 rounded-2xl p-12 text-center space-y-4 shadow-xl">
+                <div className="bg-slate-800/60 w-16 h-16 rounded-2xl flex items-center justify-center mx-auto text-slate-400">
+                  <Layers className="w-8 h-8" />
+                </div>
+                <h3 className="text-lg font-medium text-white">Nessuna estrazione salvata nello storico</h3>
+                <p className="text-sm text-slate-400 max-w-md mx-auto">
+                  Carica un file CSV nella sezione "Elaborazione Batch CSV" ed esegui l'estrazione per salvare automaticamente i risultati nello storico locale.
+                </p>
+                <button
+                  onClick={() => setActiveTab("batch")}
+                  className="inline-flex items-center gap-2 bg-indigo-600 hover:bg-indigo-500 text-white font-medium px-6 py-3 rounded-xl transition-all shadow-lg shadow-indigo-600/25 text-sm"
+                >
+                  <FileSpreadsheet className="w-4 h-4" />
+                  <span>Vai a Elaborazione Batch</span>
+                </button>
+              </div>
+            ) : (
+              <div className="space-y-4">
+                {batchHistory.map((item) => (
+                  <div key={item.id} className="bg-slate-900 border border-slate-800 rounded-2xl p-6 shadow-xl flex flex-col md:flex-row items-start md:items-center justify-between gap-4 hover:border-slate-700 transition-all">
+                    <div className="space-y-1.5">
+                      <div className="flex items-center gap-3">
+                        <span className="text-sm font-bold text-white flex items-center gap-1.5">
+                          <FileSpreadsheet className="w-4 h-4 text-indigo-400" />
+                          {item.filename}
+                        </span>
+                        <span className="text-xs bg-slate-800 text-slate-300 px-2.5 py-0.5 rounded-full font-medium">
+                          {item.totalUrls} URL analizzati
+                        </span>
+                      </div>
+                      <p className="text-xs text-slate-400">
+                        Salvato il: <span className="text-slate-300 font-medium">{item.timestamp}</span> &bull; 
+                        Successi: <span className="text-emerald-400 font-medium">{item.results.filter(r => r.status === 'success').length}</span> &bull; 
+                        Errori: <span className="text-rose-400 font-medium">{item.results.filter(r => r.status === 'error').length}</span>
+                      </p>
+                    </div>
+
+                    <div className="flex items-center gap-2.5 shrink-0">
+                      <button
+                        onClick={() => loadHistoryItem(item)}
+                        className="bg-indigo-600 hover:bg-indigo-500 text-white font-medium px-4 py-2 rounded-xl text-xs transition-all flex items-center gap-1.5 shadow-md shadow-indigo-600/20"
+                      >
+                        <ExternalLink className="w-3.5 h-3.5" />
+                        <span>Carica in Dashboard</span>
+                      </button>
+                      <button
+                        onClick={(e) => deleteHistoryItem(item.id, e)}
+                        className="bg-slate-800 hover:bg-rose-500/20 text-slate-400 hover:text-rose-400 border border-slate-700 hover:border-rose-500/30 p-2 rounded-xl text-xs transition-all"
+                        title="Elimina dallo storico"
+                      >
+                        <Trash2 className="w-4 h-4" />
+                      </button>
+                    </div>
+                  </div>
+                ))}
               </div>
             )}
           </div>

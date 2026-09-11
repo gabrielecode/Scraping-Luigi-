@@ -21,3 +21,11 @@ export interface ExtractionResult {
   logs: string[];
   data: ExtractionData;
 }
+
+export interface BatchHistoryItem {
+  id: string;
+  filename: string;
+  timestamp: string;
+  totalUrls: number;
+  results: ExtractionResult[];
+}
