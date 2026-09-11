@@ -16,13 +16,38 @@ import {
   RefreshCw,
   HelpCircle,
   Database,
-  ArrowRight
+  ArrowRight,
+  Key,
+  Settings,
+  Save,
+  Github
 } from "lucide-react";
 import { ExtractionResult, ExtractionData } from "./types";
 
 export default function App() {
   const [activeTab, setActiveTab] = useState<"batch" | "single" | "guide">("batch");
   
+  // Configuration & LocalStorage state
+  const [openRouterApiKey, setOpenRouterApiKey] = useState(() => localStorage.getItem("scuola_openrouter_api_key") || "");
+  const [githubUser, setGithubUser] = useState(() => localStorage.getItem("scuola_github_user") || "");
+  const [githubRepo, setGithubRepo] = useState(() => localStorage.getItem("scuola_github_repo") || "");
+  const [githubPat, setGithubPat] = useState(() => localStorage.getItem("scuola_github_pat") || "");
+  const [isSettingsOpen, setIsSettingsOpen] = useState(false);
+  const [settingsSavedMessage, setSettingsSavedMessage] = useState("");
+
+  const saveSettings = (e: React.FormEvent) => {
+    e.preventDefault();
+    localStorage.setItem("scuola_openrouter_api_key", openRouterApiKey.trim());
+    localStorage.setItem("scuola_github_user", githubUser.trim());
+    localStorage.setItem("scuola_github_repo", githubRepo.trim());
+    localStorage.setItem("scuola_github_pat", githubPat.trim());
+    setSettingsSavedMessage("Impostazioni salvate con successo in LocalStorage!");
+    setTimeout(() => {
+      setSettingsSavedMessage("");
+      setIsSettingsOpen(false);
+    }, 1500);
+  };
+
   // Batch processing state
   const [selectedFile, setSelectedFile] = useState<File | null>(null);
   const [isProcessingBatch, setIsProcessingBatch] = useState(false);
@@ -67,10 +92,20 @@ export default function App() {
     try {
       const response = await fetch("/api/process-csv", {
         method: "POST",
+        headers: {
+          ...(openRouterApiKey.trim() ? { "x-openrouter-key": openRouterApiKey.trim() } : {})
+        },
         body: formData,
       });
 
-      const data = await response.json();
+      const textRes = await response.text();
+      let data;
+      try {
+        data = JSON.parse(textRes);
+      } catch {
+        throw new Error(`Risposta server non valida (${response.status}): ${textRes.substring(0, 100)}`);
+      }
+
       if (!response.ok || !data.success) {
         throw new Error(data.error || "Errore durante l'elaborazione del batch.");
       }
@@ -98,11 +133,21 @@ export default function App() {
     try {
       const response = await fetch("/api/extract-single", {
         method: "POST",
-        headers: { "Content-Type": "application/json" },
+        headers: {
+          "Content-Type": "application/json",
+          ...(openRouterApiKey.trim() ? { "x-openrouter-key": openRouterApiKey.trim() } : {})
+        },
         body: JSON.stringify({ url: singleUrl.trim() }),
       });
 
-      const data = await response.json();
+      const textRes = await response.text();
+      let data;
+      try {
+        data = JSON.parse(textRes);
+      } catch {
+        throw new Error(`Risposta server non valida (${response.status}): ${textRes.substring(0, 100)}`);
+      }
+
       if (!response.ok || !data.success) {
         throw new Error(data.error || "Errore durante l'estrazione.");
       }
@@ -223,8 +268,116 @@ export default function App() {
             <HelpCircle className="w-4 h-4" />
             <span>Architettura & Guida</span>
           </button>
+          <button
+            onClick={() => setIsSettingsOpen(true)}
+            className="px-4 py-2 rounded-lg text-sm font-medium transition-all flex items-center gap-2 bg-slate-800 hover:bg-slate-700 text-slate-200 border border-slate-700"
+          >
+            <Settings className="w-4 h-4 text-indigo-400" />
+            <span>Impostazioni & API Key</span>
+          </button>
         </div>
       </header>
+
+      {/* Settings Modal */}
+      {isSettingsOpen && (
+        <div className="fixed inset-0 z-50 bg-black/70 backdrop-blur-sm flex items-center justify-center p-4">
+          <div className="bg-slate-900 border border-slate-800 rounded-2xl max-w-lg w-full p-6 shadow-2xl space-y-6 relative animate-fadeIn">
+            <div className="flex items-center justify-between border-b border-slate-800 pb-4">
+              <h3 className="text-lg font-semibold text-white flex items-center gap-2">
+                <Settings className="w-5 h-5 text-indigo-400" />
+                Configurazione & Credenziali (LocalStorage)
+              </h3>
+              <button
+                onClick={() => setIsSettingsOpen(false)}
+                className="text-slate-400 hover:text-white text-sm font-bold px-2 py-1 rounded-lg bg-slate-800"
+              >
+                ✕
+              </button>
+            </div>
+
+            <form onSubmit={saveSettings} className="space-y-4">
+              {settingsSavedMessage && (
+                <div className="bg-emerald-500/10 border border-emerald-500/30 text-emerald-400 px-4 py-2.5 rounded-xl text-sm flex items-center gap-2">
+                  <CheckCircle2 className="w-4 h-4 flex-shrink-0" />
+                  <span>{settingsSavedMessage}</span>
+                </div>
+              )}
+
+              <div className="space-y-1.5">
+                <label className="text-xs font-medium text-slate-300 flex items-center gap-1.5">
+                  <Key className="w-3.5 h-3.5 text-emerald-400" />
+                  <span>OpenRouter API Key (Richiesta per AI Extractor)</span>
+                </label>
+                <input
+                  type="password"
+                  value={openRouterApiKey}
+                  onChange={(e) => setOpenRouterApiKey(e.target.value)}
+                  placeholder="sk-or-v1-..."
+                  className="w-full bg-slate-950 border border-slate-800 rounded-xl px-4 py-2.5 text-sm text-white focus:outline-none focus:border-indigo-500"
+                />
+                <p className="text-[11px] text-slate-500">Inserisci la chiave OpenRouter per abilitare le chiamate di ricerca e analisi LLM.</p>
+              </div>
+
+              <div className="border-t border-slate-800 pt-4 space-y-3">
+                <h4 className="text-xs font-semibold uppercase tracking-wider text-slate-400 flex items-center gap-1.5">
+                  <Github className="w-3.5 h-3.5 text-slate-300" />
+                  <span>GitHub Integration (Opzionale)</span>
+                </h4>
+
+                <div className="space-y-1.5">
+                  <label className="text-xs font-medium text-slate-300">Username GitHub</label>
+                  <input
+                    type="text"
+                    value={githubUser}
+                    onChange={(e) => setGithubUser(e.target.value)}
+                    placeholder="es. mariosrossi"
+                    className="w-full bg-slate-950 border border-slate-800 rounded-xl px-4 py-2.5 text-sm text-white focus:outline-none focus:border-indigo-500"
+                  />
+                </div>
+
+                <div className="space-y-1.5">
+                  <label className="text-xs font-medium text-slate-300">Nome Repository</label>
+                  <input
+                    type="text"
+                    value={githubRepo}
+                    onChange={(e) => setGithubRepo(e.target.value)}
+                    placeholder="es. dashboard-etsy"
+                    className="w-full bg-slate-950 border border-slate-800 rounded-xl px-4 py-2.5 text-sm text-white focus:outline-none focus:border-indigo-500"
+                  />
+                </div>
+
+                <div className="space-y-1.5">
+                  <label className="text-xs font-medium text-slate-300">Personal Access Token (PAT)</label>
+                  <input
+                    type="password"
+                    value={githubPat}
+                    onChange={(e) => setGithubPat(e.target.value)}
+                    placeholder="ghp_..."
+                    className="w-full bg-slate-950 border border-slate-800 rounded-xl px-4 py-2.5 text-sm text-white focus:outline-none focus:border-indigo-500"
+                  />
+                </div>
+              </div>
+
+              <div className="flex justify-end gap-3 pt-4 border-t border-slate-800">
+                <button
+                  type="button"
+                  onClick={() => setIsSettingsOpen(false)}
+                  className="px-4 py-2 rounded-xl text-sm font-medium text-slate-400 hover:text-white bg-slate-800 hover:bg-slate-700"
+                >
+                  Annulla
+                </button>
+                <button
+                  type="submit"
+                  className="px-5 py-2 rounded-xl text-sm font-medium bg-indigo-600 hover:bg-indigo-500 text-white shadow-lg shadow-indigo-600/25 flex items-center gap-2"
+                >
+                  <Save className="w-4 h-4" />
+                  <span>Salva Impostazioni</span>
+                </button>
+              </div>
+            </form>
+          </div>
+        </div>
+      )}
 
       {/* Main Content Area */}
       <main className="flex-1 max-w-7xl w-full mx-auto p-6 space-y-8">

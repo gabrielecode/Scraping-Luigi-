@@ -63,10 +63,10 @@ async function callGeminiWithRetry(ai: any, params: any, maxRetries = 3): Promis
   throw lastError || new Error("Gemini API temporaneamente non disponibile (503 High Demand). Riprovare tra pochi secondi.");
 }
 
-async function callOpenRouter(fullText: string): Promise<any> {
-  const apiKey = process.env.OPENROUTER_API_KEY;
+async function callOpenRouter(fullText: string, customApiKey?: string): Promise<any> {
+  const apiKey = customApiKey || process.env.OPENROUTER_API_KEY;
   if (!apiKey) {
-    throw new Error("OPENROUTER_API_KEY non è configurato.");
+    throw new Error("OPENROUTER_API_KEY non è configurato. Inserisci la tua OpenRouter API Key nelle impostazioni dell'app.");
   }
 
   const response = await axios.post(
@@ -97,14 +97,21 @@ async function callOpenRouter(fullText: string): Promise<any> {
   return JSON.parse(content);
 }
 
-async function extractData(fullText: string): Promise<any> {
-  // Prioritize OpenRouter as requested
-  if (process.env.OPENROUTER_API_KEY) {
+async function extractData(fullText: string, customApiKey?: string): Promise<any> {
+  const apiKeyToUse = customApiKey || process.env.OPENROUTER_API_KEY;
+  let openRouterError: string | null = null;
+
+  if (apiKeyToUse) {
     try {
-      return await callOpenRouter(fullText);
+      return await callOpenRouter(fullText, apiKeyToUse);
     } catch (err: any) {
-      console.warn("OpenRouter API error, falling back to Gemini:", err.message);
+      openRouterError = err.message;
+      console.warn("OpenRouter API error, falling back to Gemini if available:", err.message);
     }
+  }
+
+  if (!process.env.GEMINI_API_KEY) {
+    throw new Error(openRouterError ? `Errore OpenRouter: ${openRouterError}` : "Nessuna chiave API configurata. Inserisci la tua OpenRouter API Key nelle impostazioni dell'app.");
   }
 
   // Fallback to Gemini
@@ -251,8 +258,9 @@ app.post("/api/extract-single", async (req: Request, res: Response) => {
       return res.status(400).json({ error: "URL è obbligatorio." });
     }
 
+    const customApiKey = req.headers["x-openrouter-key"] as string;
     const { fullText, navigatedUrl, logs } = await scrapeWebsite(url);
-    const extractedData = await extractData(fullText);
+    const extractedData = await extractData(fullText, customApiKey);
 
     res.json({
       success: true,
@@ -350,12 +358,13 @@ app.post("/api/process-csv", upload.single("file"), async (req: Request, res: Re
       return res.status(400).json({ error: "Nessun URL valido trovato nel file CSV. Assicurarsi che il file contenga una colonna con link validi." });
     }
 
+    const customApiKey = req.headers["x-openrouter-key"] as string;
     const results = [];
 
     for (const url of urls) {
       try {
         const { fullText, navigatedUrl, logs } = await scrapeWebsite(url);
-        const data = await extractData(fullText);
+        const data = await extractData(fullText, customApiKey);
 
         results.push({
           url,
