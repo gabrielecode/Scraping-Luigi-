@@ -68,6 +68,117 @@ export default function App() {
   const [isSearching, setIsSearching] = useState(false);
   const [searchError, setSearchError] = useState("");
 
+  // Client-side fallback helpers for Vercel static hosting
+  const executeClientSideExtract = async (targetUrl: string, apiKey: string) => {
+    const logs = [`Avvio estrazione client-side (Vercel SPA mode) per: ${targetUrl}`];
+    let pageText = "";
+    let navigatedUrl = targetUrl;
+
+    try {
+      const proxyUrl = `https://api.allorigins.win/raw?url=${encodeURIComponent(targetUrl)}`;
+      const res = await fetch(proxyUrl);
+      const html = await res.text();
+      const parser = new DOMParser();
+      const doc = parser.parseFromString(html, "text/html");
+      doc.querySelectorAll("script, style, nav, footer, header").forEach(el => el.remove());
+      pageText = doc.body?.innerText || doc.documentElement.textContent || "";
+      logs.push(`Testo estratto via CORS proxy (${pageText.length} caratteri)`);
+    } catch (err: any) {
+      logs.push(`Impossibile leggere il sito direttamente (${err.message}). Utilizzo OpenRouter Web Search.`);
+    }
+
+    const prompt = `Sei un assistente specializzato nell'analisi di documenti scolastici e bandi di gara. Analizza il seguente testo estratto dal sito ${targetUrl}:\n\n${pageText}\n\nRestituisci ESCLUSIVAMENTE un oggetto JSON con le seguenti chiavi (numeriche, se non menzionate metti 0):
+{
+  "convocazioni_collaboratore_scolastico": 0,
+  "convocazioni_assistente_amministrativo": 0,
+  "convocazioni_docenti": 0,
+  "convocazioni_assistente_tecnico": 0,
+  "convocazioni_cuoco": 0,
+  "convocazioni_assistente_agrario": 0,
+  "pensionamenti_collaboratore_scolastico": 0,
+  "pensionamenti_assistente_amministrativo": 0,
+  "pensionamenti_docenti": 0,
+  "pensionamenti_assistente_tecnico": 0,
+  "pensionamenti_cuoco": 0,
+  "pensionamenti_assistente_agrario": 0
+}`;
+
+    const response = await fetch("https://openrouter.ai/api/v1/chat/completions", {
+      method: "POST",
+      headers: {
+        "Authorization": `Bearer ${apiKey}`,
+        "HTTP-Referer": window.location.origin,
+        "X-Title": "ScuolaATA Scraper",
+        "Content-Type": "application/json"
+      },
+      body: JSON.stringify({
+        model: "google/gemini-2.5-flash",
+        messages: [
+          { role: "system", content: "Sei un assistente JSON rigoroso. Rispondi solo con JSON valido." },
+          { role: "user", content: prompt }
+        ],
+        plugins: [{ id: "web" }],
+        response_format: { type: "json_object" }
+      })
+    });
+
+    const respData = await response.json();
+    const content = respData?.choices?.[0]?.message?.content || "{}";
+    const defaultData: ExtractionData = {
+      convocazioni_collaboratore_scolastico: 0,
+      convocazioni_assistente_amministrativo: 0,
+      convocazioni_docenti: 0,
+      convocazioni_assistente_tecnico: 0,
+      convocazioni_cuoco: 0,
+      convocazioni_assistente_agrario: 0,
+      pensionamenti_collaboratore_scolastico: 0,
+      pensionamenti_assistente_amministrativo: 0,
+      pensionamenti_docenti: 0,
+      pensionamenti_assistente_tecnico: 0,
+      pensionamenti_cuoco: 0,
+      pensionamenti_assistente_agrario: 0
+    };
+
+    let extractedData = defaultData;
+    try {
+      const parsed = JSON.parse(content);
+      extractedData = { ...defaultData, ...parsed };
+    } catch {
+      extractedData = defaultData;
+    }
+
+    return {
+      status: "success" as const,
+      url: targetUrl,
+      navigatedUrl,
+      logs,
+      data: extractedData
+    };
+  };
+
+  const executeClientSideSearch = async (queryStr: string, apiKey: string) => {
+    const response = await fetch("https://openrouter.ai/api/v1/chat/completions", {
+      method: "POST",
+      headers: {
+        "Authorization": `Bearer ${apiKey}`,
+        "HTTP-Referer": window.location.origin,
+        "X-Title": "ScuolaATA Scraper",
+        "Content-Type": "application/json"
+      },
+      body: JSON.stringify({
+        model: "google/gemini-2.5-flash",
+        messages: [
+          { role: "system", content: "Sei un assistente di ricerca specializzato nel reperire bandi, convocazioni ATA e pensionamenti delle scuole italiane sul web." },
+          { role: "user", content: `Cerca sul web informazioni aggiornate su: ${queryStr}` }
+        ],
+        plugins: [{ id: "web" }]
+      })
+    });
+
+    const respData = await response.json();
+    return respData?.choices?.[0]?.message?.content || "Nessun risultato trovato.";
+  };
+
   const handleGoogleSearch = async (e: React.FormEvent) => {
     e.preventDefault();
     if (!searchQuery.trim()) return;
@@ -86,6 +197,15 @@ export default function App() {
         body: JSON.stringify({ query: searchQuery.trim() })
       });
 
+      if (res.status === 405 || res.status === 404 || !res.ok) {
+        if (!openRouterApiKey.trim()) {
+          throw new Error("Errore backend (405/404 Vercel static mode). Inserisci la tua OpenRouter API Key nelle Impostazioni per abilitare la ricerca client-side.");
+        }
+        const resultText = await executeClientSideSearch(searchQuery.trim(), openRouterApiKey.trim());
+        setSearchResult(resultText);
+        return;
+      }
+
       const textRes = await res.text();
       let data;
       try {
@@ -94,7 +214,7 @@ export default function App() {
         throw new Error(`Risposta server non valida (${res.status}): ${textRes.substring(0, 100)}`);
       }
 
-      if (!res.ok || !data.success) {
+      if (!data.success) {
         throw new Error(data.error || "Errore durante la ricerca web.");
       }
 
@@ -143,6 +263,49 @@ export default function App() {
         body: formData,
       });
 
+      if (response.status === 405 || response.status === 404 || !response.ok) {
+        if (!openRouterApiKey.trim()) {
+          throw new Error("Errore backend (405/404 Vercel static mode). Inserisci la tua OpenRouter API Key nelle Impostazioni per abilitare l'elaborazione client-side.");
+        }
+
+        const csvText = await selectedFile.text();
+        const lines = csvText.split(/\r?\n/).map(l => l.trim().replace(/^["']|["']$/g, "")).filter(Boolean);
+        const urls = lines.filter(l => l.startsWith("http") || l.includes(".it"));
+        const results: ExtractionResult[] = [];
+
+        for (const u of urls) {
+          try {
+            const resData = await executeClientSideExtract(u.startsWith("http") ? u : `https://${u}`, openRouterApiKey.trim());
+            results.push(resData);
+          } catch (itemErr: any) {
+            results.push({
+              url: u,
+              navigatedUrl: u,
+              status: "error",
+              logs: [itemErr.message],
+              data: {
+                convocazioni_collaboratore_scolastico: 0,
+                convocazioni_assistente_amministrativo: 0,
+                convocazioni_docenti: 0,
+                convocazioni_assistente_tecnico: 0,
+                convocazioni_cuoco: 0,
+                convocazioni_assistente_agrario: 0,
+                pensionamenti_collaboratore_scolastico: 0,
+                pensionamenti_assistente_amministrativo: 0,
+                pensionamenti_docenti: 0,
+                pensionamenti_assistente_tecnico: 0,
+                pensionamenti_cuoco: 0,
+                pensionamenti_assistente_agrario: 0,
+              }
+            });
+          }
+        }
+
+        setBatchResults(results);
+        setIsProcessingBatch(false);
+        return;
+      }
+
       const textRes = await response.text();
       let data;
       try {
@@ -151,7 +314,7 @@ export default function App() {
         throw new Error(`Risposta server non valida (${response.status}): ${textRes.substring(0, 100)}`);
       }
 
-      if (!response.ok || !data.success) {
+      if (!data.success) {
         throw new Error(data.error || "Errore durante l'elaborazione del batch.");
       }
 
@@ -175,6 +338,8 @@ export default function App() {
     setIsProcessingSingle(true);
     setSingleResult(null);
 
+    const formattedUrl = singleUrl.trim().startsWith("http") ? singleUrl.trim() : `https://${singleUrl.trim()}`;
+
     try {
       const response = await fetch("/api/extract-single", {
         method: "POST",
@@ -182,8 +347,17 @@ export default function App() {
           "Content-Type": "application/json",
           ...(openRouterApiKey.trim() ? { "x-openrouter-key": openRouterApiKey.trim() } : {})
         },
-        body: JSON.stringify({ url: singleUrl.trim() }),
+        body: JSON.stringify({ url: formattedUrl }),
       });
+
+      if (response.status === 405 || response.status === 404 || !response.ok) {
+        if (!openRouterApiKey.trim()) {
+          throw new Error("Errore backend (405/404 Vercel static mode). Inserisci la tua OpenRouter API Key nelle Impostazioni per abilitare l'estrazione client-side.");
+        }
+        const clientData = await executeClientSideExtract(formattedUrl, openRouterApiKey.trim());
+        setSingleResult(clientData);
+        return;
+      }
 
       const textRes = await response.text();
       let data;
@@ -193,7 +367,7 @@ export default function App() {
         throw new Error(`Risposta server non valida (${response.status}): ${textRes.substring(0, 100)}`);
       }
 
-      if (!response.ok || !data.success) {
+      if (!data.success) {
         throw new Error(data.error || "Errore durante l'estrazione.");
       }
 
