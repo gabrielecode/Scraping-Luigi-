@@ -183,7 +183,7 @@ export default function App() {
           <div>
             <h1 className="text-lg font-bold tracking-tight text-white flex items-center gap-2">
               ScuolaATA Data Scraper & AI Extractor
-              <span className="text-xs bg-indigo-500/20 text-indigo-300 border border-indigo-500/30 px-2 py-0.5 rounded-full font-medium">Gemini 3.8 Flash</span>
+              <span className="text-xs bg-emerald-500/20 text-emerald-300 border border-emerald-500/30 px-2 py-0.5 rounded-full font-medium">OpenRouter AI</span>
             </h1>
             <p className="text-xs text-slate-400">Automazione avanzata per bandi, convocazioni e pensionamenti scolastici</p>
           </div>

@@ -35,6 +35,93 @@ const getAiClient = () => {
   });
 };
 
+async function callGeminiWithRetry(ai: any, params: any, maxRetries = 3): Promise<any> {
+  const modelsToTry = [params.model || "gemini-3.8-flash", "gemini-flash-latest", "gemini-3.1-flash-lite"];
+  let lastError: any = null;
+
+  for (const modelName of modelsToTry) {
+    let attempt = 0;
+    while (attempt < maxRetries) {
+      try {
+        const res = await ai.models.generateContent({
+          ...params,
+          model: modelName,
+        });
+        return res;
+      } catch (err: any) {
+        lastError = err;
+        attempt++;
+        const isUnavailable = err?.status === 503 || err?.message?.includes("503") || err?.message?.includes("UNAVAILABLE") || err?.message?.includes("high demand") || err?.message?.includes("overloaded");
+        if (isUnavailable && attempt < maxRetries) {
+          await new Promise(resolve => setTimeout(resolve, attempt * 2500));
+          continue;
+        }
+        break;
+      }
+    }
+  }
+  throw lastError || new Error("Gemini API temporaneamente non disponibile (503 High Demand). Riprovare tra pochi secondi.");
+}
+
+async function callOpenRouter(fullText: string): Promise<any> {
+  const apiKey = process.env.OPENROUTER_API_KEY;
+  if (!apiKey) {
+    throw new Error("OPENROUTER_API_KEY non è configurato.");
+  }
+
+  const response = await axios.post(
+    "https://openrouter.ai/api/v1/chat/completions",
+    {
+      model: "google/gemini-2.5-flash",
+      messages: [
+        { role: "system", content: EXTRACTION_SYSTEM_PROMPT },
+        { role: "user", content: `Analizza il seguente testo estratto dal sito scolastico:\n\n${fullText}` }
+      ],
+      response_format: { type: "json_object" }
+    },
+    {
+      headers: {
+        "Authorization": `Bearer ${apiKey}`,
+        "HTTP-Referer": process.env.APP_URL || "https://ai.studio",
+        "X-Title": "ScuolaATA Scraper",
+        "Content-Type": "application/json"
+      },
+      timeout: 30000
+    }
+  );
+
+  const content = response.data?.choices?.[0]?.message?.content;
+  if (!content) {
+    throw new Error("Risposta vuota da OpenRouter");
+  }
+  return JSON.parse(content);
+}
+
+async function extractData(fullText: string): Promise<any> {
+  // Prioritize OpenRouter as requested
+  if (process.env.OPENROUTER_API_KEY) {
+    try {
+      return await callOpenRouter(fullText);
+    } catch (err: any) {
+      console.warn("OpenRouter API error, falling back to Gemini:", err.message);
+    }
+  }
+
+  // Fallback to Gemini
+  const ai = getAiClient();
+  const response = await callGeminiWithRetry(ai, {
+    model: "gemini-3.8-flash",
+    contents: `Analizza il seguente testo estratto dal sito scolastico:\n\n${fullText}`,
+    config: {
+      systemInstruction: EXTRACTION_SYSTEM_PROMPT,
+      responseMimeType: "application/json",
+    },
+  });
+
+  const textResult = response.text || "{}";
+  return JSON.parse(textResult);
+}
+
 const EXTRACTION_SYSTEM_PROMPT = `Sei un assistente specializzato nell'analisi di documenti scolastici e bandi di gara. Leggi il testo seguente e restituisci ESCLUSIVAMENTE un oggetto JSON con le seguenti chiavi:
 {
   "convocazioni_collaboratore_scolastico": numero,
@@ -86,11 +173,20 @@ async function scrapeWebsite(targetUrl: string): Promise<{ fullText: string; nav
         const res = await axios.get(currentUrl, { timeout: 10000, httpsAgent, headers: { "User-Agent": "Mozilla/5.0" } });
         homeHtml = res.data;
       } catch (err2: any) {
-        logs.push(`Fallito anche HTTP: ${err2.message}`);
-        throw new Error(`Impossibile raggiungere l'URL: ${targetUrl}`);
+        logs.push(`Sito non raggiungibile (${targetUrl}): ${err2.message}. URL offline o non valido.`);
+        return {
+          fullText: `Sito non raggiungibile o offline: ${targetUrl}. Nessun dato disponibile.`,
+          navigatedUrl: targetUrl,
+          logs,
+        };
       }
     } else {
-      throw new Error(`Impossibile raggiungere l'URL: ${targetUrl} (${err.message})`);
+      logs.push(`Sito non raggiungibile (${targetUrl}): ${err.message}. URL offline o non valido.`);
+      return {
+        fullText: `Sito non raggiungibile o offline: ${targetUrl}. Nessun dato disponibile.`,
+        navigatedUrl: targetUrl,
+        logs,
+      };
     }
   }
 
@@ -156,55 +252,7 @@ app.post("/api/extract-single", async (req: Request, res: Response) => {
     }
 
     const { fullText, navigatedUrl, logs } = await scrapeWebsite(url);
-    const ai = getAiClient();
-
-    const response = await ai.models.generateContent({
-      model: "gemini-3.8-flash",
-      contents: `Analizza il seguente testo estratto dal sito scolastico:\n\n${fullText}`,
-      config: {
-        systemInstruction: EXTRACTION_SYSTEM_PROMPT,
-        responseMimeType: "application/json",
-        responseSchema: {
-          type: Type.OBJECT,
-          properties: {
-            convocazioni_collaboratore_scolastico: { type: Type.INTEGER },
-            convocazioni_assistente_amministrativo: { type: Type.INTEGER },
-            convocazioni_docenti: { type: Type.INTEGER },
-            convocazioni_assistente_tecnico: { type: Type.INTEGER },
-            convocazioni_cuoco: { type: Type.INTEGER },
-            convocazioni_assistente_agrario: { type: Type.INTEGER },
-            pensionamenti_collaboratore_scolastico: { type: Type.INTEGER },
-            pensionamenti_assistente_amministrativo: { type: Type.INTEGER },
-            pensionamenti_docenti: { type: Type.INTEGER },
-            pensionamenti_assistente_tecnico: { type: Type.INTEGER },
-            pensionamenti_cuoco: { type: Type.INTEGER },
-            pensionamenti_assistente_agrario: { type: Type.INTEGER },
-          },
-          required: [
-            "convocazioni_collaboratore_scolastico",
-            "convocazioni_assistente_amministrativo",
-            "convocazioni_docenti",
-            "convocazioni_assistente_tecnico",
-            "convocazioni_cuoco",
-            "convocazioni_assistente_agrario",
-            "pensionamenti_collaboratore_scolastico",
-            "pensionamenti_assistente_amministrativo",
-            "pensionamenti_docenti",
-            "pensionamenti_assistente_tecnico",
-            "pensionamenti_cuoco",
-            "pensionamenti_assistente_agrario",
-          ],
-        },
-      },
-    });
-
-    const textResult = response.text || "{}";
-    let extractedData = {};
-    try {
-      extractedData = JSON.parse(textResult);
-    } catch {
-      extractedData = {};
-    }
+    const extractedData = await extractData(fullText);
 
     res.json({
       success: true,
@@ -302,27 +350,12 @@ app.post("/api/process-csv", upload.single("file"), async (req: Request, res: Re
       return res.status(400).json({ error: "Nessun URL valido trovato nel file CSV. Assicurarsi che il file contenga una colonna con link validi." });
     }
 
-    const ai = getAiClient();
     const results = [];
 
     for (const url of urls) {
       try {
         const { fullText, navigatedUrl, logs } = await scrapeWebsite(url);
-        const response = await ai.models.generateContent({
-          model: "gemini-3.8-flash",
-          contents: `Analizza il seguente testo estratto dal sito scolastico:\n\n${fullText}`,
-          config: {
-            systemInstruction: EXTRACTION_SYSTEM_PROMPT,
-            responseMimeType: "application/json",
-          },
-        });
-
-        let data = {};
-        try {
-          data = JSON.parse(response.text || "{}");
-        } catch {
-          data = {};
-        }
+        const data = await extractData(fullText);
 
         results.push({
           url,
