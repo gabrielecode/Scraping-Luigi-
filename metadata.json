@@ -1,0 +1,7 @@
+{
+  "name": "ScuolaATA Data Scraper & AI Extractor",
+  "description": "Automated school website scraper and Gemini AI data extractor for ATA convocations and retirements.",
+  "requestFramePermissions": [],
+  "majorCapabilities": ["MAJOR_CAPABILITY_SERVER_SIDE_GEMINI_API"]
+}
+
