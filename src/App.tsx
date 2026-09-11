@@ -20,12 +20,13 @@ import {
   Key,
   Settings,
   Save,
-  Github
+  Github,
+  Globe
 } from "lucide-react";
 import { ExtractionResult, ExtractionData } from "./types";
 
 export default function App() {
-  const [activeTab, setActiveTab] = useState<"batch" | "single" | "guide">("batch");
+  const [activeTab, setActiveTab] = useState<"batch" | "single" | "search" | "guide">("batch");
   
   // Configuration & LocalStorage state
   const [openRouterApiKey, setOpenRouterApiKey] = useState(() => localStorage.getItem("scuola_openrouter_api_key") || "");
@@ -60,6 +61,50 @@ export default function App() {
   const [isProcessingSingle, setIsProcessingSingle] = useState(false);
   const [singleResult, setSingleResult] = useState<ExtractionResult | null>(null);
   const [singleError, setSingleError] = useState("");
+
+  // Google Search state
+  const [searchQuery, setSearchQuery] = useState("");
+  const [searchResult, setSearchResult] = useState("");
+  const [isSearching, setIsSearching] = useState(false);
+  const [searchError, setSearchError] = useState("");
+
+  const handleGoogleSearch = async (e: React.FormEvent) => {
+    e.preventDefault();
+    if (!searchQuery.trim()) return;
+
+    setIsSearching(true);
+    setSearchError("");
+    setSearchResult("");
+
+    try {
+      const res = await fetch("/api/google-search", {
+        method: "POST",
+        headers: {
+          "Content-Type": "application/json",
+          ...(openRouterApiKey.trim() ? { "x-openrouter-key": openRouterApiKey.trim() } : {})
+        },
+        body: JSON.stringify({ query: searchQuery.trim() })
+      });
+
+      const textRes = await res.text();
+      let data;
+      try {
+        data = JSON.parse(textRes);
+      } catch {
+        throw new Error(`Risposta server non valida (${res.status}): ${textRes.substring(0, 100)}`);
+      }
+
+      if (!res.ok || !data.success) {
+        throw new Error(data.error || "Errore durante la ricerca web.");
+      }
+
+      setSearchResult(data.result);
+    } catch (err: any) {
+      setSearchError(err.message || "Errore durante la richiesta di ricerca.");
+    } finally {
+      setIsSearching(false);
+    }
+  };
 
   // Handle sample CSV download
   const downloadSampleCsv = () => {
@@ -256,6 +301,17 @@ export default function App() {
           >
             <Search className="w-4 h-4" />
             <span>Test URL Singolo</span>
+          </button>
+          <button
+            onClick={() => setActiveTab("search")}
+            className={`px-4 py-2 rounded-lg text-sm font-medium transition-all flex items-center gap-2 ${
+              activeTab === "search"
+                ? "bg-indigo-600 text-white shadow-lg shadow-indigo-600/25"
+                : "text-slate-400 hover:text-white hover:bg-slate-800/60"
+            }`}
+          >
+            <Globe className="w-4 h-4" />
+            <span>Google Data Search</span>
           </button>
           <button
             onClick={() => setActiveTab("guide")}
@@ -639,7 +695,72 @@ export default function App() {
           </div>
         )}
 
-        {/* TAB 3: ARCHITECTURE & GUIDE */}
+        {/* TAB 3: GOOGLE DATA SEARCH */}
+        {activeTab === "search" && (
+          <div className="space-y-8 animate-fadeIn max-w-4xl mx-auto">
+            <div className="bg-slate-900 border border-slate-800 rounded-2xl p-6 shadow-xl space-y-6">
+              <div>
+                <h2 className="text-xl font-semibold text-white flex items-center gap-2">
+                  <Globe className="w-5 h-5 text-indigo-400" />
+                  Google Data Search & Web Grounding
+                </h2>
+                <p className="text-sm text-slate-400 mt-1">
+                  Cerca direttamente sul web tramite l'intelligenza artificiale e Google Search Grounding per trovare bandi ATA, graduatorie scolastiche e circolari di supplenza in tempo reale.
+                </p>
+              </div>
+
+              <form onSubmit={handleGoogleSearch} className="space-y-4">
+                <div className="flex gap-3">
+                  <input
+                    type="text"
+                    placeholder="es. Convocazioni ATA terza fascia Milano 2026"
+                    value={searchQuery}
+                    onChange={(e) => setSearchQuery(e.target.value)}
+                    className="flex-1 bg-slate-950 border border-slate-700 focus:border-indigo-500 rounded-xl px-4 py-3 text-sm text-white placeholder-slate-500 outline-none transition-colors"
+                  />
+                  <button
+                    type="submit"
+                    disabled={isSearching || !searchQuery.trim()}
+                    className="bg-indigo-600 hover:bg-indigo-500 disabled:opacity-50 text-white font-medium px-6 py-3 rounded-xl transition-all shadow-lg shadow-indigo-600/30 flex items-center gap-2 shrink-0"
+                  >
+                    {isSearching ? (
+                      <>
+                        <Loader2 className="w-4 h-4 animate-spin" />
+                        <span>Ricerca...</span>
+                      </>
+                    ) : (
+                      <>
+                        <Search className="w-4 h-4" />
+                        <span>Cerca sul Web</span>
+                      </>
+                    )}
+                  </button>
+                </div>
+              </form>
+
+              {searchError && (
+                <div className="bg-rose-500/10 border border-rose-500/20 text-rose-400 p-4 rounded-xl text-sm flex items-center gap-3">
+                  <AlertCircle className="w-5 h-5 shrink-0" />
+                  <span>{searchError}</span>
+                </div>
+              )}
+            </div>
+
+            {searchResult && (
+              <div className="bg-slate-900 border border-slate-800 rounded-2xl p-6 shadow-xl space-y-4 animate-fadeIn">
+                <h3 className="text-lg font-semibold text-white flex items-center gap-2">
+                  <CheckCircle2 className="w-5 h-5 text-emerald-400" />
+                  Risultati della Ricerca Web (Grounding)
+                </h3>
+                <div className="bg-slate-950 rounded-xl p-6 text-slate-200 text-sm whitespace-pre-wrap leading-relaxed border border-slate-800 font-sans">
+                  {searchResult}
+                </div>
+              </div>
+            )}
+          </div>
+        )}
+
+        {/* TAB 4: ARCHITECTURE & GUIDE */}
         {activeTab === "guide" && (
           <div className="space-y-8 animate-fadeIn max-w-4xl mx-auto">
             <div className="bg-slate-900 border border-slate-800 rounded-2xl p-8 shadow-xl space-y-6">

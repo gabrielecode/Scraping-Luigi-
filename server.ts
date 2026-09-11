@@ -77,6 +77,7 @@ async function callOpenRouter(fullText: string, customApiKey?: string): Promise<
         { role: "system", content: EXTRACTION_SYSTEM_PROMPT },
         { role: "user", content: `Analizza il seguente testo estratto dal sito scolastico:\n\n${fullText}` }
       ],
+      plugins: [{ id: "web" }],
       response_format: { type: "json_object" }
     },
     {
@@ -402,6 +403,59 @@ app.post("/api/process-csv", upload.single("file"), async (req: Request, res: Re
   } catch (error: any) {
     console.error("Batch CSV processing error:", error);
     res.status(500).json({ success: false, error: error.message || "Errore elaborazione batch" });
+  }
+});
+
+app.post("/api/google-search", async (req: Request, res: Response) => {
+  try {
+    const { query } = req.body;
+    if (!query) {
+      return res.status(400).json({ error: "Query di ricerca obbligatoria." });
+    }
+
+    const customApiKey = req.headers["x-openrouter-key"] as string;
+    const apiKey = customApiKey || process.env.OPENROUTER_API_KEY;
+
+    if (apiKey) {
+      const response = await axios.post(
+        "https://openrouter.ai/api/v1/chat/completions",
+        {
+          model: "google/gemini-2.5-flash",
+          messages: [
+            { role: "system", content: "Sei un assistente di ricerca specializzato nel reperire bandi, convocazioni ATA e pensionamenti delle scuole italiane sul web. Fornisci link e dettagli precisi trovati." },
+            { role: "user", content: `Cerca sul web informazioni aggiornate su: ${query}` }
+          ],
+          plugins: [{ id: "web" }]
+        },
+        {
+          headers: {
+            "Authorization": `Bearer ${apiKey}`,
+            "HTTP-Referer": process.env.APP_URL || "https://ai.studio",
+            "X-Title": "ScuolaATA Scraper",
+            "Content-Type": "application/json"
+          },
+          timeout: 30000
+        }
+      );
+
+      const resultText = response.data?.choices?.[0]?.message?.content || "Nessun risultato trovato.";
+      return res.json({ success: true, result: resultText });
+    } else if (process.env.GEMINI_API_KEY) {
+      const ai = getAiClient();
+      const response = await callGeminiWithRetry(ai, {
+        model: "gemini-3.8-flash",
+        contents: `Cerca sul web informazioni aggiornate su: ${query}`,
+        config: {
+          systemInstruction: "Sei un assistente di ricerca specializzato nel reperire bandi, convocazioni ATA e pensionamenti delle scuole italiane sul web.",
+          tools: [{ googleSearch: {} }]
+        }
+      });
+      return res.json({ success: true, result: response.text || "Nessun risultato trovato." });
+    } else {
+      return res.status(400).json({ error: "Nessuna chiave API (OpenRouter o Gemini) configurata per la ricerca web." });
+    }
+  } catch (err: any) {
+    res.status(500).json({ error: err.message || "Errore durante la ricerca web." });
   }
 });
 
