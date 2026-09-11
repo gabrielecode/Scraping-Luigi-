@@ -342,6 +342,16 @@ async function parseCsv(csvBuffer: Buffer): Promise<string[]> {
   });
 }
 
+interface BatchJob {
+  status: "running" | "completed" | "error";
+  current: number;
+  total: number;
+  results: any[];
+  error?: string;
+}
+
+const jobsStore = new Map<string, BatchJob>();
+
 app.post("/api/process-csv", upload.single("file"), async (req: Request, res: Response) => {
   try {
     if (!req.file) {
@@ -359,50 +369,123 @@ app.post("/api/process-csv", upload.single("file"), async (req: Request, res: Re
       return res.status(400).json({ error: "Nessun URL valido trovato nel file CSV. Assicurarsi che il file contenga una colonna con link validi." });
     }
 
+    const jobId = Math.random().toString(36).substring(2, 15) + Date.now().toString(36);
+    jobsStore.set(jobId, { status: "running", current: 0, total: urls.length, results: [] });
+
     const customApiKey = req.headers["x-openrouter-key"] as string;
-    const results = [];
 
-    for (const url of urls) {
-      try {
-        const { fullText, navigatedUrl, logs } = await scrapeWebsite(url);
-        const data = await extractData(fullText, customApiKey);
+    // Process asynchronously in background
+    (async () => {
+      const results = [];
+      let current = 0;
+      for (const url of urls) {
+        try {
+          const { fullText, navigatedUrl, logs } = await scrapeWebsite(url);
+          const data = await extractData(fullText, customApiKey);
 
-        results.push({
-          url,
-          navigatedUrl,
-          status: "success",
-          logs,
-          data,
-        });
-      } catch (err: any) {
-        results.push({
-          url,
-          navigatedUrl: url,
-          status: "error",
-          error: err.message,
-          logs: [err.message],
-          data: {
-            convocazioni_collaboratore_scolastico: 0,
-            convocazioni_assistente_amministrativo: 0,
-            convocazioni_docenti: 0,
-            convocazioni_assistente_tecnico: 0,
-            convocazioni_cuoco: 0,
-            convocazioni_assistente_agrario: 0,
-            pensionamenti_collaboratore_scolastico: 0,
-            pensionamenti_assistente_amministrativo: 0,
-            pensionamenti_docenti: 0,
-            pensionamenti_assistente_tecnico: 0,
-            pensionamenti_cuoco: 0,
-            pensionamenti_assistente_agrario: 0,
-          },
-        });
+          results.push({
+            url,
+            navigatedUrl,
+            status: "success",
+            logs,
+            data,
+          });
+        } catch (err: any) {
+          results.push({
+            url,
+            navigatedUrl: url,
+            status: "error",
+            error: err.message,
+            logs: [err.message],
+            data: {
+              convocazioni_collaboratore_scolastico: 0,
+              convocazioni_assistente_amministrativo: 0,
+              convocazioni_docenti: 0,
+              convocazioni_assistente_tecnico: 0,
+              convocazioni_cuoco: 0,
+              convocazioni_assistente_agrario: 0,
+              pensionamenti_collaboratore_scolastico: 0,
+              pensionamenti_assistente_amministrativo: 0,
+              pensionamenti_docenti: 0,
+              pensionamenti_assistente_tecnico: 0,
+              pensionamenti_cuoco: 0,
+              pensionamenti_assistente_agrario: 0,
+            },
+          });
+        }
+        current++;
+        jobsStore.set(jobId, { status: "running", current, total: urls.length, results });
       }
+      jobsStore.set(jobId, { status: "completed", current: urls.length, total: urls.length, results });
+    })().catch((err) => {
+      jobsStore.set(jobId, { status: "error", current: 0, total: urls.length, results: [], error: err.message });
+    });
+
+    res.json({ success: true, jobId });
+  } catch (error: any) {
+    console.error("Batch CSV initiation error:", error);
+    res.status(500).json({ success: false, error: error.message || "Errore avvio elaborazione batch" });
+  }
+});
+
+app.get("/api/batch-status/:jobId", (req: Request, res: Response) => {
+  const { jobId } = req.params;
+  const job = jobsStore.get(jobId);
+  if (!job) {
+    return res.status(404).json({ error: "Job non trovato." });
+  }
+  res.json({ success: true, job });
+});
+
+app.post("/api/export-github", async (req: Request, res: Response) => {
+  try {
+    const { owner, repo, path: filePath, content, message } = req.body;
+    const pat = req.headers["x-github-pat"] as string;
+
+    if (!owner || !repo || !filePath || !content) {
+      return res.status(400).json({ error: "Parametri mancanti (owner, repo, path, content)." });
+    }
+    if (!pat) {
+      return res.status(400).json({ error: "GitHub Personal Access Token (PAT) mancante nell'header x-github-pat." });
     }
 
-    res.json({ success: true, total: urls.length, results });
-  } catch (error: any) {
-    console.error("Batch CSV processing error:", error);
-    res.status(500).json({ success: false, error: error.message || "Errore elaborazione batch" });
+    const githubApiUrl = `https://api.github.com/repos/${owner}/${repo}/contents/${filePath}`;
+    let fileSha: string | undefined;
+
+    try {
+      const existing = await axios.get(githubApiUrl, {
+        headers: {
+          "Authorization": `Bearer ${pat}`,
+          "Accept": "application/vnd.github.v3+json"
+        }
+      });
+      fileSha = existing.data?.sha;
+    } catch {
+      // File doesn't exist yet
+    }
+
+    const putResponse = await axios.put(
+      githubApiUrl,
+      {
+        message: message || "Export risultati ScuolaATA Data Scraper",
+        content: Buffer.from(content, "utf-8").toString("base64"),
+        ...(fileSha ? { sha: fileSha } : {})
+      },
+      {
+        headers: {
+          "Authorization": `Bearer ${pat}`,
+          "Accept": "application/vnd.github.v3+json",
+          "Content-Type": "application/json"
+        }
+      }
+    );
+
+    res.json({
+      success: true,
+      commitUrl: putResponse.data?.commit?.html_url || `https://github.com/${owner}/${repo}/blob/main/${filePath}`
+    });
+  } catch (err: any) {
+    res.status(500).json({ error: err.response?.data?.message || err.message || "Errore durante l'esportazione su GitHub." });
   }
 });
 

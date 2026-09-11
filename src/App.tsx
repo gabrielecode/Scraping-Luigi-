@@ -55,6 +55,8 @@ export default function App() {
   const [batchProgress, setBatchProgress] = useState({ current: 0, total: 0 });
   const [batchResults, setBatchResults] = useState<ExtractionResult[]>([]);
   const [batchError, setBatchError] = useState("");
+  const [githubExportStatus, setGithubExportStatus] = useState("");
+  const [githubExportUrl, setGithubExportUrl] = useState("");
 
   // Single URL test state
   const [singleUrl, setSingleUrl] = useState("");
@@ -239,7 +241,7 @@ export default function App() {
     document.body.removeChild(link);
   };
 
-  // Handle batch CSV upload & processing
+  // Handle batch CSV upload & processing with polling
   const handleBatchProcess = async (e: React.FormEvent) => {
     e.preventDefault();
     if (!selectedFile) {
@@ -250,6 +252,9 @@ export default function App() {
     setBatchError("");
     setIsProcessingBatch(true);
     setBatchResults([]);
+    setBatchProgress({ current: 0, total: 0 });
+    setGithubExportStatus("");
+    setGithubExportUrl("");
 
     const formData = new FormData();
     formData.append("file", selectedFile);
@@ -272,16 +277,18 @@ export default function App() {
         const lines = csvText.split(/\r?\n/).map(l => l.trim().replace(/^["']|["']$/g, "")).filter(Boolean);
         const urls = lines.filter(l => l.startsWith("http") || l.includes(".it"));
         const results: ExtractionResult[] = [];
+        setBatchProgress({ current: 0, total: urls.length });
 
-        for (const u of urls) {
+        for (let i = 0; i < urls.length; i++) {
+          const u = urls[i];
           try {
             const resData = await executeClientSideExtract(u.startsWith("http") ? u : `https://${u}`, openRouterApiKey.trim());
             results.push(resData);
           } catch (itemErr: any) {
             results.push({
+              status: "error",
               url: u,
               navigatedUrl: u,
-              status: "error",
               logs: [itemErr.message],
               data: {
                 convocazioni_collaboratore_scolastico: 0,
@@ -299,6 +306,7 @@ export default function App() {
               }
             });
           }
+          setBatchProgress({ current: i + 1, total: urls.length });
         }
 
         setBatchResults(results);
@@ -307,22 +315,120 @@ export default function App() {
       }
 
       const textRes = await response.text();
-      let data;
+      let initData;
       try {
-        data = JSON.parse(textRes);
+        initData = JSON.parse(textRes);
       } catch {
         throw new Error(`Risposta server non valida (${response.status}): ${textRes.substring(0, 100)}`);
       }
 
-      if (!data.success) {
-        throw new Error(data.error || "Errore durante l'elaborazione del batch.");
+      if (!initData.success || !initData.jobId) {
+        throw new Error(initData.error || "Errore avvio elaborazione batch.");
       }
 
-      setBatchResults(data.results);
+      const jobId = initData.jobId;
+      const pollInterval = 1500;
+      let isDone = false;
+
+      while (!isDone) {
+        await new Promise(resolve => setTimeout(resolve, pollInterval));
+        const statusRes = await fetch(`/api/batch-status/${jobId}`);
+        const statusText = await statusRes.text();
+        let statusData;
+        try {
+          statusData = JSON.parse(statusText);
+        } catch {
+          continue;
+        }
+
+        if (!statusRes.ok || !statusData.success) {
+          throw new Error(statusData.error || "Errore durante il controllo dello stato del job.");
+        }
+
+        const job = statusData.job;
+        setBatchProgress({ current: job.current, total: job.total });
+
+        if (job.status === "completed") {
+          setBatchResults(job.results);
+          isDone = true;
+          setIsProcessingBatch(false);
+        } else if (job.status === "error") {
+          throw new Error(job.error || "Errore riscontrato durante l'elaborazione dei job.");
+        }
+      }
     } catch (err: any) {
       setBatchError(err.message || "Errore di connessione al server.");
-    } finally {
       setIsProcessingBatch(false);
+    }
+  };
+
+  // Export results to GitHub securely via server-side endpoint
+  const exportToGitHub = async () => {
+    if (batchResults.length === 0) return;
+    if (!githubUser.trim() || !githubRepo.trim() || !githubPat.trim()) {
+      setGithubExportStatus("Inserisci Username, Repository e PAT GitHub nelle Impostazioni prima di esportare.");
+      setIsSettingsOpen(true);
+      return;
+    }
+
+    setGithubExportStatus("Esportazione su GitHub in corso...");
+    setGithubExportUrl("");
+
+    const headers = [
+      "URL Originale", "URL Navigato", "Stato",
+      "Conv. Coll. Scolastico", "Conv. Assistente Amm.", "Conv. Docenti", "Conv. Assistente Tecnico", "Conv. Cuoco", "Conv. Assistente Agrario",
+      "Pens. Coll. Scolastico", "Pens. Assistente Amm.", "Pens. Docenti", "Pens. Assistente Tecnico", "Pens. Cuoco", "Pens. Assistente Agrario"
+    ];
+    const rows = batchResults.map(r => [
+      `"${r.url}"`, `"${r.navigatedUrl}"`, `"${r.status}"`,
+      r.data.convocazioni_collaboratore_scolastico ?? 0,
+      r.data.convocazioni_assistente_amministrativo ?? 0,
+      r.data.convocazioni_docenti ?? 0,
+      r.data.convocazioni_assistente_tecnico ?? 0,
+      r.data.convocazioni_cuoco ?? 0,
+      r.data.convocazioni_assistente_agrario ?? 0,
+      r.data.pensionamenti_collaboratore_scolastico ?? 0,
+      r.data.pensionamenti_assistente_amministrativo ?? 0,
+      r.data.pensionamenti_docenti ?? 0,
+      r.data.pensionamenti_assistente_tecnico ?? 0,
+      r.data.pensionamenti_cuoco ?? 0,
+      r.data.pensionamenti_assistente_agrario ?? 0,
+    ]);
+    const csvContent = [headers.join(","), ...rows.map(e => e.join(","))].join("\n");
+    const filePath = `risultati-scuole-ata-${new Date().toISOString().slice(0, 10)}.csv`;
+
+    try {
+      const res = await fetch("/api/export-github", {
+        method: "POST",
+        headers: {
+          "Content-Type": "application/json",
+          "x-github-pat": githubPat.trim()
+        },
+        body: JSON.stringify({
+          owner: githubUser.trim(),
+          repo: githubRepo.trim(),
+          path: filePath,
+          content: csvContent,
+          message: `Export risultati ScuolaATA ${new Date().toISOString().slice(0, 10)}`
+        })
+      });
+
+      const textRes = await res.text();
+      let data;
+      try {
+        data = JSON.parse(textRes);
+      } catch {
+        throw new Error(`Risposta server non valida (${res.status}): ${textRes.substring(0, 100)}`);
+      }
+
+      if (!res.ok || !data.success) {
+        throw new Error(data.error || "Errore durante l'esportazione su GitHub.");
+      }
+
+      setGithubExportStatus("Esportazione completata con successo su GitHub!");
+      setGithubExportUrl(data.commitUrl);
+    } catch (err: any) {
+      setGithubExportStatus(`Errore GitHub: ${err.message}`);
     }
   };
 
@@ -689,22 +795,67 @@ export default function App() {
               </div>
             </div>
 
+            {/* Progress Bar during Batch Processing */}
+            {isProcessingBatch && batchProgress.total > 0 && (
+              <div className="bg-slate-900 border border-slate-800 rounded-2xl p-6 space-y-3 shadow-xl">
+                <div className="flex justify-between text-sm text-slate-300">
+                  <span className="flex items-center gap-2">
+                    <Loader2 className="w-4 h-4 animate-spin text-indigo-400" />
+                    Elaborazione asincrona in corso...
+                  </span>
+                  <span className="font-semibold text-indigo-400">{batchProgress.current} / {batchProgress.total}</span>
+                </div>
+                <div className="w-full bg-slate-950 rounded-full h-2.5 overflow-hidden">
+                  <div 
+                    className="bg-indigo-600 h-2.5 rounded-full transition-all duration-300" 
+                    style={{ width: `${Math.round((batchProgress.current / batchProgress.total) * 100)}%` }}
+                  ></div>
+                </div>
+              </div>
+            )}
+
             {/* Results Section */}
             {batchResults.length > 0 && (
               <div className="space-y-4">
-                <div className="flex items-center justify-between">
+                <div className="flex flex-col sm:flex-row items-start sm:items-center justify-between gap-4">
                   <div>
                     <h3 className="text-lg font-semibold text-white">Risultati Elaborazione Batch</h3>
                     <p className="text-xs text-slate-400">Completata l'analisi su {batchResults.length} siti web</p>
                   </div>
-                  <button
-                    onClick={exportResultsToCsv}
-                    className="bg-emerald-600 hover:bg-emerald-500 text-white font-medium px-4 py-2.5 rounded-xl transition-all shadow-lg shadow-emerald-600/20 flex items-center gap-2 text-sm"
-                  >
-                    <Download className="w-4 h-4" />
-                    <span>Scarica CSV Finale di Output</span>
-                  </button>
+                  <div className="flex flex-wrap items-center gap-3">
+                    <button
+                      onClick={exportResultsToCsv}
+                      className="bg-emerald-600 hover:bg-emerald-500 text-white font-medium px-4 py-2.5 rounded-xl transition-all shadow-lg shadow-emerald-600/20 flex items-center gap-2 text-sm"
+                    >
+                      <Download className="w-4 h-4" />
+                      <span>Scarica CSV</span>
+                    </button>
+                    <button
+                      onClick={exportToGitHub}
+                      className="bg-slate-800 hover:bg-slate-700 text-slate-200 border border-slate-700 hover:border-slate-600 font-medium px-4 py-2.5 rounded-xl transition-all flex items-center gap-2 text-sm"
+                    >
+                      <Github className="w-4 h-4 text-slate-300" />
+                      <span>Salva su GitHub</span>
+                    </button>
+                  </div>
                 </div>
+
+                {githubExportStatus && (
+                  <div className="bg-slate-900 border border-slate-800 p-4 rounded-xl text-sm flex flex-col sm:flex-row items-start sm:items-center justify-between gap-3">
+                    <span className="text-slate-300">{githubExportStatus}</span>
+                    {githubExportUrl && (
+                      <a 
+                        href={githubExportUrl} 
+                        target="_blank" 
+                        rel="noreferrer" 
+                        className="text-indigo-400 hover:text-indigo-300 font-medium underline flex items-center gap-1 text-xs shrink-0"
+                      >
+                        <span>Visualizza commit su GitHub</span>
+                        <ExternalLink className="w-3 h-3" />
+                      </a>
+                    )}
+                  </div>
+                )}
 
                 <div className="bg-slate-900 border border-slate-800 rounded-2xl overflow-hidden shadow-xl">
                   <div className="overflow-x-auto">
