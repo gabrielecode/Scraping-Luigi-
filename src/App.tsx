@@ -372,30 +372,25 @@ Se un campo non è deducibile dal testo del documento, assegna come valore una s
     return dateStr.trim();
   };
 
-  const CORS_PROXIES = [
-  "https://api.allorigins.win/raw?url=",
-  "https://corsproxy.io/?url=",
-  "https://api.codetabs.com/v1/proxy?quest="
-];
-
 async function fetchWithProxy(url: string, asArrayBuffer: boolean = false): Promise<any> {
-  for (const proxy of CORS_PROXIES) {
-    try {
-      const response = await fetch(proxy + encodeURIComponent(url));
-      if (response.ok) {
-        if (asArrayBuffer) {
-           return await response.arrayBuffer();
-        }
-        const text = await response.text();
-        if (text && text.length > 100) {
-          return text;
-        }
-      }
-    } catch (e) {
-      console.warn(`Proxy ${proxy} failed, trying next...`);
+  const localProxyUrl = `/api/proxy?url=${encodeURIComponent(url)}`;
+  try {
+    const response = await fetch(localProxyUrl);
+    if (!response.ok) {
+       throw new Error(`Proxy error: ${response.statusText}`);
     }
+    if (asArrayBuffer) {
+       return await response.arrayBuffer();
+    }
+    const text = await response.text();
+    if (text && text.length > 100) {
+      return text;
+    }
+    throw new Error("Content too short or empty");
+  } catch (e: any) {
+    console.error("Local proxy failed:", e);
+    throw new Error(`Impossibile accedere al sito: ${e.message}`);
   }
-  throw new Error("Impossibile accedere al sito: tutti i proxy CORS hanno fallito");
 }
 
 function parseHtml(html: string): Document {
