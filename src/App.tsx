@@ -36,10 +36,10 @@ export default function App() {
   const [activeTab, setActiveTab] = useState<"batch" | "single" | "albo" | "search" | "history" | "guide">("batch");
   
   // Configuration & LocalStorage state
-  const [openRouterApiKey, setOpenRouterApiKey] = useState(() => localStorage.getItem("scuola_openrouter_api_key") || "");
-  const [githubUser, setGithubUser] = useState(() => localStorage.getItem("scuola_github_user") || "");
-  const [githubRepo, setGithubRepo] = useState(() => localStorage.getItem("scuola_github_repo") || "");
-  const [githubPat, setGithubPat] = useState(() => localStorage.getItem("scuola_github_pat") || "");
+  const [openRouterApiKey, setOpenRouterApiKey] = useState(() => typeof window !== "undefined" ? localStorage.getItem("scuola_openrouter_api_key") || "" : "");
+  const [githubUser, setGithubUser] = useState(() => typeof window !== "undefined" ? localStorage.getItem("scuola_github_user") || "" : "");
+  const [githubRepo, setGithubRepo] = useState(() => typeof window !== "undefined" ? localStorage.getItem("scuola_github_repo") || "" : "");
+  const [githubPat, setGithubPat] = useState(() => typeof window !== "undefined" ? localStorage.getItem("scuola_github_pat") || "" : "");
   const [isSettingsOpen, setIsSettingsOpen] = useState(false);
   const [settingsSavedMessage, setSettingsSavedMessage] = useState("");
 
@@ -57,8 +57,11 @@ export default function App() {
   // History state
   const [batchHistory, setBatchHistory] = useState<BatchHistoryItem[]>(() => {
     try {
-      const saved = localStorage.getItem("scuola_batch_history");
-      return saved ? JSON.parse(saved) : [];
+      if (typeof window !== "undefined") {
+        const saved = localStorage.getItem("scuola_batch_history");
+        return saved ? JSON.parse(saved) : [];
+      }
+      return [];
     } catch {
       return [];
     }

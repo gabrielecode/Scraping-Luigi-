@@ -6,7 +6,7 @@ import https from "https";
 import * as cheerio from "cheerio";
 import { Readable } from "stream";
 import csvParser from "csv-parser";
-import { GoogleGenAI, Type } from "@google/genai";
+import { GoogleGenAI } from "@google/genai";
 import { createServer as createViteServer } from "vite";
 import fs from "fs";
 import os from "os";
@@ -21,6 +21,23 @@ app.use(express.urlencoded({ extended: true, limit: "50mb" }));
 const upload = multer({ storage: multer.memoryStorage() });
 
 const httpsAgent = new https.Agent({ rejectUnauthorized: false });
+
+const EXTRACTION_SYSTEM_PROMPT = `Sei un assistente specializzato nell'analisi di documenti scolastici e bandi di gara. Leggi il testo seguente e restituisci ESCLUSIVAMENTE un oggetto JSON con le seguenti chiavi:
+{
+  "convocazioni_collaboratore_scolastico": numero,
+  "convocazioni_assistente_amministrativo": numero,
+  "convocazioni_docenti": numero,
+  "convocazioni_assistente_tecnico": numero,
+  "convocazioni_cuoco": numero,
+  "convocazioni_assistente_agrario": numero,
+  "pensionamenti_collaboratore_scolastico": numero,
+  "pensionamenti_assistente_amministrativo": numero,
+  "pensionamenti_docenti": numero,
+  "pensionamenti_assistente_tecnico": numero,
+  "pensionamenti_cuoco": numero,
+  "pensionamenti_assistente_agrario": numero
+}
+Se un dato non viene menzionato nel testo, assegna il valore 0 alla chiave corrispondente. Non aggiungere testo fuori dal JSON.`;
 
 // Initialize Gemini AI client server-side
 const getAiClient = () => {
@@ -39,7 +56,7 @@ const getAiClient = () => {
 };
 
 async function callGeminiWithRetry(ai: any, params: any, maxRetries = 3): Promise<any> {
-  const modelsToTry = [params.model || "gemini-3.8-flash", "gemini-flash-latest", "gemini-3.1-flash-lite"];
+  const modelsToTry = [params.model || "gemini-2.5-flash", "gemini-flash-latest", "gemini-3.1-flash-lite"];
   let lastError: any = null;
 
   for (const modelName of modelsToTry) {
@@ -121,7 +138,7 @@ async function extractData(fullText: string, customApiKey?: string): Promise<any
   // Fallback to Gemini
   const ai = getAiClient();
   const response = await callGeminiWithRetry(ai, {
-    model: "gemini-3.8-flash",
+    model: "gemini-2.5-flash",
     contents: `Analizza il seguente testo estratto dal sito scolastico:\n\n${fullText}`,
     config: {
       systemInstruction: EXTRACTION_SYSTEM_PROMPT,
@@ -132,23 +149,6 @@ async function extractData(fullText: string, customApiKey?: string): Promise<any
   const textResult = response.text || "{}";
   return JSON.parse(textResult);
 }
-
-const EXTRACTION_SYSTEM_PROMPT = `Sei un assistente specializzato nell'analisi di documenti scolastici e bandi di gara. Leggi il testo seguente e restituisci ESCLUSIVAMENTE un oggetto JSON con le seguenti chiavi:
-{
-  "convocazioni_collaboratore_scolastico": numero,
-  "convocazioni_assistente_amministrativo": numero,
-  "convocazioni_docenti": numero,
-  "convocazioni_assistente_tecnico": numero,
-  "convocazioni_cuoco": numero,
-  "convocazioni_assistente_agrario": numero,
-  "pensionamenti_collaboratore_scolastico": numero,
-  "pensionamenti_assistente_amministrativo": numero,
-  "pensionamenti_docenti": numero,
-  "pensionamenti_assistente_tecnico": numero,
-  "pensionamenti_cuoco": numero,
-  "pensionamenti_assistente_agrario": numero
-}
-Se un dato non viene menzionato nel testo, assegna il valore 0 alla chiave corrispondente. Non aggiungere testo fuori dal JSON.`;
 
 // Helper to normalize and resolve URLs
 function resolveUrl(baseUrl: string, relativeUrl: string): string {
@@ -869,7 +869,7 @@ app.post("/api/google-search", async (req: Request, res: Response) => {
     } else if (process.env.GEMINI_API_KEY) {
       const ai = getAiClient();
       const response = await callGeminiWithRetry(ai, {
-        model: "gemini-3.8-flash",
+        model: "gemini-2.5-flash",
         contents: `Cerca sul web informazioni aggiornate su: ${query}`,
         config: {
           systemInstruction: "Sei un assistente di ricerca specializzato nel reperire bandi, convocazioni ATA e pensionamenti delle scuole italiane sul web.",
@@ -903,7 +903,7 @@ async function startServer() {
   } else {
     const distPath = path.join(process.cwd(), "dist");
     app.use(express.static(distPath));
-    app.get("*all", (req, res) => {
+    app.get("*", (req, res) => {
       res.sendFile(path.join(distPath, "index.html"));
     });
   }

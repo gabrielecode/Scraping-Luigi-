@@ -226,7 +226,7 @@ export async function extractFromPdfGemini(pdfBuffer: Buffer, customApiKey?: str
     };
 
     const response = await ai.models.generateContent({
-      model: "gemini-3.8-flash",
+      model: "gemini-2.5-flash",
       contents: [pdfPart, textPart],
       config: {
         systemInstruction: PDF_EXTRACTION_SYSTEM_PROMPT,
@@ -617,20 +617,20 @@ export async function processAlboPretorio(
   const decorrenza_da = extractedContracts.map((c) => c.decorrenza_da).filter(Boolean).join(" | ") || "";
   const decorrenza_a = extractedContracts.map((c) => c.decorrenza_a).filter(Boolean).join(" | ") || "";
 
-    return {
-      alboUrl,
-      attiTrovatiTotali: rawNotices.length,
-      attiFiltratiValidi: matchedNotices.length,
-      attiEsclusi,
-      contratti: extractedContracts,
-      graduatoria_fascia,
-      profilo_professionale,
-      classe_di_concorso,
-      ore_settimanali,
-      decorrenza_da,
-      decorrenza_a,
-      logs,
-    };
+  return {
+    alboUrl,
+    attiTrovatiTotali: rawNotices.length,
+    attiFiltratiValidi: matchedNotices.length,
+    attiEsclusi,
+    contratti: extractedContracts,
+    graduatoria_fascia,
+    profilo_professionale,
+    classe_di_concorso,
+    ore_settimanali,
+    decorrenza_da,
+    decorrenza_a,
+    logs,
+  };
   } catch (globalErr: any) {
     logs.push(`[Albo Pretorio Add-on] Errore critico durante l'elaborazione: ${globalErr.message}`);
     return {
