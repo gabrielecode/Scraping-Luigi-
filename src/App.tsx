@@ -36,7 +36,18 @@ export default function App() {
   const [activeTab, setActiveTab] = useState<"batch" | "single" | "albo" | "search" | "history" | "guide">("batch");
   
   // Configuration & LocalStorage state
-  const [openRouterApiKey, setOpenRouterApiKey] = useState(() => typeof window !== "undefined" ? localStorage.getItem("scuola_openrouter_api_key") || "" : "");
+  const [openRouterApiKey, setOpenRouterApiKey] = useState(() => {
+    if (typeof window !== "undefined") {
+      const meta = import.meta as any;
+      return (
+        localStorage.getItem("scuola_openrouter_api_key") || 
+        (meta && meta.env && meta.env.VITE_OPENROUTER_API_KEY) || 
+        (meta && meta.env && meta.env.OPENROUTER_API_KEY) || 
+        ""
+      );
+    }
+    return "";
+  });
   const [githubUser, setGithubUser] = useState(() => typeof window !== "undefined" ? localStorage.getItem("scuola_github_user") || "" : "");
   const [githubRepo, setGithubRepo] = useState(() => typeof window !== "undefined" ? localStorage.getItem("scuola_github_repo") || "" : "");
   const [githubPat, setGithubPat] = useState(() => typeof window !== "undefined" ? localStorage.getItem("scuola_github_pat") || "" : "");
@@ -361,6 +372,29 @@ Se un campo non è deducibile dal testo del documento, assegna come valore una s
     return dateStr.trim();
   };
 
+  // CORS Proxies
+  const CORS_PROXY_ALLORIGINS = "https://api.allorigins.win/raw?url=";
+  const CORS_PROXY_CORSPROXY_IO = "https://corsproxy.io/?";
+
+  const fetchThroughProxy = async (url: string, asArrayBuffer: boolean = false) => {
+    // Try AllOrigins first
+    try {
+      const res = await fetch(CORS_PROXY_ALLORIGINS + encodeURIComponent(url));
+      if (res.ok) {
+        return asArrayBuffer ? await res.arrayBuffer() : await res.text();
+      }
+    } catch (err) {
+      console.warn("AllOrigins failed, trying corsproxy.io...", err);
+    }
+
+    // Fallback to corsproxy.io
+    const res = await fetch(CORS_PROXY_CORSPROXY_IO + encodeURIComponent(url));
+    if (!res.ok) {
+      throw new Error(`Impossibile caricare l'URL tramite i proxy CORS. Status: ${res.status}`);
+    }
+    return asArrayBuffer ? await res.arrayBuffer() : await res.text();
+  };
+
   // Client-side fallback helpers for Vercel static hosting
   const executeClientSideExtract = async (targetUrl: string, apiKey: string) => {
     const logs = [`Avvio estrazione client-side (Vercel SPA mode) per: ${targetUrl}`];
@@ -368,9 +402,7 @@ Se un campo non è deducibile dal testo del documento, assegna come valore una s
     let navigatedUrl = targetUrl;
 
     try {
-      const proxyUrl = `https://api.allorigins.win/raw?url=${encodeURIComponent(targetUrl)}`;
-      const res = await fetch(proxyUrl);
-      const html = await res.text();
+      const html = await fetchThroughProxy(targetUrl) as string;
       const parser = new DOMParser();
       const doc = parser.parseFromString(html, "text/html");
       doc.querySelectorAll("script, style, nav, footer, header").forEach(el => el.remove());
@@ -403,9 +435,7 @@ Se un campo non è deducibile dal testo del documento, assegna come valore una s
       if (targetSubUrl) {
         logs.push(`Sezione trovata tramite parola chiave "${matchedKeyword}": ${targetSubUrl}`);
         try {
-          const subProxyUrl = `https://api.allorigins.win/raw?url=${encodeURIComponent(targetSubUrl)}`;
-          const subRes = await fetch(subProxyUrl);
-          const subHtml = await subRes.text();
+          const subHtml = await fetchThroughProxy(targetSubUrl) as string;
           const subDoc = parser.parseFromString(subHtml, "text/html");
           subDoc.querySelectorAll("script, style, nav, footer, header").forEach(el => el.remove());
           const subText = subDoc.body?.innerText || subDoc.documentElement.textContent || "";
@@ -423,23 +453,22 @@ Se un campo non è deducibile dal testo del documento, assegna come valore una s
       pageText = pageText.substring(0, 30000);
     }
 
-    const prompt = `${EXTRACTION_SYSTEM_PROMPT}\n\nAnalizza il seguente testo estratto dal sito ${targetUrl}:\n\n${pageText}`;
-
     const response = await fetch("https://openrouter.ai/api/v1/chat/completions", {
       method: "POST",
       headers: {
         "Authorization": `Bearer ${apiKey}`,
+        "Content-Type": "application/json",
         "HTTP-Referer": window.location.origin,
-        "X-Title": "ScuolaATA Scraper",
-        "Content-Type": "application/json"
+        "X-Title": "ScuolaATA Scraper"
       },
       body: JSON.stringify({
         model: "google/gemini-2.5-flash",
         messages: [
-          { role: "system", content: "Sei un assistente JSON rigoroso. Rispondi solo con JSON valido." },
-          { role: "user", content: prompt }
+          { role: "system", content: EXTRACTION_SYSTEM_PROMPT },
+          { role: "user", content: `Analizza questo testo:\n\n${pageText}` }
         ],
-        response_format: { type: "json_object" }
+        response_format: { type: "json_object" },
+        plugins: [{ id: "web" }]
       })
     });
 
@@ -497,9 +526,7 @@ Se un campo non è deducibile dal testo del documento, assegna come valore una s
 
     // 1. Probing & discovering Albo Pretorio section
     try {
-      const proxyUrl = `https://api.allorigins.win/raw?url=${encodeURIComponent(baseUrl)}`;
-      const res = await fetch(proxyUrl);
-      const html = await res.text();
+      const html = await fetchThroughProxy(baseUrl) as string;
       const parser = new DOMParser();
       const doc = parser.parseFromString(html, "text/html");
       const candidateKeywords = [
@@ -542,16 +569,12 @@ Se un campo non è deducibile dal testo del documento, assegna come valore una s
       for (const p of probePaths) {
         try {
           const testUrl = new URL(p, baseUrl).href;
-          const proxyUrl = `https://api.allorigins.win/raw?url=${encodeURIComponent(testUrl)}`;
-          const probeRes = await fetch(proxyUrl);
-          if (probeRes.ok) {
-            const probeText = await probeRes.text();
-            if (probeText.length > 500) {
-              alboUrl = testUrl;
-              alboHtml = probeText;
-              logs.push(`[Albo Pretorio Add-on] Trovata sezione Albo standard: ${alboUrl}`);
-              break;
-            }
+          const probeText = await fetchThroughProxy(testUrl) as string;
+          if (probeText.length > 500) {
+            alboUrl = testUrl;
+            alboHtml = probeText;
+            logs.push(`[Albo Pretorio Add-on] Trovata sezione Albo standard: ${alboUrl}`);
+            break;
           }
         } catch {
           // Continue to next probe
@@ -562,9 +585,7 @@ Se un campo non è deducibile dal testo del documento, assegna come valore una s
     // If found and not yet loaded, fetch Albo Pretorio page
     if (alboUrl && !alboHtml) {
       try {
-        const proxyUrl = `https://api.allorigins.win/raw?url=${encodeURIComponent(alboUrl)}`;
-        const res = await fetch(proxyUrl);
-        alboHtml = await res.text();
+        alboHtml = await fetchThroughProxy(alboUrl) as string;
       } catch (err: any) {
         logs.push(`[Albo Pretorio Add-on] Errore apertura Albo Pretorio (${alboUrl}): ${err.message}`);
       }
@@ -704,9 +725,7 @@ Se un campo non è deducibile dal testo del documento, assegna come valore una s
 
       if (!pdfDownloadUrl && notice.detailUrl) {
         try {
-          const detailProxy = `https://api.allorigins.win/raw?url=${encodeURIComponent(notice.detailUrl)}`;
-          const detRes = await fetch(detailProxy);
-          const detHtml = await detRes.text();
+          const detHtml = await fetchThroughProxy(notice.detailUrl) as string;
           const detDoc = parser.parseFromString(detHtml, "text/html");
           const links = detDoc.querySelectorAll("a");
           for (const a of Array.from(links)) {
@@ -729,9 +748,7 @@ Se un campo non è deducibile dal testo del documento, assegna come valore una s
       logs.push(`[Albo Pretorio Add-on] Download temporaneo PDF allegato da: ${pdfDownloadUrl}`);
 
       try {
-        const pdfProxy = `https://api.allorigins.win/raw?url=${encodeURIComponent(pdfDownloadUrl)}`;
-        const pdfRes = await fetch(pdfProxy);
-        const arrayBuffer = await pdfRes.arrayBuffer();
+        const arrayBuffer = await fetchThroughProxy(pdfDownloadUrl, true) as ArrayBuffer;
         const uint8Array = new Uint8Array(arrayBuffer);
         let binary = "";
         for (let j = 0; j < uint8Array.length; j++) {
@@ -748,9 +765,9 @@ Se un campo non è deducibile dal testo del documento, assegna come valore una s
           method: "POST",
           headers: {
             "Authorization": `Bearer ${apiKey}`,
+            "Content-Type": "application/json",
             "HTTP-Referer": window.location.origin,
-            "X-Title": "ScuolaATA Scraper",
-            "Content-Type": "application/json"
+            "X-Title": "ScuolaATA Scraper"
           },
           body: JSON.stringify({
             model: "google/gemini-2.5-flash",
