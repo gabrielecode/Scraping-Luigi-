@@ -169,6 +169,18 @@ export default function App() {
   const [selectedFile, setSelectedFile] = useState<File | null>(null);
   const [isProcessingBatch, setIsProcessingBatch] = useState(false);
   const [batchProgress, setBatchProgress] = useState({ current: 0, total: 0 });
+  const [batchInfo, setBatchInfo] = useState<{
+    currentBatch: number;
+    totalBatches: number;
+    batchSize: number;
+    jobId?: string;
+    finalMessage?: string;
+    outputFilename?: string;
+  }>({
+    currentBatch: 0,
+    totalBatches: 0,
+    batchSize: 15,
+  });
   const [batchResults, setBatchResults] = useState<ExtractionResult[]>([]);
   const [batchError, setBatchError] = useState("");
   const [githubExportStatus, setGithubExportStatus] = useState("");
@@ -429,6 +441,14 @@ export default function App() {
     setIsProcessingBatch(true);
     setBatchResults([]);
     setBatchProgress({ current: 0, total: 0 });
+    setBatchInfo({
+      currentBatch: 0,
+      totalBatches: 0,
+      batchSize: 15,
+      jobId: "",
+      finalMessage: "",
+      outputFilename: "",
+    });
     setGithubExportStatus("");
     setGithubExportUrl("");
 
@@ -453,38 +473,60 @@ export default function App() {
         const lines = csvText.split(/\r?\n/).map(l => l.trim().replace(/^["']|["']$/g, "")).filter(Boolean);
         const urls = lines.filter(l => l.startsWith("http") || l.includes(".it"));
         const results: ExtractionResult[] = [];
-        setBatchProgress({ current: 0, total: urls.length });
+        
+        const BATCH_SIZE = 15;
+        const batches: string[][] = [];
+        for (let i = 0; i < urls.length; i += BATCH_SIZE) {
+          batches.push(urls.slice(i, i + BATCH_SIZE));
+        }
+        const totalBatches = batches.length;
 
-        for (let i = 0; i < urls.length; i++) {
-          const u = urls[i];
-          try {
-            const resData = await executeClientSideExtract(u.startsWith("http") ? u : `https://${u}`, openRouterApiKey.trim());
-            results.push(resData);
-          } catch (itemErr: any) {
-            results.push({
-              status: "error",
-              url: u,
-              navigatedUrl: u,
-              logs: [itemErr.message],
-              data: {
-                convocazioni_collaboratore_scolastico: 0,
-                convocazioni_assistente_amministrativo: 0,
-                convocazioni_docenti: 0,
-                convocazioni_assistente_tecnico: 0,
-                convocazioni_cuoco: 0,
-                convocazioni_assistente_agrario: 0,
-                pensionamenti_collaboratore_scolastico: 0,
-                pensionamenti_assistente_amministrativo: 0,
-                pensionamenti_docenti: 0,
-                pensionamenti_assistente_tecnico: 0,
-                pensionamenti_cuoco: 0,
-                pensionamenti_assistente_agrario: 0,
-              }
-            });
+        setBatchProgress({ current: 0, total: urls.length });
+        setBatchInfo({
+          currentBatch: 1,
+          totalBatches,
+          batchSize: BATCH_SIZE,
+        });
+
+        let processedCount = 0;
+        for (let b = 0; b < batches.length; b++) {
+          const currentBatchNum = b + 1;
+          const currentBatchUrls = batches[b];
+          setBatchInfo(prev => ({ ...prev, currentBatch: currentBatchNum, totalBatches }));
+
+          for (const u of currentBatchUrls) {
+            try {
+              const resData = await executeClientSideExtract(u.startsWith("http") ? u : `https://${u}`, openRouterApiKey.trim());
+              results.push(resData);
+            } catch (itemErr: any) {
+              results.push({
+                status: "error",
+                url: u,
+                navigatedUrl: u,
+                logs: [itemErr.message],
+                data: {
+                  convocazioni_collaboratore_scolastico: 0,
+                  convocazioni_assistente_amministrativo: 0,
+                  convocazioni_docenti: 0,
+                  convocazioni_assistente_tecnico: 0,
+                  convocazioni_cuoco: 0,
+                  convocazioni_assistente_agrario: 0,
+                  pensionamenti_collaboratore_scolastico: 0,
+                  pensionamenti_assistente_amministrativo: 0,
+                  pensionamenti_docenti: 0,
+                  pensionamenti_assistente_tecnico: 0,
+                  pensionamenti_cuoco: 0,
+                  pensionamenti_assistente_agrario: 0,
+                }
+              });
+            }
+            processedCount++;
+            setBatchProgress({ current: processedCount, total: urls.length });
           }
-          setBatchProgress({ current: i + 1, total: urls.length });
         }
 
+        const clientSuccessMsg = `Elaborazione completata: ${urls.length} link processati su ${urls.length} totali in ${totalBatches} batch.`;
+        setBatchInfo(prev => ({ ...prev, finalMessage: clientSuccessMsg }));
         setBatchResults(results);
         saveBatchToHistory(results, selectedFile?.name || "batch_urls.csv");
         setIsProcessingBatch(false);
@@ -504,6 +546,14 @@ export default function App() {
       }
 
       const jobId = initData.jobId;
+      setBatchInfo({
+        currentBatch: 1,
+        totalBatches: initData.totalBatches || 1,
+        batchSize: initData.batchSize || 15,
+        jobId,
+        outputFilename: initData.outputCsvFilename,
+      });
+
       const pollInterval = 1500;
       let isDone = false;
 
@@ -524,6 +574,13 @@ export default function App() {
 
         const job = statusData.job;
         setBatchProgress({ current: job.current, total: job.total });
+        setBatchInfo(prev => ({
+          ...prev,
+          currentBatch: job.currentBatch || prev.currentBatch,
+          totalBatches: job.totalBatches || prev.totalBatches,
+          finalMessage: job.finalMessage || prev.finalMessage,
+          outputFilename: job.outputCsvFilename || prev.outputFilename,
+        }));
 
         if (job.status === "completed") {
           setBatchResults(job.results);
@@ -1041,13 +1098,16 @@ export default function App() {
 
             {/* Progress Bar during Batch Processing */}
             {isProcessingBatch && batchProgress.total > 0 && (
-              <div className="bg-slate-900 border border-slate-800 rounded-2xl p-6 space-y-3 shadow-xl">
-                <div className="flex justify-between text-sm text-slate-300">
+              <div className="bg-slate-900 border border-slate-800 rounded-2xl p-6 space-y-4 shadow-xl">
+                <div className="flex flex-col sm:flex-row sm:items-center justify-between text-sm text-slate-300 gap-2">
                   <span className="flex items-center gap-2">
                     <Loader2 className="w-4 h-4 animate-spin text-indigo-400" />
-                    Elaborazione asincrona in corso...
+                    <span>
+                      Elaborazione pacchetto <strong className="text-white">{batchInfo.currentBatch || 1}</strong> di <strong className="text-white">{batchInfo.totalBatches || 1}</strong>
+                      <span className="text-xs text-slate-400 ml-1.5">(15 link a pacchetto)</span>
+                    </span>
                   </span>
-                  <span className="font-semibold text-indigo-400">{batchProgress.current} / {batchProgress.total}</span>
+                  <span className="font-semibold text-indigo-400">{batchProgress.current} / {batchProgress.total} link</span>
                 </div>
                 <div className="w-full bg-slate-950 rounded-full h-2.5 overflow-hidden">
                   <div 
@@ -1055,12 +1115,36 @@ export default function App() {
                     style={{ width: `${Math.round((batchProgress.current / batchProgress.total) * 100)}%` }}
                   ></div>
                 </div>
+                <div className="flex items-center justify-between text-xs text-slate-400">
+                  <span>Salvataggio/append automatico nel file CSV al termine di ogni pacchetto di 15 link.</span>
+                  <span>{Math.round((batchProgress.current / batchProgress.total) * 100)}%</span>
+                </div>
               </div>
             )}
 
             {/* Results Section */}
             {batchResults.length > 0 && (
               <div className="space-y-4">
+                {/* Final Completion Banner */}
+                <div className="bg-emerald-500/10 border border-emerald-500/20 text-emerald-300 p-4 rounded-xl text-sm flex flex-col sm:flex-row items-start sm:items-center justify-between gap-3">
+                  <div className="flex items-center gap-2.5">
+                    <CheckCircle2 className="w-5 h-5 text-emerald-400 shrink-0" />
+                    <span className="font-medium">
+                      {batchInfo.finalMessage || `Elaborazione completata: ${batchResults.length} link processati su ${batchResults.length} totali in ${batchInfo.totalBatches || 1} batch.`}
+                    </span>
+                  </div>
+                  {batchInfo.jobId && (
+                    <a
+                      href={`/api/download-batch-csv/${batchInfo.jobId}`}
+                      download={batchInfo.outputFilename || "risultati_batch.csv"}
+                      className="bg-emerald-600 hover:bg-emerald-500 text-white font-medium px-3.5 py-1.5 rounded-lg transition-all text-xs flex items-center gap-1.5 shadow-md shadow-emerald-600/20 shrink-0"
+                    >
+                      <Download className="w-3.5 h-3.5" />
+                      <span>Scarica CSV Server ({batchInfo.outputFilename || "batch.csv"})</span>
+                    </a>
+                  )}
+                </div>
+
                 <div className="flex flex-col sm:flex-row items-start sm:items-center justify-between gap-4">
                   <div>
                     <h3 className="text-lg font-semibold text-white">Risultati Elaborazione Batch</h3>
@@ -1072,7 +1156,7 @@ export default function App() {
                       className="bg-emerald-600 hover:bg-emerald-500 text-white font-medium px-4 py-2.5 rounded-xl transition-all shadow-lg shadow-emerald-600/20 flex items-center gap-2 text-sm"
                     >
                       <Download className="w-4 h-4" />
-                      <span>Scarica CSV</span>
+                      <span>Esporta CSV</span>
                     </button>
                     <button
                       onClick={exportToGitHub}

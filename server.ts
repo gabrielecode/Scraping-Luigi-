@@ -423,11 +423,73 @@ async function parseCsv(csvBuffer: Buffer): Promise<string[]> {
   });
 }
 
+const BATCH_SIZE = 15;
+
+const CSV_HEADER_LINE = [
+  "URL Originale",
+  "URL Navigato",
+  "Stato",
+  "Conv. Coll. Scolastico",
+  "Conv. Assistente Amm.",
+  "Conv. Docenti",
+  "Conv. Assistente Tecnico",
+  "Conv. Cuoco",
+  "Conv. Assistente Agrario",
+  "Pens. Coll. Scolastico",
+  "Pens. Assistente Amm.",
+  "Pens. Docenti",
+  "Pens. Assistente Tecnico",
+  "Pens. Cuoco",
+  "Pens. Assistente Agrario",
+  "Graduatoria Fascia",
+  "Profilo Professionale",
+  "Classe di Concorso",
+  "Ore Settimanali",
+  "Decorrenza Da",
+  "Decorrenza A"
+].join(",");
+
+function formatResultToCsvRow(r: any): string {
+  const data = r.data || {};
+  const escapeCsv = (val: any) => `"${String(val ?? "").replace(/"/g, '""')}"`;
+
+  return [
+    escapeCsv(r.url),
+    escapeCsv(r.navigatedUrl || r.url),
+    escapeCsv(r.status || "success"),
+    data.convocazioni_collaboratore_scolastico ?? 0,
+    data.convocazioni_assistente_amministrativo ?? 0,
+    data.convocazioni_docenti ?? 0,
+    data.convocazioni_assistente_tecnico ?? 0,
+    data.convocazioni_cuoco ?? 0,
+    data.convocazioni_assistente_agrario ?? 0,
+    data.pensionamenti_collaboratore_scolastico ?? 0,
+    data.pensionamenti_assistente_amministrativo ?? 0,
+    data.pensionamenti_docenti ?? 0,
+    data.pensionamenti_assistente_tecnico ?? 0,
+    data.pensionamenti_cuoco ?? 0,
+    data.pensionamenti_assistente_agrario ?? 0,
+    escapeCsv(data.graduatoria_fascia || ""),
+    escapeCsv(data.profilo_professionale || ""),
+    escapeCsv(data.classe_di_concorso || ""),
+    escapeCsv(data.ore_settimanali || ""),
+    escapeCsv(data.decorrenza_da || ""),
+    escapeCsv(data.decorrenza_a || "")
+  ].join(",");
+}
+
 interface BatchJob {
   status: "running" | "completed" | "error";
   current: number;
   total: number;
+  currentBatch: number;
+  totalBatches: number;
+  batchSize: number;
   results: any[];
+  outputCsvFilename?: string;
+  outputCsvPath?: string;
+  finalMessage?: string;
+  logs?: string[];
   error?: string;
 }
 
@@ -435,107 +497,232 @@ const jobsStore = new Map<string, BatchJob>();
 
 app.post("/api/process-csv", upload.single("file"), async (req: Request, res: Response) => {
   try {
-    if (!req.file) {
-      return res.status(400).json({ error: "Nessun file CSV caricato o file non valido." });
-    }
-
     let urls: string[] = [];
-    try {
-      urls = await parseCsv(req.file.buffer);
-    } catch (parseErr: any) {
-      return res.status(400).json({ error: parseErr.message || "File CSV non valido o corrotto." });
+
+    if (req.file) {
+      try {
+        urls = await parseCsv(req.file.buffer);
+      } catch (parseErr: any) {
+        return res.status(400).json({ error: parseErr.message || "File CSV non valido o corrotto." });
+      }
+    } else if (req.body && req.body.urls && Array.isArray(req.body.urls)) {
+      urls = req.body.urls.filter((u: any) => typeof u === "string" && u.trim().length > 0);
+    } else {
+      return res.status(400).json({ error: "Nessun file CSV o elenco di URL fornito." });
     }
 
     if (urls.length === 0) {
       return res.status(400).json({ error: "Nessun URL valido trovato nel file CSV. Assicurarsi che il file contenga una colonna con link validi." });
     }
 
+    // Partizionamento della coda in pacchetti da 15 link alla volta
+    const batches: string[][] = [];
+    for (let i = 0; i < urls.length; i += BATCH_SIZE) {
+      batches.push(urls.slice(i, i + BATCH_SIZE));
+    }
+    const totalBatches = batches.length;
+
     const jobId = Math.random().toString(36).substring(2, 15) + Date.now().toString(36);
-    jobsStore.set(jobId, { status: "running", current: 0, total: urls.length, results: [] });
+
+    // Preparazione cartella e file CSV di output per consolidamento progressivo
+    const outputDir = path.join(process.cwd(), "outputs");
+    if (!fs.existsSync(outputDir)) {
+      fs.mkdirSync(outputDir, { recursive: true });
+    }
+    const timestamp = new Date().toISOString().replace(/[:.]/g, "-");
+    const outputCsvFilename = `risultati_scuole_ata_${jobId}_${timestamp}.csv`;
+    const outputCsvPath = path.join(outputDir, outputCsvFilename);
+
+    // Scrittura intestazione iniziale del file CSV
+    await fs.promises.writeFile(outputCsvPath, CSV_HEADER_LINE + "\n", "utf-8");
+
+    // Inizializzazione stato del job
+    jobsStore.set(jobId, {
+      status: "running",
+      current: 0,
+      total: urls.length,
+      currentBatch: 1,
+      totalBatches,
+      batchSize: BATCH_SIZE,
+      results: [],
+      outputCsvFilename,
+      outputCsvPath,
+      logs: [`Avvio elaborazione a batch: ${urls.length} link divisi in ${totalBatches} pacchetti da ${BATCH_SIZE}.`],
+    });
 
     const customApiKey = req.headers["x-openrouter-key"] as string;
 
-    // Process asynchronously in background
+    // Ciclo Continuo Automatico Asincrono
     (async () => {
-      const results = [];
-      let current = 0;
-      for (const url of urls) {
-        try {
-          const { fullText, navigatedUrl, logs } = await scrapeWebsite(url);
-          const data = await extractData(fullText, customApiKey);
+      const allResults: any[] = [];
+      let processedCount = 0;
 
-          // Nuova Estensione: Estrazione Albo Pretorio & PDF (retrocompatibile)
+      console.log(`[Batch Job ${jobId}] Inizio elaborazione di ${urls.length} link divisi in ${totalBatches} pacchetti da ${BATCH_SIZE}.`);
+
+      for (let bIndex = 0; bIndex < batches.length; bIndex++) {
+        const currentBatchNum = bIndex + 1;
+        const currentBatchUrls = batches[bIndex];
+        console.log(`[Batch Job ${jobId}] Avvio pacchetto ${currentBatchNum}/${totalBatches} (${currentBatchUrls.length} link)...`);
+
+        const currentBatchResults: any[] = [];
+
+        for (const url of currentBatchUrls) {
           try {
-            const alboRes = await processAlboPretorio(url, navigatedUrl, customApiKey);
-            logs.push(...alboRes.logs);
-            Object.assign(data, {
-              graduatoria_fascia: alboRes.graduatoria_fascia || "",
-              profilo_professionale: alboRes.profilo_professionale || "",
-              classe_di_concorso: alboRes.classe_di_concorso || "",
-              ore_settimanali: alboRes.ore_settimanali || "",
-              decorrenza_da: alboRes.decorrenza_da || "",
-              decorrenza_a: alboRes.decorrenza_a || "",
-              albo_contratti: alboRes.contratti || [],
-            });
-          } catch (alboErr: any) {
-            logs.push(`[Albo Pretorio Add-on] Errore elaborazione: ${alboErr.message}`);
-            Object.assign(data, {
-              graduatoria_fascia: "",
-              profilo_professionale: "",
-              classe_di_concorso: "",
-              ore_settimanali: "",
-              decorrenza_da: "",
-              decorrenza_a: "",
-              albo_contratti: [],
-            });
+            const { fullText, navigatedUrl, logs } = await scrapeWebsite(url);
+            const data = await extractData(fullText, customApiKey);
+
+            // Nuova Estensione: Estrazione Albo Pretorio & PDF (retrocompatibile)
+            try {
+              const alboRes = await processAlboPretorio(url, navigatedUrl, customApiKey);
+              logs.push(...alboRes.logs);
+              Object.assign(data, {
+                graduatoria_fascia: alboRes.graduatoria_fascia || "",
+                profilo_professionale: alboRes.profilo_professionale || "",
+                classe_di_concorso: alboRes.classe_di_concorso || "",
+                ore_settimanali: alboRes.ore_settimanali || "",
+                decorrenza_da: alboRes.decorrenza_da || "",
+                decorrenza_a: alboRes.decorrenza_a || "",
+                albo_contratti: alboRes.contratti || [],
+              });
+            } catch (alboErr: any) {
+              logs.push(`[Albo Pretorio Add-on] Errore elaborazione: ${alboErr.message}`);
+              Object.assign(data, {
+                graduatoria_fascia: "",
+                profilo_professionale: "",
+                classe_di_concorso: "",
+                ore_settimanali: "",
+                decorrenza_da: "",
+                decorrenza_a: "",
+                albo_contratti: [],
+              });
+            }
+
+            const itemRes = {
+              url,
+              navigatedUrl,
+              status: "success",
+              logs,
+              data,
+            };
+            currentBatchResults.push(itemRes);
+            allResults.push(itemRes);
+          } catch (err: any) {
+            const errRes = {
+              url,
+              navigatedUrl: url,
+              status: "error",
+              error: err.message,
+              logs: [err.message],
+              data: {
+                convocazioni_collaboratore_scolastico: 0,
+                convocazioni_assistente_amministrativo: 0,
+                convocazioni_docenti: 0,
+                convocazioni_assistente_tecnico: 0,
+                convocazioni_cuoco: 0,
+                convocazioni_assistente_agrario: 0,
+                pensionamenti_collaboratore_scolastico: 0,
+                pensionamenti_assistente_amministrativo: 0,
+                pensionamenti_docenti: 0,
+                pensionamenti_assistente_tecnico: 0,
+                pensionamenti_cuoco: 0,
+                pensionamenti_assistente_agrario: 0,
+                graduatoria_fascia: "",
+                profilo_professionale: "",
+                classe_di_concorso: "",
+                ore_settimanali: "",
+                decorrenza_da: "",
+                decorrenza_a: "",
+                albo_contratti: [],
+              },
+            };
+            currentBatchResults.push(errRes);
+            allResults.push(errRes);
           }
 
-          results.push({
-            url,
-            navigatedUrl,
-            status: "success",
-            logs,
-            data,
-          });
-        } catch (err: any) {
-          results.push({
-            url,
-            navigatedUrl: url,
-            status: "error",
-            error: err.message,
-            logs: [err.message],
-            data: {
-              convocazioni_collaboratore_scolastico: 0,
-              convocazioni_assistente_amministrativo: 0,
-              convocazioni_docenti: 0,
-              convocazioni_assistente_tecnico: 0,
-              convocazioni_cuoco: 0,
-              convocazioni_assistente_agrario: 0,
-              pensionamenti_collaboratore_scolastico: 0,
-              pensionamenti_assistente_amministrativo: 0,
-              pensionamenti_docenti: 0,
-              pensionamenti_assistente_tecnico: 0,
-              pensionamenti_cuoco: 0,
-              pensionamenti_assistente_agrario: 0,
-              graduatoria_fascia: "",
-              profilo_professionale: "",
-              classe_di_concorso: "",
-              ore_settimanali: "",
-              decorrenza_da: "",
-              decorrenza_a: "",
-              albo_contratti: [],
-            },
+          processedCount++;
+          // Aggiornamento live dello stato di avanzamento
+          jobsStore.set(jobId, {
+            status: "running",
+            current: processedCount,
+            total: urls.length,
+            currentBatch: currentBatchNum,
+            totalBatches,
+            batchSize: BATCH_SIZE,
+            results: allResults,
+            outputCsvFilename,
+            outputCsvPath,
+            logs: [
+              `Batch ${currentBatchNum}/${totalBatches} in elaborazione (${currentBatchResults.length}/${currentBatchUrls.length} completati).`,
+            ],
           });
         }
-        current++;
-        jobsStore.set(jobId, { status: "running", current, total: urls.length, results });
+
+        // 2. Al termine di ogni pacchetto di 15: salva/appendi immediatamente i risultati nel file CSV di output
+        const batchCsvRows = currentBatchResults.map(formatResultToCsvRow).join("\n") + "\n";
+        await fs.promises.appendFile(outputCsvPath, batchCsvRows, "utf-8");
+        console.log(`[Batch Job ${jobId}] Pacchetto ${currentBatchNum}/${totalBatches} completato. Risultati (${currentBatchResults.length} righe) consolidati con successo su ${outputCsvFilename}.`);
+
+        jobsStore.set(jobId, {
+          status: "running",
+          current: processedCount,
+          total: urls.length,
+          currentBatch: currentBatchNum,
+          totalBatches,
+          batchSize: BATCH_SIZE,
+          results: allResults,
+          outputCsvFilename,
+          outputCsvPath,
+          logs: [
+            `Batch ${currentBatchNum}/${totalBatches} completato. Risultati consolidati nel file CSV (${processedCount}/${urls.length} link elaborati).`,
+          ],
+        });
+
+        // Passa automaticamente al pacchetto successivo di 15 link senza pause o richieste di intervento esterno.
       }
-      jobsStore.set(jobId, { status: "completed", current: urls.length, total: urls.length, results });
+
+      // 3. Completamento e Arresto Finale:
+      // All'elaborazione dell'ultimo link dell'ultimo pacchetto:
+      // - Chiudi ed esporta in modo definitivo il file CSV aggregato.
+      // - Logga/restituisci il messaggio di successo finale
+      const finalSuccessMessage = `Elaborazione completata: ${urls.length} link processati su ${urls.length} totali in ${totalBatches} batch.`;
+      console.log(`[Batch Job ${jobId}] ${finalSuccessMessage}`);
+
+      jobsStore.set(jobId, {
+        status: "completed",
+        current: urls.length,
+        total: urls.length,
+        currentBatch: totalBatches,
+        totalBatches,
+        batchSize: BATCH_SIZE,
+        results: allResults,
+        outputCsvFilename,
+        outputCsvPath,
+        finalMessage: finalSuccessMessage,
+        logs: [finalSuccessMessage],
+      });
     })().catch((err) => {
-      jobsStore.set(jobId, { status: "error", current: 0, total: urls.length, results: [], error: err.message });
+      console.error(`[Batch Job ${jobId}] Errore critico:`, err);
+      jobsStore.set(jobId, {
+        status: "error",
+        current: 0,
+        total: urls.length,
+        currentBatch: 0,
+        totalBatches,
+        batchSize: BATCH_SIZE,
+        results: [],
+        error: err.message,
+        logs: [`Errore job: ${err.message}`],
+      });
     });
 
-    res.json({ success: true, jobId });
+    res.json({
+      success: true,
+      jobId,
+      totalUrls: urls.length,
+      totalBatches,
+      batchSize: BATCH_SIZE,
+      outputCsvFilename
+    });
   } catch (error: any) {
     console.error("Batch CSV initiation error:", error);
     res.status(500).json({ success: false, error: error.message || "Errore avvio elaborazione batch" });
@@ -549,6 +736,24 @@ app.get("/api/batch-status/:jobId", (req: Request, res: Response) => {
     return res.status(404).json({ error: "Job non trovato." });
   }
   res.json({ success: true, job });
+});
+
+// Endpoint per il download diretto del file CSV consolidato a batch
+app.get("/api/download-batch-csv/:jobId", (req: Request, res: Response) => {
+  const { jobId } = req.params;
+  const job = jobsStore.get(jobId);
+  if (!job || !job.outputCsvPath) {
+    return res.status(404).json({ error: "Job o file CSV non trovato." });
+  }
+
+  if (!fs.existsSync(job.outputCsvPath)) {
+    return res.status(404).json({ error: "File CSV non presente su disco." });
+  }
+
+  res.setHeader("Content-Disposition", `attachment; filename="${job.outputCsvFilename || "risultati_batch.csv"}"`);
+  res.setHeader("Content-Type", "text/csv; charset=utf-8");
+  const fileStream = fs.createReadStream(job.outputCsvPath);
+  fileStream.pipe(res);
 });
 
 app.post("/api/export-github", async (req: Request, res: Response) => {
