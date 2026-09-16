@@ -252,7 +252,11 @@ async function scrapeWebsite(targetUrl: string): Promise<{ fullText: string; nav
 
 // API Routes
 app.get("/api/health", (req: Request, res: Response) => {
-  res.json({ status: "ok" });
+  try {
+    res.json({ status: "ok" });
+  } catch (error: any) {
+    res.status(500).json({ error: error.message || "Errore interno durante la scansione" });
+  }
 });
 
 app.post("/api/extract-single", async (req: Request, res: Response) => {
@@ -301,7 +305,7 @@ app.post("/api/extract-single", async (req: Request, res: Response) => {
     });
   } catch (error: any) {
     console.error("Extraction error:", error);
-    res.status(500).json({ success: false, error: error.message || "Errore durante l'elaborazione" });
+    res.status(500).json({ error: error.message || "Errore interno durante la scansione" });
   }
 });
 
@@ -315,22 +319,24 @@ app.post("/api/albo-pretorio", async (req: Request, res: Response) => {
     const customApiKey = req.headers["x-openrouter-key"] as string;
     const result = await processAlboPretorio(url, url, customApiKey);
     res.json({ success: true, ...result });
-  } catch (err: any) {
-    res.status(500).json({ success: false, error: err.message });
+  } catch (error: any) {
+    console.error("Albo Pretorio error:", error);
+    res.status(500).json({ error: error.message || "Errore interno durante la scansione" });
   }
 });
 
 // Endpoint dedicato per estrazione diretta da file PDF caricato
 app.post("/api/extract-pdf", upload.single("pdf"), async (req: Request, res: Response) => {
-  if (!req.file) {
-    return res.status(400).json({ error: "Nessun file PDF caricato." });
-  }
-
-  const customApiKey = req.headers["x-openrouter-key"] as string;
-  const tempFileName = `scuola_pdf_upload_${Date.now()}_${Math.random().toString(36).slice(2)}.pdf`;
-  const tempFilePath = path.join(os.tmpdir(), tempFileName);
-
+  let tempFilePath: string | null = null;
   try {
+    if (!req.file) {
+      return res.status(400).json({ error: "Nessun file PDF caricato." });
+    }
+
+    const customApiKey = req.headers["x-openrouter-key"] as string;
+    const tempFileName = `scuola_pdf_upload_${Date.now()}_${Math.random().toString(36).slice(2)}.pdf`;
+    tempFilePath = path.join(os.tmpdir(), tempFileName);
+
     // Salvataggio temporaneo su disco
     await fs.promises.writeFile(tempFilePath, req.file.buffer);
 
@@ -343,16 +349,19 @@ app.post("/api/extract-pdf", upload.single("pdf"), async (req: Request, res: Res
       size: req.file.size,
       data: extracted,
     });
-  } catch (err: any) {
-    res.status(500).json({ success: false, error: err.message || "Errore estrazione PDF" });
+  } catch (error: any) {
+    console.error("PDF extraction error:", error);
+    res.status(500).json({ error: error.message || "Errore interno durante la scansione" });
   } finally {
     // 5. GESTIONE MEMORIA (Obbligatorio): Eliminazione immediata del file temporaneo da disco
-    try {
-      if (fs.existsSync(tempFilePath)) {
-        await fs.promises.unlink(tempFilePath);
+    if (tempFilePath) {
+      try {
+        if (fs.existsSync(tempFilePath)) {
+          await fs.promises.unlink(tempFilePath);
+        }
+      } catch (cleanErr) {
+        console.warn("Avviso eliminazione temp PDF:", cleanErr);
       }
-    } catch (cleanErr) {
-      console.warn("Avviso eliminazione temp PDF:", cleanErr);
     }
   }
 });
@@ -725,35 +734,50 @@ app.post("/api/process-csv", upload.single("file"), async (req: Request, res: Re
     });
   } catch (error: any) {
     console.error("Batch CSV initiation error:", error);
-    res.status(500).json({ success: false, error: error.message || "Errore avvio elaborazione batch" });
+    res.status(500).json({ error: error.message || "Errore interno durante la scansione" });
   }
 });
 
 app.get("/api/batch-status/:jobId", (req: Request, res: Response) => {
-  const { jobId } = req.params;
-  const job = jobsStore.get(jobId);
-  if (!job) {
-    return res.status(404).json({ error: "Job non trovato." });
+  try {
+    const { jobId } = req.params;
+    const job = jobsStore.get(jobId);
+    if (!job) {
+      return res.status(404).json({ error: "Job non trovato." });
+    }
+    res.json({ success: true, job });
+  } catch (error: any) {
+    res.status(500).json({ error: error.message || "Errore interno durante la scansione" });
   }
-  res.json({ success: true, job });
 });
 
 // Endpoint per il download diretto del file CSV consolidato a batch
 app.get("/api/download-batch-csv/:jobId", (req: Request, res: Response) => {
-  const { jobId } = req.params;
-  const job = jobsStore.get(jobId);
-  if (!job || !job.outputCsvPath) {
-    return res.status(404).json({ error: "Job o file CSV non trovato." });
-  }
+  try {
+    const { jobId } = req.params;
+    const job = jobsStore.get(jobId);
+    if (!job || !job.outputCsvPath) {
+      return res.status(404).json({ error: "Job o file CSV non trovato." });
+    }
 
-  if (!fs.existsSync(job.outputCsvPath)) {
-    return res.status(404).json({ error: "File CSV non presente su disco." });
-  }
+    if (!fs.existsSync(job.outputCsvPath)) {
+      return res.status(404).json({ error: "File CSV non presente su disco." });
+    }
 
-  res.setHeader("Content-Disposition", `attachment; filename="${job.outputCsvFilename || "risultati_batch.csv"}"`);
-  res.setHeader("Content-Type", "text/csv; charset=utf-8");
-  const fileStream = fs.createReadStream(job.outputCsvPath);
-  fileStream.pipe(res);
+    res.setHeader("Content-Disposition", `attachment; filename="${job.outputCsvFilename || "risultati_batch.csv"}"`);
+    res.setHeader("Content-Type", "text/csv; charset=utf-8");
+    const fileStream = fs.createReadStream(job.outputCsvPath);
+    fileStream.on("error", (err) => {
+      if (!res.headersSent) {
+        res.status(500).json({ error: err.message || "Errore interno durante la scansione" });
+      }
+    });
+    fileStream.pipe(res);
+  } catch (error: any) {
+    if (!res.headersSent) {
+      res.status(500).json({ error: error.message || "Errore interno durante la scansione" });
+    }
+  }
 });
 
 app.post("/api/export-github", async (req: Request, res: Response) => {
@@ -804,7 +828,7 @@ app.post("/api/export-github", async (req: Request, res: Response) => {
       commitUrl: putResponse.data?.commit?.html_url || `https://github.com/${owner}/${repo}/blob/main/${filePath}`
     });
   } catch (err: any) {
-    res.status(500).json({ error: err.response?.data?.message || err.message || "Errore durante l'esportazione su GitHub." });
+    res.status(500).json({ error: err.response?.data?.message || err.message || "Errore interno durante la scansione" });
   }
 });
 
@@ -857,7 +881,15 @@ app.post("/api/google-search", async (req: Request, res: Response) => {
       return res.status(400).json({ error: "Nessuna chiave API (OpenRouter o Gemini) configurata per la ricerca web." });
     }
   } catch (err: any) {
-    res.status(500).json({ error: err.message || "Errore durante la ricerca web." });
+    res.status(500).json({ error: err.message || "Errore interno durante la scansione" });
+  }
+});
+
+// Global Express error handler to guarantee consistent JSON responses
+app.use((error: any, req: Request, res: Response, next: any) => {
+  console.error("Unhandled error caught by global middleware:", error);
+  if (!res.headersSent) {
+    res.status(500).json({ error: error?.message || "Errore interno durante la scansione" });
   }
 });
 

@@ -314,15 +314,17 @@ export async function processAlboPretorio(
   customApiKey?: string
 ): Promise<AlboPretorioScanResult> {
   const logs: string[] = [];
-  logs.push(`[Albo Pretorio Add-on] Avvio ricerca Albo Pretorio per: ${navigatedUrl || originalUrl}`);
-
   const baseUrl = navigatedUrl || originalUrl;
-  const cutoffDate = new Date();
-  cutoffDate.setMonth(cutoffDate.getMonth() - 6);
-  logs.push(`[Albo Pretorio Add-on] Finestra temporale: ultimi 6 mesi (a partire dal ${formatDateToGG_MM_AA(cutoffDate)})`);
-
   let alboUrl = "";
-  let alboHtml = "";
+
+  try {
+    logs.push(`[Albo Pretorio Add-on] Avvio ricerca Albo Pretorio per: ${navigatedUrl || originalUrl}`);
+
+    const cutoffDate = new Date();
+    cutoffDate.setMonth(cutoffDate.getMonth() - 6);
+    logs.push(`[Albo Pretorio Add-on] Finestra temporale: ultimi 6 mesi (a partire dal ${formatDateToGG_MM_AA(cutoffDate)})`);
+
+    let alboHtml = "";
 
   // 1. Probing & discovering Albo Pretorio section
   try {
@@ -615,18 +617,35 @@ export async function processAlboPretorio(
   const decorrenza_da = extractedContracts.map((c) => c.decorrenza_da).filter(Boolean).join(" | ") || "";
   const decorrenza_a = extractedContracts.map((c) => c.decorrenza_a).filter(Boolean).join(" | ") || "";
 
-  return {
-    alboUrl,
-    attiTrovatiTotali: rawNotices.length,
-    attiFiltratiValidi: matchedNotices.length,
-    attiEsclusi,
-    contratti: extractedContracts,
-    graduatoria_fascia,
-    profilo_professionale,
-    classe_di_concorso,
-    ore_settimanali,
-    decorrenza_da,
-    decorrenza_a,
-    logs,
-  };
+    return {
+      alboUrl,
+      attiTrovatiTotali: rawNotices.length,
+      attiFiltratiValidi: matchedNotices.length,
+      attiEsclusi,
+      contratti: extractedContracts,
+      graduatoria_fascia,
+      profilo_professionale,
+      classe_di_concorso,
+      ore_settimanali,
+      decorrenza_da,
+      decorrenza_a,
+      logs,
+    };
+  } catch (globalErr: any) {
+    logs.push(`[Albo Pretorio Add-on] Errore critico durante l'elaborazione: ${globalErr.message}`);
+    return {
+      alboUrl: alboUrl || baseUrl,
+      attiTrovatiTotali: 0,
+      attiFiltratiValidi: 0,
+      attiEsclusi: 0,
+      contratti: [],
+      graduatoria_fascia: "",
+      profilo_professionale: "",
+      classe_di_concorso: "",
+      ore_settimanali: "",
+      decorrenza_da: "",
+      decorrenza_a: "",
+      logs,
+    };
+  }
 }

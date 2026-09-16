@@ -216,13 +216,26 @@ export default function App() {
         },
         body: JSON.stringify({ url: formattedUrl })
       });
-      const data = await res.json();
-      if (!res.ok || !data.success) {
-        throw new Error(data.error || "Errore scansione Albo Pretorio");
+
+      const rawText = await res.text();
+      if (!rawText || rawText.trim() === "") {
+        throw new Error("Il server non ha restituito una risposta valida o è andato in timeout");
       }
+
+      let data: any;
+      try {
+        data = JSON.parse(rawText);
+      } catch {
+        throw new Error("Il server non ha restituito una risposta valida o è andato in timeout");
+      }
+
+      if (!res.ok || !data.success) {
+        throw new Error(data.error || "Il server non ha restituito una risposta valida o è andato in timeout");
+      }
+
       setAlboScanResult(data);
     } catch (err: any) {
-      setAlboScanError(err.message || "Errore di connessione al server");
+      setAlboScanError(err.message || "Il server non ha restituito una risposta valida o è andato in timeout");
     } finally {
       setIsScanningAlbo(false);
     }
@@ -246,13 +259,26 @@ export default function App() {
         },
         body: formData
       });
-      const data = await res.json();
-      if (!res.ok || !data.success) {
-        throw new Error(data.error || "Errore analisi PDF");
+
+      const rawText = await res.text();
+      if (!rawText || rawText.trim() === "") {
+        throw new Error("Il server non ha restituito una risposta valida o è andato in timeout");
       }
+
+      let data: any;
+      try {
+        data = JSON.parse(rawText);
+      } catch {
+        throw new Error("Il server non ha restituito una risposta valida o è andato in timeout");
+      }
+
+      if (!res.ok || !data.success) {
+        throw new Error(data.error || "Il server non ha restituito una risposta valida o è andato in timeout");
+      }
+
       setPdfExtractResult(data);
     } catch (err: any) {
-      setPdfExtractError(err.message || "Errore estrazione PDF");
+      setPdfExtractError(err.message || "Il server non ha restituito una risposta valida o è andato in timeout");
     } finally {
       setIsExtractingPdf(false);
     }
@@ -312,7 +338,15 @@ export default function App() {
       })
     });
 
-    const respData = await response.json();
+    let respData: any = {};
+    try {
+      const rawText = await response.text();
+      if (rawText && rawText.trim()) {
+        respData = JSON.parse(rawText);
+      }
+    } catch {
+      respData = {};
+    }
     const content = respData?.choices?.[0]?.message?.content || "{}";
     const defaultData: ExtractionData = {
       convocazioni_collaboratore_scolastico: 0,
@@ -365,7 +399,15 @@ export default function App() {
       })
     });
 
-    const respData = await response.json();
+    let respData: any = {};
+    try {
+      const rawText = await response.text();
+      if (rawText && rawText.trim()) {
+        respData = JSON.parse(rawText);
+      }
+    } catch {
+      respData = {};
+    }
     return respData?.choices?.[0]?.message?.content || "Nessun risultato trovato.";
   };
 
