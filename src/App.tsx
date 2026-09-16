@@ -372,117 +372,119 @@ Se un campo non è deducibile dal testo del documento, assegna come valore una s
     return dateStr.trim();
   };
 
-  // CORS Proxies
-  const CORS_PROXY_ALLORIGINS = "https://api.allorigins.win/raw?url=";
-  const CORS_PROXY_CORSPROXY_IO = "https://corsproxy.io/?";
+  const CORS_PROXIES = [
+  "https://api.allorigins.win/raw?url=",
+  "https://corsproxy.io/?url=",
+  "https://api.codetabs.com/v1/proxy?quest="
+];
 
-  const fetchThroughProxy = async (url: string, asArrayBuffer: boolean = false) => {
-    // Try AllOrigins first
+async function fetchWithProxy(url: string, asArrayBuffer: boolean = false): Promise<any> {
+  for (const proxy of CORS_PROXIES) {
     try {
-      const res = await fetch(CORS_PROXY_ALLORIGINS + encodeURIComponent(url));
-      if (res.ok) {
-        return asArrayBuffer ? await res.arrayBuffer() : await res.text();
-      }
-    } catch (err) {
-      console.warn("AllOrigins failed, trying corsproxy.io...", err);
-    }
-
-    // Fallback to corsproxy.io
-    const res = await fetch(CORS_PROXY_CORSPROXY_IO + encodeURIComponent(url));
-    if (!res.ok) {
-      throw new Error(`Impossibile caricare l'URL tramite i proxy CORS. Status: ${res.status}`);
-    }
-    return asArrayBuffer ? await res.arrayBuffer() : await res.text();
-  };
-
-  // Client-side fallback helpers for Vercel static hosting
-  const executeClientSideExtract = async (targetUrl: string, apiKey: string) => {
-    const logs = [`Avvio estrazione client-side (Vercel SPA mode) per: ${targetUrl}`];
-    let pageText = "";
-    let navigatedUrl = targetUrl;
-
-    try {
-      const html = await fetchThroughProxy(targetUrl) as string;
-      const parser = new DOMParser();
-      const doc = parser.parseFromString(html, "text/html");
-      doc.querySelectorAll("script, style, nav, footer, header").forEach(el => el.remove());
-      pageText = doc.body?.innerText || doc.documentElement.textContent || "";
-      logs.push(`Testo estratto via CORS proxy (${pageText.length} caratteri)`);
-
-      const keywords = ["ata", "bandi di gara", "graduatorie", "collaboratore scolastico", "avvisi", "albo pretorio", "convocazioni"];
-      const links = doc.querySelectorAll("a");
-      let targetSubUrl = "";
-      let matchedKeyword = "";
-      for (const link of Array.from(links)) {
-        const text = (link.textContent || "").toLowerCase().trim();
-        const href = link.getAttribute("href");
-        if (href && href !== "#" && !href.startsWith("javascript:")) {
-          for (const kw of keywords) {
-            if (text.includes(kw) || href.toLowerCase().includes(kw)) {
-              try {
-                targetSubUrl = new URL(href, targetUrl).href;
-                matchedKeyword = kw;
-                break;
-              } catch {
-                // Ignore invalid URLs
-              }
-            }
-          }
-          if (targetSubUrl) break;
+      const response = await fetch(proxy + encodeURIComponent(url));
+      if (response.ok) {
+        if (asArrayBuffer) {
+           return await response.arrayBuffer();
+        }
+        const text = await response.text();
+        if (text && text.length > 100) {
+          return text;
         }
       }
+    } catch (e) {
+      console.warn(`Proxy ${proxy} failed, trying next...`);
+    }
+  }
+  throw new Error("Impossibile accedere al sito: tutti i proxy CORS hanno fallito");
+}
 
-      if (targetSubUrl) {
-        logs.push(`Sezione trovata tramite parola chiave "${matchedKeyword}": ${targetSubUrl}`);
+function parseHtml(html: string): Document {
+  const parser = new DOMParser();
+  return parser.parseFromString(html, "text/html");
+}
+
+function findAlboPretorioLink(doc: Document, baseUrl: string): string | null {
+  const keywords = ["albo pretorio", "albo online", "albo", "pubblicità legale", "pubblicita legale"];
+  const links = Array.from(doc.querySelectorAll("a"));
+  
+  for (const link of links) {
+    const text = (link.textContent || "").toLowerCase();
+    const href = link.getAttribute("href") || "";
+    for (const kw of keywords) {
+      if (text.includes(kw) || href.toLowerCase().includes(kw)) {
         try {
-          const subHtml = await fetchThroughProxy(targetSubUrl) as string;
-          const subDoc = parser.parseFromString(subHtml, "text/html");
-          subDoc.querySelectorAll("script, style, nav, footer, header").forEach(el => el.remove());
-          const subText = subDoc.body?.innerText || subDoc.documentElement.textContent || "";
-          pageText = `--- HOMEPAGE ---\n${pageText}\n\n--- SEZIONE ${matchedKeyword.toUpperCase()} (${targetSubUrl}) ---\n${subText}`;
-          navigatedUrl = targetSubUrl;
-        } catch (subErr: any) {
-          logs.push(`Impossibile aprire la sezione ${targetSubUrl}: ${subErr.message}. Uso il testo della home.`);
+          return new URL(href, baseUrl).href;
+        } catch(e) {
+          return null;
         }
       }
-    } catch (err: any) {
-      logs.push(`Impossibile leggere il sito direttamente (${err.message}). Utilizzo OpenRouter Web Search.`);
     }
+  }
+  return null;
+}
 
-    if (pageText.length > 30000) {
-      pageText = pageText.substring(0, 30000);
-    }
 
-    const response = await fetch("https://openrouter.ai/api/v1/chat/completions", {
-      method: "POST",
-      headers: {
-        "Authorization": `Bearer ${apiKey}`,
-        "Content-Type": "application/json",
-        "HTTP-Referer": window.location.origin,
-        "X-Title": "ScuolaATA Scraper"
-      },
-      body: JSON.stringify({
-        model: "google/gemini-2.5-flash",
-        messages: [
-          { role: "system", content: EXTRACTION_SYSTEM_PROMPT },
-          { role: "user", content: `Analizza questo testo:\n\n${pageText}` }
-        ],
-        response_format: { type: "json_object" },
-        plugins: [{ id: "web" }]
-      })
-    });
+async function extractWithOpenRouter(text: string, apiKey: string, systemPrompt?: string) {
+  const response = await fetch("https://openrouter.ai/api/v1/chat/completions", {
+    method: "POST",
+    headers: {
+      "Authorization": `Bearer ${apiKey}`,
+      "Content-Type": "application/json",
+      "HTTP-Referer": window.location.origin,
+      "X-Title": "ScuolaATA Scraper"
+    },
+    body: JSON.stringify({
+      model: "google/gemini-2.5-flash",
+      messages: [
+        { role: "system", content: systemPrompt || "Sei un assistente specializzato nell'analisi di documenti scolastici. Estrai convocazioni e pensionamenti ATA. Rispondi solo con JSON valido." },
+        { role: "user", content: `Analizza questo testo:\n\n${text}` }
+      ],
+      response_format: { type: "json_object" }
+    })
+  });
+  return await response.json();
+}
 
-    let respData: any = {};
-    try {
-      const rawText = await response.text();
-      if (rawText && rawText.trim()) {
-        respData = JSON.parse(rawText);
+async function scrapeWebsite(targetUrl: string, apiKey: string, systemPrompt?: string) {
+  const logs: string[] = [];
+  let currentUrl = targetUrl.startsWith("http") ? targetUrl : `https://${targetUrl}`;
+  
+  try {
+    const html = await fetchWithProxy(currentUrl);
+    const doc = parseHtml(html);
+    const pageText = doc.body?.textContent?.replace(/\s+/g, " ").trim() || "";
+    
+    // Cerca sezione Albo Pretorio
+    const alboUrl = findAlboPretorioLink(doc, currentUrl);
+    let alboText = "";
+    let navigatedUrl = currentUrl;
+
+    if (alboUrl) {
+      logs.push(`Trovato Albo Pretorio: ${alboUrl}`);
+      navigatedUrl = alboUrl;
+      try {
+        const alboHtml = await fetchWithProxy(alboUrl);
+        const alboDoc = parseHtml(alboHtml);
+        alboText = alboDoc.body?.textContent?.replace(/\s+/g, " ").trim() || "";
+      } catch (e: any) {
+        logs.push(`Errore caricamento Albo Pretorio: ${e.message}`);
       }
-    } catch {
-      respData = {};
     }
-    const content = respData?.choices?.[0]?.message?.content || "{}";
-    const defaultData: ExtractionData = {
+    
+    const fullText = (pageText + " " + alboText).substring(0, 30000);
+    const resultJson = await extractWithOpenRouter(fullText, apiKey, systemPrompt);
+    const content = resultJson?.choices?.[0]?.message?.content || "{}";
+
+    return { fullText, navigatedUrl, logs, content };
+  } catch (err: any) {
+    logs.push(`Errore: ${err.message}`);
+    return { fullText: "", navigatedUrl: currentUrl, logs, content: "{}" };
+  }
+}
+
+const executeClientSideExtract = async (targetUrl: string, apiKey: string) => {
+    const res = await scrapeWebsite(targetUrl, apiKey, EXTRACTION_SYSTEM_PROMPT);
+    const defaultData = {
       convocazioni_collaboratore_scolastico: 0,
       convocazioni_assistente_amministrativo: 0,
       convocazioni_docenti: 0,
@@ -494,338 +496,30 @@ Se un campo non è deducibile dal testo del documento, assegna come valore una s
       pensionamenti_docenti: 0,
       pensionamenti_assistente_tecnico: 0,
       pensionamenti_cuoco: 0,
-      pensionamenti_assistente_agrario: 0
+      pensionamenti_assistente_agrario: 0,
+      graduatoria_fascia: "",
+      profilo_professionale: "",
+      classe_di_concorso: "",
+      ore_settimanali: "",
+      decorrenza_da: "",
+      decorrenza_a: "",
+      albo_contratti: []
     };
-
-    let extractedData = defaultData;
+    let extractedData = { ...defaultData };
     try {
-      const parsed = JSON.parse(content);
+      const parsed = JSON.parse(res.content);
       extractedData = { ...defaultData, ...parsed };
     } catch {
-      extractedData = defaultData;
+      // fallback
     }
-
     return {
       status: "success" as const,
       url: targetUrl,
-      navigatedUrl,
-      logs,
+      navigatedUrl: res.navigatedUrl,
+      logs: res.logs,
       data: extractedData
     };
-  };
-
-  const executeClientSideAlboPretorio = async (originalUrl: string, navigatedUrl: string, apiKey: string) => {
-    const logs = [`[Albo Pretorio Add-on Client-side] Avvio ricerca Albo Pretorio per: ${navigatedUrl || originalUrl}`];
-    const baseUrl = navigatedUrl || originalUrl;
-    let alboUrl = "";
-    let alboHtml = "";
-
-    const cutoffDate = new Date();
-    cutoffDate.setMonth(cutoffDate.getMonth() - 6);
-    logs.push(`[Albo Pretorio Add-on] Finestra temporale: ultimi 6 mesi (a partire dal ${formatDateToGG_MM_AA(cutoffDate)})`);
-
-    // 1. Probing & discovering Albo Pretorio section
-    try {
-      const html = await fetchThroughProxy(baseUrl) as string;
-      const parser = new DOMParser();
-      const doc = parser.parseFromString(html, "text/html");
-      const candidateKeywords = [
-        "albo pretorio",
-        "albo online",
-        "albo-pretorio",
-        "albo_pretorio",
-        "pubblicità legale",
-        "pubblicita legale",
-        "albo sindacale",
-        "albo",
-      ];
-
-      const links = doc.querySelectorAll("a");
-      for (const link of Array.from(links)) {
-        const text = (link.textContent || "").toLowerCase().trim();
-        const href = link.getAttribute("href");
-        if (href && href !== "#" && !href.startsWith("javascript:")) {
-          for (const kw of candidateKeywords) {
-            if (text.includes(kw) || href.toLowerCase().includes(kw)) {
-              try {
-                alboUrl = new URL(href, baseUrl).href;
-                logs.push(`[Albo Pretorio Add-on] Individuato link Albo Pretorio: ${alboUrl} (parola chiave: "${kw}")`);
-                break;
-              } catch {
-                // Ignore invalid URLs
-              }
-            }
-          }
-          if (alboUrl) break;
-        }
-      }
-    } catch (err: any) {
-      logs.push(`[Albo Pretorio Add-on] Avviso verifica homepage: ${err.message}`);
-    }
-
-    // If not found directly, try standard well-known endpoints
-    if (!alboUrl) {
-      const probePaths = ["/albo-pretorio/", "/albo-online/", "/albo/", "/pubblicita-legale/"];
-      for (const p of probePaths) {
-        try {
-          const testUrl = new URL(p, baseUrl).href;
-          const probeText = await fetchThroughProxy(testUrl) as string;
-          if (probeText.length > 500) {
-            alboUrl = testUrl;
-            alboHtml = probeText;
-            logs.push(`[Albo Pretorio Add-on] Trovata sezione Albo standard: ${alboUrl}`);
-            break;
-          }
-        } catch {
-          // Continue to next probe
-        }
-      }
-    }
-
-    // If found and not yet loaded, fetch Albo Pretorio page
-    if (alboUrl && !alboHtml) {
-      try {
-        alboHtml = await fetchThroughProxy(alboUrl) as string;
-      } catch (err: any) {
-        logs.push(`[Albo Pretorio Add-on] Errore apertura Albo Pretorio (${alboUrl}): ${err.message}`);
-      }
-    }
-
-    if (!alboUrl || !alboHtml) {
-      logs.push("[Albo Pretorio Add-on] Nessuna sezione Albo Pretorio pubblica accessibile trovata.");
-      return {
-        alboUrl: alboUrl || baseUrl,
-        attiTrovatiTotali: 0,
-        attiFiltratiValidi: 0,
-        attiEsclusi: 0,
-        contratti: [],
-        graduatoria_fascia: "",
-        profilo_professionale: "",
-        classe_di_concorso: "",
-        ore_settimanali: "",
-        decorrenza_da: "",
-        decorrenza_a: "",
-        logs,
-      };
-    }
-
-    // 2. Parse notices from Albo Pretorio page
-    const parser = new DOMParser();
-    const alboDoc = parser.parseFromString(alboHtml, "text/html");
-    const rawNotices: any[] = [];
-
-    // Strategy A: Tables (tr rows)
-    const rows = alboDoc.querySelectorAll("table tr");
-    rows.forEach((tr) => {
-      const text = (tr.textContent || "").replace(/\s+/g, " ").trim();
-      if (!text || text.length < 10) return;
-
-      let pdfUrl = "";
-      let detailUrl = "";
-
-      const links = tr.querySelectorAll("a");
-      links.forEach((a) => {
-        const href = a.getAttribute("href");
-        if (href) {
-          try {
-            const fullHref = new URL(href, alboUrl).href;
-            if (fullHref.toLowerCase().includes(".pdf")) {
-              pdfUrl = fullHref;
-            } else if (!detailUrl && !href.startsWith("#") && !href.startsWith("javascript:")) {
-              detailUrl = fullHref;
-            }
-          } catch {
-            // Ignore invalid URLs
-          }
-        }
-      });
-
-      const dateMatch = text.match(/\b(\d{1,2})[\/\.-](\d{1,2})[\/\.-](\d{2,4})\b/);
-      const dateStr = dateMatch ? dateMatch[1] : "";
-      const dateObj = dateStr ? parseItalianDate(dateStr) : null;
-
-      rawNotices.push({
-        title: text,
-        dateStr,
-        dateObj,
-        detailUrl,
-        pdfUrl,
-      });
-    });
-
-    // Strategy B: Cards / Articles / Lists
-    const cards = alboDoc.querySelectorAll("article, .card, .atto, .bando, .documento, .post, .item, li");
-    cards.forEach((el) => {
-      const titleEl = el.querySelector("h1, h2, h3, h4, h5, .title, .titolo, strong, a");
-      const title = (titleEl ? titleEl.textContent : "").replace(/\s+/g, " ").trim() || (el.textContent || "").replace(/\s+/g, " ").trim();
-      if (!title || title.length < 10) return;
-
-      let pdfUrl = "";
-      let detailUrl = "";
-
-      const links = el.querySelectorAll("a");
-      links.forEach((a) => {
-        const href = a.getAttribute("href");
-        if (href) {
-          try {
-            const fullHref = new URL(href, alboUrl).href;
-            if (fullHref.toLowerCase().includes(".pdf")) {
-              pdfUrl = fullHref;
-            } else if (!detailUrl && !href.startsWith("#")) {
-              detailUrl = fullHref;
-            }
-          } catch {
-            // Ignore invalid URLs
-          }
-        }
-      });
-
-      const fullText = (el.textContent || "").replace(/\s+/g, " ").trim();
-      const dateMatch = fullText.match(/\b(\d{1,2})[\/\.-](\d{1,2})[\/\.-](\d{2,4})\b/);
-      const dateStr = dateMatch ? dateMatch[1] : "";
-      const dateObj = dateStr ? parseItalianDate(dateStr) : null;
-
-      rawNotices.push({
-        title,
-        dateStr,
-        dateObj,
-        detailUrl,
-        pdfUrl,
-      });
-    });
-
-    logs.push(`[Albo Pretorio Add-on] Rilevati ${rawNotices.length} elementi/righe nell'Albo Pretorio.`);
-
-    let attiEsclusi = 0;
-    const matchedNotices: any[] = [];
-
-    for (const notice of rawNotices) {
-      if (notice.dateObj && notice.dateObj < cutoffDate) {
-        attiEsclusi++;
-        continue;
-      }
-
-      const filterRes = matchesNoticeFilters(notice.title);
-      if (!filterRes.included) {
-        attiEsclusi++;
-        continue;
-      }
-
-      matchedNotices.push(notice);
-    }
-
-    logs.push(`[Albo Pretorio Add-on] Bandi conformi ai filtri (ultimi 6 mesi & supplenze): ${matchedNotices.length} (Esclusi: ${attiEsclusi})`);
-
-    const extractedContracts: any[] = [];
-    const maxPdfToProcess = Math.min(matchedNotices.length, 5);
-
-    for (let i = 0; i < maxPdfToProcess; i++) {
-      const notice = matchedNotices[i];
-      let pdfDownloadUrl = notice.pdfUrl;
-
-      if (!pdfDownloadUrl && notice.detailUrl) {
-        try {
-          const detHtml = await fetchThroughProxy(notice.detailUrl) as string;
-          const detDoc = parser.parseFromString(detHtml, "text/html");
-          const links = detDoc.querySelectorAll("a");
-          for (const a of Array.from(links)) {
-            const href = a.getAttribute("href");
-            if (href && (href.toLowerCase().includes(".pdf") || href.toLowerCase().includes("allegato") || href.toLowerCase().includes("download"))) {
-              pdfDownloadUrl = new URL(href, notice.detailUrl).href;
-              break;
-            }
-          }
-        } catch (detErr: any) {
-          logs.push(`[Albo Pretorio Add-on] Impossibile aprire dettaglio atto (${notice.detailUrl}): ${detErr.message}`);
-        }
-      }
-
-      if (!pdfDownloadUrl) {
-        logs.push(`[Albo Pretorio Add-on] Nessun allegato PDF trovato per l'atto: "${notice.title.substring(0, 60)}..."`);
-        continue;
-      }
-
-      logs.push(`[Albo Pretorio Add-on] Download temporaneo PDF allegato da: ${pdfDownloadUrl}`);
-
-      try {
-        const arrayBuffer = await fetchThroughProxy(pdfDownloadUrl, true) as ArrayBuffer;
-        const uint8Array = new Uint8Array(arrayBuffer);
-        let binary = "";
-        for (let j = 0; j < uint8Array.length; j++) {
-          binary += String.fromCharCode(uint8Array[j]);
-        }
-        const rawPdfText = binary.replace(/[^\x20-\x7E\xC0-\xFF\n\r]/g, " ");
-        const textSnippet = rawPdfText.substring(0, 15000);
-
-        logs.push(`[Albo Pretorio Add-on] Analisi testo estratto bando tramite OpenRouter...`);
-
-        const prompt = `${PDF_EXTRACTION_SYSTEM_PROMPT}\n\nAnalizza il testo estratto dal PDF del contratto di supplenza:\n\n${textSnippet}`;
-
-        const response = await fetch("https://openrouter.ai/api/v1/chat/completions", {
-          method: "POST",
-          headers: {
-            "Authorization": `Bearer ${apiKey}`,
-            "Content-Type": "application/json",
-            "HTTP-Referer": window.location.origin,
-            "X-Title": "ScuolaATA Scraper"
-          },
-          body: JSON.stringify({
-            model: "google/gemini-2.5-flash",
-            messages: [
-              { role: "system", content: "Sei un assistente JSON rigoroso. Rispondi solo con JSON valido." },
-              { role: "user", content: prompt }
-            ],
-            response_format: { type: "json_object" }
-          })
-        });
-
-        const respData = await response.json();
-        const content = respData?.choices?.[0]?.message?.content || "{}";
-        const extracted = JSON.parse(content);
-
-        extractedContracts.push({
-          id: `contratto_${Date.now()}_${i}`,
-          titolo_bando: notice.title.substring(0, 150),
-          data_pubblicazione: notice.dateStr || (notice.dateObj ? formatDateToGG_MM_AA(notice.dateObj) : formatDateToGG_MM_AA(new Date())),
-          pdf_url: pdfDownloadUrl,
-          graduatoria_fascia: extracted.graduatoria_fascia || "Non specificata",
-          profilo_professionale: extracted.profilo_professionale || "Personale ATA / Docente",
-          classe_di_concorso: extracted.classe_di_concorso || "",
-          ore_settimanali: extracted.ore_settimanali || "",
-          decorrenza_da: normalizeDateOutput(extracted.decorrenza_da || ""),
-          decorrenza_a: normalizeDateOutput(extracted.decorrenza_a || ""),
-        });
-
-        logs.push(
-          `[Albo Pretorio Add-on] Estrazione completata per Atto #${i + 1}: Profilo="${extracted.profilo_professionale}", Fascia="${extracted.graduatoria_fascia}", Ore="${extracted.ore_settimanali}"`
-        );
-      } catch (pdfErr: any) {
-        logs.push(`[Albo Pretorio Add-on] Errore elaborazione PDF (${pdfDownloadUrl}): ${pdfErr.message}`);
-      }
-    }
-
-    const graduatoria_fascia = extractedContracts.map((c) => c.graduatoria_fascia).filter(Boolean).join(" | ") || (matchedNotices.length > 0 ? "Bandi rilevati" : "");
-    const profilo_professionale = extractedContracts.map((c) => c.profilo_professionale).filter(Boolean).join(" | ") || "";
-    const classe_di_concorso = extractedContracts.map((c) => c.classe_di_concorso).filter(Boolean).join(" | ") || "";
-    const ore_settimanali = extractedContracts.map((c) => c.ore_settimanali).filter(Boolean).join(" | ") || "";
-    const decorrenza_da = extractedContracts.map((c) => c.decorrenza_da).filter(Boolean).join(" | ") || "";
-    const decorrenza_a = extractedContracts.map((c) => c.decorrenza_a).filter(Boolean).join(" | ") || "";
-
-    return {
-      alboUrl,
-      attiTrovatiTotali: rawNotices.length,
-      attiFiltratiValidi: matchedNotices.length,
-      attiEsclusi,
-      contratti: extractedContracts,
-      graduatoria_fascia,
-      profilo_professionale,
-      classe_di_concorso,
-      ore_settimanali,
-      decorrenza_da,
-      decorrenza_a,
-      logs,
-    };
-  };
+};
 
   const executeClientSideSearch = async (queryStr: string, apiKey: string) => {
     const response = await fetch("https://openrouter.ai/api/v1/chat/completions", {
@@ -864,18 +558,13 @@ Se un campo non è deducibile dal testo del documento, assegna come valore una s
     setIsScanningAlbo(true);
     setAlboScanError("");
     setAlboScanResult(null);
-
     const formattedUrl = alboUrlInput.trim().startsWith("http") ? alboUrlInput.trim() : `https://${alboUrlInput.trim()}`;
-
     try {
-      if (!openRouterApiKey.trim()) {
-        throw new Error("Inserisci la tua OpenRouter API Key nelle Impostazioni per abilitare la scansione client-side dell'Albo Pretorio.");
-      }
-
-      const res = await executeClientSideAlboPretorio(formattedUrl, formattedUrl, openRouterApiKey.trim());
+      if (!openRouterApiKey.trim()) throw new Error("Inserisci API Key");
+      const res = await scrapeWebsite(formattedUrl, openRouterApiKey.trim(), EXTRACTION_SYSTEM_PROMPT);
       setAlboScanResult({ success: true, ...res });
     } catch (err: any) {
-      setAlboScanError(err.message || "Errore durante la scansione dell'Albo Pretorio.");
+      setAlboScanError(err.message);
     } finally {
       setIsScanningAlbo(false);
     }
@@ -1071,34 +760,7 @@ Se un campo non è deducibile dal testo del documento, assegna come valore una s
         for (const u of currentBatchUrls) {
           try {
             const clientData = await executeClientSideExtract(u, openRouterApiKey.trim());
-            
-            // Nuova Estensione: Estrazione Albo Pretorio & PDF (retrocompatibile)
-            try {
-              const alboRes = await executeClientSideAlboPretorio(u, clientData.navigatedUrl, openRouterApiKey.trim());
-              clientData.logs.push(...alboRes.logs);
-              Object.assign(clientData.data, {
-                graduatoria_fascia: alboRes.graduatoria_fascia || "",
-                profilo_professionale: alboRes.profilo_professionale || "",
-                classe_di_concorso: alboRes.classe_di_concorso || "",
-                ore_settimanali: alboRes.ore_settimanali || "",
-                decorrenza_da: alboRes.decorrenza_da || "",
-                decorrenza_a: alboRes.decorrenza_a || "",
-                albo_contratti: alboRes.contratti || [],
-              });
-            } catch (alboErr: any) {
-              clientData.logs.push(`[Albo Pretorio Add-on] Errore: ${alboErr.message}`);
-              Object.assign(clientData.data, {
-                graduatoria_fascia: "",
-                profilo_professionale: "",
-                classe_di_concorso: "",
-                ore_settimanali: "",
-                decorrenza_da: "",
-                decorrenza_a: "",
-                albo_contratti: [],
-              });
-            }
-
-            results.push(clientData);
+            results.push(clientData as any);
           } catch (itemErr: any) {
             results.push({
               status: "error",
@@ -1124,7 +786,7 @@ Se un campo non è deducibile dal testo del documento, assegna come valore una s
                 ore_settimanali: "",
                 decorrenza_da: "",
                 decorrenza_a: "",
-                albo_contratti: [],
+                albo_contratti: []
               }
             });
           }
@@ -1260,36 +922,9 @@ Se un campo non è deducibile dal testo del documento, assegna come valore una s
       }
 
       const clientData = await executeClientSideExtract(formattedUrl, openRouterApiKey.trim());
-      
-      // Nuova Estensione: Estrazione Albo Pretorio & PDF (retrocompatibile)
-      try {
-        const alboRes = await executeClientSideAlboPretorio(formattedUrl, clientData.navigatedUrl, openRouterApiKey.trim());
-        clientData.logs.push(...alboRes.logs);
-        Object.assign(clientData.data, {
-          graduatoria_fascia: alboRes.graduatoria_fascia || "",
-          profilo_professionale: alboRes.profilo_professionale || "",
-          classe_di_concorso: alboRes.classe_di_concorso || "",
-          ore_settimanali: alboRes.ore_settimanali || "",
-          decorrenza_da: alboRes.decorrenza_da || "",
-          decorrenza_a: alboRes.decorrenza_a || "",
-          albo_contratti: alboRes.contratti || [],
-        });
-      } catch (alboErr: any) {
-        clientData.logs.push(`[Albo Pretorio Add-on] Errore: ${alboErr.message}`);
-        Object.assign(clientData.data, {
-          graduatoria_fascia: "",
-          profilo_professionale: "",
-          classe_di_concorso: "",
-          ore_settimanali: "",
-          decorrenza_da: "",
-          decorrenza_a: "",
-          albo_contratti: [],
-        });
-      }
-
-      setSingleResult(clientData);
+      setSingleResult(clientData as any);
     } catch (err: any) {
-      setSingleError(err.message || "Errore durante la richiesta.");
+      setSingleError(err.message || "Errore durante l'elaborazione.");
     } finally {
       setIsProcessingSingle(false);
     }
