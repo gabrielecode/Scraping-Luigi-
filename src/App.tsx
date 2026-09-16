@@ -372,25 +372,68 @@ Se un campo non è deducibile dal testo del documento, assegna come valore una s
     return dateStr.trim();
   };
 
-async function fetchWithProxy(url: string, asArrayBuffer: boolean = false): Promise<any> {
-  const localProxyUrl = `/api/proxy?url=${encodeURIComponent(url)}`;
-  try {
-    const response = await fetch(localProxyUrl);
-    if (!response.ok) {
-       throw new Error(`Proxy error: ${response.statusText}`);
+function isSelfAppHtml(html: string): boolean {
+  if (!html || typeof html !== "string") return false;
+  return (
+    html.includes('id="root"') &&
+    (html.includes("ScuolaATA") ||
+      html.includes("/src/main.tsx") ||
+      html.includes("/assets/index") ||
+      html.includes("vite/client"))
+  );
+}
+
+const CORS_PROXIES = [
+  { name: "Server Proxy (/api/proxy)", url: (u: string) => `/api/proxy?url=${encodeURIComponent(u)}`, isLocal: true },
+  { name: "CorsProxy.io", url: (u: string) => `https://corsproxy.io/?url=${encodeURIComponent(u)}`, isLocal: false },
+  { name: "AllOrigins", url: (u: string) => `https://api.allorigins.win/raw?url=${encodeURIComponent(u)}`, isLocal: false },
+  { name: "CodeTabs", url: (u: string) => `https://api.codetabs.com/v1/proxy?quest=${encodeURIComponent(u)}`, isLocal: false }
+];
+
+async function fetchWithProxy(
+  url: string,
+  asArrayBuffer: boolean = false,
+  onLog?: (msg: string) => void
+): Promise<{ data: any; method: string }> {
+  let lastError = "";
+
+  for (const proxy of CORS_PROXIES) {
+    try {
+      onLog?.(`Tentativo di connessione tramite ${proxy.name}...`);
+      const target = proxy.url(url);
+      const controller = new AbortController();
+      const timeoutId = setTimeout(() => controller.abort(), 12000);
+
+      const response = await fetch(target, {
+        signal: controller.signal
+      });
+      clearTimeout(timeoutId);
+
+      if (response.ok) {
+        if (asArrayBuffer) {
+          const buf = await response.arrayBuffer();
+          return { data: buf, method: proxy.name };
+        }
+        const text = await response.text();
+        if (proxy.isLocal && isSelfAppHtml(text)) {
+          onLog?.(`Avviso: ${proxy.name} ha restituito la SPA invece del sito remoto. Passo al proxy alternativo.`);
+          continue;
+        }
+        if (text && text.length > 80) {
+          onLog?.(`Connessione riuscita via ${proxy.name} (${text.length} caratteri ricevuti).`);
+          return { data: text, method: proxy.name };
+        }
+      } else {
+        lastError = `Status ${response.status} (${response.statusText})`;
+        onLog?.(`Proxy ${proxy.name} ha risposto con ${lastError}`);
+      }
+    } catch (e: any) {
+      lastError = e.name === "AbortError" ? "Timeout connessione (12s)" : e.message;
+      onLog?.(`Tentativo fallito con ${proxy.name}: ${lastError}`);
     }
-    if (asArrayBuffer) {
-       return await response.arrayBuffer();
-    }
-    const text = await response.text();
-    if (text && text.length > 100) {
-      return text;
-    }
-    throw new Error("Content too short or empty");
-  } catch (e: any) {
-    console.error("Local proxy failed:", e);
-    throw new Error(`Impossibile accedere al sito: ${e.message}`);
   }
+
+  throw new Error(`Impossibile caricare l'URL tramite i proxy CORS. Ultimo errore: ${lastError}`);
 }
 
 function parseHtml(html: string): Document {
@@ -398,26 +441,44 @@ function parseHtml(html: string): Document {
   return parser.parseFromString(html, "text/html");
 }
 
-function findAlboPretorioLink(doc: Document, baseUrl: string): string | null {
-  const keywords = ["albo pretorio", "albo online", "albo", "pubblicità legale", "pubblicita legale"];
+function findAlboPretorioLink(doc: Document, baseUrl: string): { url: string; title: string } | null {
+  const keywords = [
+    "albo pretorio",
+    "albo online",
+    "albipretorionline",
+    "portaleargo",
+    "trasparenza-pa",
+    "amministrazione trasparente",
+    "pubblicità legale",
+    "pubblicita legale",
+    "bacheca sindacale",
+    "albo sindacale",
+    "circolari",
+    "comunicazioni",
+    "avvisi ata",
+    "supplenze"
+  ];
+  
   const links = Array.from(doc.querySelectorAll("a"));
   
   for (const link of links) {
-    const text = (link.textContent || "").toLowerCase();
-    const href = link.getAttribute("href") || "";
+    const text = (link.textContent || "").toLowerCase().trim();
+    const href = (link.getAttribute("href") || "").trim();
+    if (!href || href.startsWith("#") || href.startsWith("javascript:")) continue;
+
     for (const kw of keywords) {
       if (text.includes(kw) || href.toLowerCase().includes(kw)) {
         try {
-          return new URL(href, baseUrl).href;
-        } catch(e) {
-          return null;
+          const absolute = new URL(href, baseUrl).href;
+          return { url: absolute, title: link.textContent?.trim() || kw };
+        } catch {
+          // ignore invalid url
         }
       }
     }
   }
   return null;
 }
-
 
 async function extractWithOpenRouter(text: string, apiKey: string, systemPrompt?: string) {
   const response = await fetch("https://openrouter.ai/api/v1/chat/completions", {
@@ -440,40 +501,122 @@ async function extractWithOpenRouter(text: string, apiKey: string, systemPrompt?
   return await response.json();
 }
 
+async function executeClientSideSearch(queryStr: string, apiKey: string) {
+  const response = await fetch("https://openrouter.ai/api/v1/chat/completions", {
+    method: "POST",
+    headers: {
+      "Authorization": `Bearer ${apiKey}`,
+      "HTTP-Referer": window.location.origin,
+      "X-Title": "ScuolaATA Scraper",
+      "Content-Type": "application/json"
+    },
+    body: JSON.stringify({
+      model: "google/gemini-2.5-flash",
+      messages: [
+        { role: "system", content: "Sei un assistente di ricerca specializzato nel reperire bandi, convocazioni ATA e pensionamenti delle scuole italiane sul web." },
+        { role: "user", content: `Cerca sul web informazioni aggiornate su: ${queryStr}` }
+      ],
+      plugins: [{ id: "web" }]
+    })
+  });
+
+  let respData: any = {};
+  try {
+    const rawText = await response.text();
+    if (rawText && rawText.trim()) {
+      respData = JSON.parse(rawText);
+    }
+  } catch {
+    respData = {};
+  }
+  return respData?.choices?.[0]?.message?.content || "Nessun risultato trovato.";
+}
+
 async function scrapeWebsite(targetUrl: string, apiKey: string, systemPrompt?: string) {
   const logs: string[] = [];
+  const log = (msg: string) => {
+    logs.push(msg);
+  };
+
   let currentUrl = targetUrl.startsWith("http") ? targetUrl : `https://${targetUrl}`;
-  
+  log(`Avvio estrazione per: ${currentUrl}`);
+
+  let fullText = "";
+  let navigatedUrl = currentUrl;
+
   try {
-    const html = await fetchWithProxy(currentUrl);
+    // 1. Download homepage
+    const { data: html } = await fetchWithProxy(currentUrl, false, log);
     const doc = parseHtml(html);
     const pageText = doc.body?.textContent?.replace(/\s+/g, " ").trim() || "";
-    
-    // Cerca sezione Albo Pretorio
-    const alboUrl = findAlboPretorioLink(doc, currentUrl);
+    log(`Homepage analizzata (${pageText.length} caratteri estratti).`);
+
+    // 2. Look for Albo Pretorio / Trasparenza link
+    const alboMatch = findAlboPretorioLink(doc, currentUrl);
     let alboText = "";
-    let navigatedUrl = currentUrl;
 
-    if (alboUrl) {
-      logs.push(`Trovato Albo Pretorio: ${alboUrl}`);
-      navigatedUrl = alboUrl;
+    if (alboMatch) {
+      log(`Trovata sezione specifica: "${alboMatch.title}" (${alboMatch.url})`);
+      navigatedUrl = alboMatch.url;
       try {
-        const alboHtml = await fetchWithProxy(alboUrl);
-        const alboDoc = parseHtml(alboHtml);
+        const alboRes = await fetchWithProxy(alboMatch.url, false, log);
+        const alboDoc = parseHtml(alboRes.data);
         alboText = alboDoc.body?.textContent?.replace(/\s+/g, " ").trim() || "";
+        log(`Contenuti Albo/Trasparenza scaricati (${alboText.length} caratteri).`);
       } catch (e: any) {
-        logs.push(`Errore caricamento Albo Pretorio: ${e.message}`);
+        log(`Avviso caricamento Albo: ${e.message}. Procedo con i contenuti della homepage.`);
       }
+    } else {
+      log(`Nessuna sezione Albo Pretorio separata trovata nei link del menu principale.`);
     }
-    
-    const fullText = (pageText + " " + alboText).substring(0, 30000);
-    const resultJson = await extractWithOpenRouter(fullText, apiKey, systemPrompt);
-    const content = resultJson?.choices?.[0]?.message?.content || "{}";
 
+    fullText = (pageText + " " + alboText).substring(0, 32000);
+  } catch (directErr: any) {
+    log(`Impossibile leggere il sito direttamente (${directErr.message}).`);
+    log(`Attivazione fallback intelligente: Avvio OpenRouter Web Search...`);
+
+    try {
+      const urlObj = new URL(currentUrl);
+      const domain = urlObj.hostname.replace(/^www\./, "");
+      const searchQuery = `site:${domain} albo pretorio convocazioni ATA pensionamenti collaboratore scolastico`;
+      log(`Esecuzione query Web Search: "${searchQuery}"`);
+
+      const searchContent = await executeClientSideSearch(searchQuery, apiKey);
+      if (searchContent && searchContent.length > 50) {
+        log(`Dati di ricerca web ottenuti con successo (${searchContent.length} caratteri).`);
+        fullText = searchContent.substring(0, 32000);
+      } else {
+        log(`Tentativo fallback con ricerca estesa sul nome della scuola.`);
+        const fallbackQuery = `${domain} convocazioni ATA 2025 2026 graduatorie supplenze`;
+        const generalContent = await executeClientSideSearch(fallbackQuery, apiKey);
+        fullText = (generalContent || "").substring(0, 32000);
+      }
+    } catch (searchErr: any) {
+      log(`Errore anche durante la ricerca web di fallback: ${searchErr.message}`);
+      fullText = "";
+    }
+  }
+
+  if (!fullText || fullText.trim().length < 30) {
+    log(`Nessun contenuto testuale utile reperito per l'analisi.`);
+    return { fullText: "", navigatedUrl, logs, content: "{}" };
+  }
+
+  log(`Invio di ${fullText.length} caratteri al modello AI (Gemini 2.5 Flash tramite OpenRouter)...`);
+
+  try {
+    const resultJson = await extractWithOpenRouter(fullText, apiKey, systemPrompt);
+    if (resultJson?.error) {
+      log(`Errore restituito dall'API OpenRouter: ${resultJson.error.message || JSON.stringify(resultJson.error)}`);
+      return { fullText, navigatedUrl, logs, content: "{}" };
+    }
+
+    const content = resultJson?.choices?.[0]?.message?.content || "{}";
+    log(`Analisi completata con successo dall'AI.`);
     return { fullText, navigatedUrl, logs, content };
-  } catch (err: any) {
-    logs.push(`Errore: ${err.message}`);
-    return { fullText: "", navigatedUrl: currentUrl, logs, content: "{}" };
+  } catch (aiErr: any) {
+    log(`Errore durante l'elaborazione AI: ${aiErr.message}`);
+    return { fullText, navigatedUrl, logs, content: "{}" };
   }
 }
 
@@ -515,37 +658,6 @@ const executeClientSideExtract = async (targetUrl: string, apiKey: string) => {
       data: extractedData
     };
 };
-
-  const executeClientSideSearch = async (queryStr: string, apiKey: string) => {
-    const response = await fetch("https://openrouter.ai/api/v1/chat/completions", {
-      method: "POST",
-      headers: {
-        "Authorization": `Bearer ${apiKey}`,
-        "HTTP-Referer": window.location.origin,
-        "X-Title": "ScuolaATA Scraper",
-        "Content-Type": "application/json"
-      },
-      body: JSON.stringify({
-        model: "google/gemini-2.5-flash",
-        messages: [
-          { role: "system", content: "Sei un assistente di ricerca specializzato nel reperire bandi, convocazioni ATA e pensionamenti delle scuole italiane sul web." },
-          { role: "user", content: `Cerca sul web informazioni aggiornate su: ${queryStr}` }
-        ],
-        plugins: [{ id: "web" }]
-      })
-    });
-
-    let respData: any = {};
-    try {
-      const rawText = await response.text();
-      if (rawText && rawText.trim()) {
-        respData = JSON.parse(rawText);
-      }
-    } catch {
-      respData = {};
-    }
-    return respData?.choices?.[0]?.message?.content || "Nessun risultato trovato.";
-  };
 
   const handleAlboScan = async (e: React.FormEvent) => {
     e.preventDefault();
