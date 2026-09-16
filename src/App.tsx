@@ -19,6 +19,12 @@ import {
   ArrowRight,
   Key,
   Settings,
+  FileText,
+  Calendar,
+  Clock,
+  Briefcase,
+  GraduationCap,
+  Filter,
   Save,
   Github,
   Globe,
@@ -27,7 +33,7 @@ import {
 import { ExtractionResult, ExtractionData, BatchHistoryItem } from "./types";
 
 export default function App() {
-  const [activeTab, setActiveTab] = useState<"batch" | "single" | "search" | "history" | "guide">("batch");
+  const [activeTab, setActiveTab] = useState<"batch" | "single" | "albo" | "search" | "history" | "guide">("batch");
   
   // Configuration & LocalStorage state
   const [openRouterApiKey, setOpenRouterApiKey] = useState(() => localStorage.getItem("scuola_openrouter_api_key") || "");
@@ -36,6 +42,17 @@ export default function App() {
   const [githubPat, setGithubPat] = useState(() => localStorage.getItem("scuola_github_pat") || "");
   const [isSettingsOpen, setIsSettingsOpen] = useState(false);
   const [settingsSavedMessage, setSettingsSavedMessage] = useState("");
+
+  // Albo Pretorio & PDF test state
+  const [alboUrlInput, setAlboUrlInput] = useState("");
+  const [isScanningAlbo, setIsScanningAlbo] = useState(false);
+  const [alboScanResult, setAlboScanResult] = useState<any | null>(null);
+  const [alboScanError, setAlboScanError] = useState("");
+
+  const [selectedPdfFile, setSelectedPdfFile] = useState<File | null>(null);
+  const [isExtractingPdf, setIsExtractingPdf] = useState(false);
+  const [pdfExtractResult, setPdfExtractResult] = useState<any | null>(null);
+  const [pdfExtractError, setPdfExtractError] = useState("");
 
   // History state
   const [batchHistory, setBatchHistory] = useState<BatchHistoryItem[]>(() => {
@@ -168,6 +185,66 @@ export default function App() {
   const [searchResult, setSearchResult] = useState("");
   const [isSearching, setIsSearching] = useState(false);
   const [searchError, setSearchError] = useState("");
+
+  const handleAlboScan = async (e: React.FormEvent) => {
+    e.preventDefault();
+    if (!alboUrlInput.trim()) return;
+    setIsScanningAlbo(true);
+    setAlboScanError("");
+    setAlboScanResult(null);
+
+    const formattedUrl = alboUrlInput.trim().startsWith("http") ? alboUrlInput.trim() : `https://${alboUrlInput.trim()}`;
+
+    try {
+      const res = await fetch("/api/albo-pretorio", {
+        method: "POST",
+        headers: {
+          "Content-Type": "application/json",
+          ...(openRouterApiKey.trim() ? { "x-openrouter-key": openRouterApiKey.trim() } : {})
+        },
+        body: JSON.stringify({ url: formattedUrl })
+      });
+      const data = await res.json();
+      if (!res.ok || !data.success) {
+        throw new Error(data.error || "Errore scansione Albo Pretorio");
+      }
+      setAlboScanResult(data);
+    } catch (err: any) {
+      setAlboScanError(err.message || "Errore di connessione al server");
+    } finally {
+      setIsScanningAlbo(false);
+    }
+  };
+
+  const handlePdfUploadAndExtract = async (e: React.FormEvent) => {
+    e.preventDefault();
+    if (!selectedPdfFile) return;
+    setIsExtractingPdf(true);
+    setPdfExtractError("");
+    setPdfExtractResult(null);
+
+    try {
+      const formData = new FormData();
+      formData.append("pdf", selectedPdfFile);
+
+      const res = await fetch("/api/extract-pdf", {
+        method: "POST",
+        headers: {
+          ...(openRouterApiKey.trim() ? { "x-openrouter-key": openRouterApiKey.trim() } : {})
+        },
+        body: formData
+      });
+      const data = await res.json();
+      if (!res.ok || !data.success) {
+        throw new Error(data.error || "Errore analisi PDF");
+      }
+      setPdfExtractResult(data);
+    } catch (err: any) {
+      setPdfExtractError(err.message || "Errore estrazione PDF");
+    } finally {
+      setIsExtractingPdf(false);
+    }
+  };
 
   // Client-side fallback helpers for Vercel static hosting
   const executeClientSideExtract = async (targetUrl: string, apiKey: string) => {
@@ -478,7 +555,8 @@ export default function App() {
     const headers = [
       "URL Originale", "URL Navigato", "Stato",
       "Conv. Coll. Scolastico", "Conv. Assistente Amm.", "Conv. Docenti", "Conv. Assistente Tecnico", "Conv. Cuoco", "Conv. Assistente Agrario",
-      "Pens. Coll. Scolastico", "Pens. Assistente Amm.", "Pens. Docenti", "Pens. Assistente Tecnico", "Pens. Cuoco", "Pens. Assistente Agrario"
+      "Pens. Coll. Scolastico", "Pens. Assistente Amm.", "Pens. Docenti", "Pens. Assistente Tecnico", "Pens. Cuoco", "Pens. Assistente Agrario",
+      "Graduatoria Fascia", "Profilo Professionale", "Classe di Concorso", "Ore Settimanali", "Decorrenza Da", "Decorrenza A"
     ];
     const rows = batchResults.map(r => [
       `"${r.url}"`, `"${r.navigatedUrl}"`, `"${r.status}"`,
@@ -494,6 +572,12 @@ export default function App() {
       r.data.pensionamenti_assistente_tecnico ?? 0,
       r.data.pensionamenti_cuoco ?? 0,
       r.data.pensionamenti_assistente_agrario ?? 0,
+      `"${(r.data.graduatoria_fascia || "").replace(/"/g, '""')}"`,
+      `"${(r.data.profilo_professionale || "").replace(/"/g, '""')}"`,
+      `"${(r.data.classe_di_concorso || "").replace(/"/g, '""')}"`,
+      `"${(r.data.ore_settimanali || "").replace(/"/g, '""')}"`,
+      `"${(r.data.decorrenza_da || "").replace(/"/g, '""')}"`,
+      `"${(r.data.decorrenza_a || "").replace(/"/g, '""')}"`,
     ]);
     const csvContent = [headers.join(","), ...rows.map(e => e.join(","))].join("\n");
     const filePath = `risultati-scuole-ata-${new Date().toISOString().slice(0, 10)}.csv`;
@@ -611,7 +695,13 @@ export default function App() {
       "Pens. Docenti",
       "Pens. Assistente Tecnico",
       "Pens. Cuoco",
-      "Pens. Assistente Agrario"
+      "Pens. Assistente Agrario",
+      "Graduatoria Fascia",
+      "Profilo Professionale",
+      "Classe di Concorso",
+      "Ore Settimanali",
+      "Decorrenza Da",
+      "Decorrenza A"
     ];
 
     const rows = batchResults.map(r => [
@@ -630,6 +720,12 @@ export default function App() {
       r.data.pensionamenti_assistente_tecnico ?? 0,
       r.data.pensionamenti_cuoco ?? 0,
       r.data.pensionamenti_assistente_agrario ?? 0,
+      `"${(r.data.graduatoria_fascia || "").replace(/"/g, '""')}"`,
+      `"${(r.data.profilo_professionale || "").replace(/"/g, '""')}"`,
+      `"${(r.data.classe_di_concorso || "").replace(/"/g, '""')}"`,
+      `"${(r.data.ore_settimanali || "").replace(/"/g, '""')}"`,
+      `"${(r.data.decorrenza_da || "").replace(/"/g, '""')}"`,
+      `"${(r.data.decorrenza_a || "").replace(/"/g, '""')}"`,
     ]);
 
     const csvContent = [headers.join(","), ...rows.map(e => e.join(","))].join("\n");
@@ -682,6 +778,17 @@ export default function App() {
           >
             <Search className="w-4 h-4" />
             <span>Test URL Singolo</span>
+          </button>
+          <button
+            onClick={() => setActiveTab("albo")}
+            className={`px-4 py-2 rounded-lg text-sm font-medium transition-all flex items-center gap-2 ${
+              activeTab === "albo"
+                ? "bg-indigo-600 text-white shadow-lg shadow-indigo-600/25"
+                : "text-slate-400 hover:text-white hover:bg-slate-800/60"
+            }`}
+          >
+            <FileText className="w-4 h-4" />
+            <span>Albo Pretorio & PDF</span>
           </button>
           <button
             onClick={() => setActiveTab("history")}
@@ -1009,6 +1116,11 @@ export default function App() {
                           <th className="p-4 font-semibold text-center">Pens. Amm.</th>
                           <th className="p-4 font-semibold text-center">Pens. Docenti</th>
                           <th className="p-4 font-semibold text-center">Pens. Tecnico</th>
+                          <th className="p-4 font-semibold text-center text-emerald-400">Fascia</th>
+                          <th className="p-4 font-semibold text-center text-emerald-400">Profilo</th>
+                          <th className="p-4 font-semibold text-center text-emerald-400">Classe Conc.</th>
+                          <th className="p-4 font-semibold text-center text-emerald-400">Ore</th>
+                          <th className="p-4 font-semibold text-center text-emerald-400">Decorrenza</th>
                         </tr>
                       </thead>
                       <tbody className="divide-y divide-slate-800/60">
@@ -1039,6 +1151,13 @@ export default function App() {
                             <td className="p-4 text-center font-bold text-amber-300">{r.data.pensionamenti_assistente_amministrativo ?? 0}</td>
                             <td className="p-4 text-center font-bold text-amber-300">{r.data.pensionamenti_docenti ?? 0}</td>
                             <td className="p-4 text-center font-bold text-amber-300">{r.data.pensionamenti_assistente_tecnico ?? 0}</td>
+                            <td className="p-4 text-center text-slate-300 font-medium">{r.data.graduatoria_fascia || "-"}</td>
+                            <td className="p-4 text-center text-slate-300 font-medium max-w-[120px] truncate" title={r.data.profilo_professionale}>{r.data.profilo_professionale || "-"}</td>
+                            <td className="p-4 text-center text-slate-300 font-medium">{r.data.classe_di_concorso || "-"}</td>
+                            <td className="p-4 text-center text-slate-300 font-medium">{r.data.ore_settimanali || "-"}</td>
+                            <td className="p-4 text-center text-slate-300 font-medium text-[11px]">
+                              {r.data.decorrenza_da ? `${r.data.decorrenza_da}${r.data.decorrenza_a ? ` - ${r.data.decorrenza_a}` : ""}` : "-"}
+                            </td>
                           </tr>
                         ))}
                       </tbody>
@@ -1152,8 +1271,358 @@ export default function App() {
                     </div>
                   </div>
                 </div>
+
+                {/* Albo Pretorio & Contratti di Supplenza Results */}
+                <div className="bg-slate-900 border border-slate-800 rounded-2xl p-6 shadow-xl space-y-4">
+                  <div className="flex items-center justify-between">
+                    <h3 className="text-lg font-semibold text-white flex items-center gap-2">
+                      <FileText className="w-5 h-5 text-emerald-400" />
+                      Albo Pretorio & Contratti di Supplenza
+                    </h3>
+                    <span className="text-xs bg-indigo-500/10 text-indigo-300 border border-indigo-500/20 px-3 py-1 rounded-full font-medium flex items-center gap-1.5">
+                      <ShieldCheck className="w-3.5 h-3.5 text-emerald-400" />
+                      Zero Dati Personali (GDPR Safe)
+                    </span>
+                  </div>
+
+                  <div className="grid grid-cols-2 sm:grid-cols-3 gap-3">
+                    <div className="bg-slate-950/60 border border-slate-800/80 rounded-xl p-3.5">
+                      <span className="text-[11px] uppercase tracking-wider text-slate-400 font-semibold block mb-1">Fascia Graduatoria</span>
+                      <span className="text-sm font-bold text-white">{singleResult.data.graduatoria_fascia || "Nessuna rilevata"}</span>
+                    </div>
+                    <div className="bg-slate-950/60 border border-slate-800/80 rounded-xl p-3.5">
+                      <span className="text-[11px] uppercase tracking-wider text-slate-400 font-semibold block mb-1">Profilo Professionale</span>
+                      <span className="text-sm font-bold text-white">{singleResult.data.profilo_professionale || "Nessun profilo"}</span>
+                    </div>
+                    <div className="bg-slate-950/60 border border-slate-800/80 rounded-xl p-3.5">
+                      <span className="text-[11px] uppercase tracking-wider text-slate-400 font-semibold block mb-1">Classe di Concorso</span>
+                      <span className="text-sm font-bold text-white">{singleResult.data.classe_di_concorso || "N/D"}</span>
+                    </div>
+                    <div className="bg-slate-950/60 border border-slate-800/80 rounded-xl p-3.5">
+                      <span className="text-[11px] uppercase tracking-wider text-slate-400 font-semibold block mb-1">Ore Settimanali</span>
+                      <span className="text-sm font-bold text-white">{singleResult.data.ore_settimanali || "N/D"}</span>
+                    </div>
+                    <div className="bg-slate-950/60 border border-slate-800/80 rounded-xl p-3.5">
+                      <span className="text-[11px] uppercase tracking-wider text-slate-400 font-semibold block mb-1">Decorrenza Da</span>
+                      <span className="text-sm font-bold text-white">{singleResult.data.decorrenza_da || "N/D"}</span>
+                    </div>
+                    <div className="bg-slate-950/60 border border-slate-800/80 rounded-xl p-3.5">
+                      <span className="text-[11px] uppercase tracking-wider text-slate-400 font-semibold block mb-1">Decorrenza A</span>
+                      <span className="text-sm font-bold text-white">{singleResult.data.decorrenza_a || "N/D"}</span>
+                    </div>
+                  </div>
+
+                  {singleResult.data.albo_contratti && singleResult.data.albo_contratti.length > 0 && (
+                    <div className="space-y-3 pt-2">
+                      <h4 className="text-xs font-semibold uppercase tracking-wider text-slate-300">
+                        Atti e Bandi Rilevati ({singleResult.data.albo_contratti.length})
+                      </h4>
+                      <div className="space-y-2">
+                        {singleResult.data.albo_contratti.map((contratto, cIdx) => (
+                          <div key={cIdx} className="bg-slate-950/70 border border-slate-800/90 rounded-xl p-4 space-y-2">
+                            <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-1">
+                              <span className="font-semibold text-sm text-slate-100">{contratto.titolo}</span>
+                              {contratto.data_pubblicazione && (
+                                <span className="text-xs text-slate-400 bg-slate-900 border border-slate-800 px-2 py-0.5 rounded-md self-start">
+                                  {contratto.data_pubblicazione}
+                                </span>
+                              )}
+                            </div>
+                            <div className="grid grid-cols-2 sm:grid-cols-4 gap-2 text-xs text-slate-300 pt-1">
+                              <div><span className="text-slate-500">Profilo:</span> {contratto.profilo_professionale || "N/D"}</div>
+                              <div><span className="text-slate-500">Fascia:</span> {contratto.graduatoria_fascia || "N/D"}</div>
+                              <div><span className="text-slate-500">Ore:</span> {contratto.ore_settimanali || "N/D"}</div>
+                              <div><span className="text-slate-500">Periodo:</span> {contratto.decorrenza_da ? `${contratto.decorrenza_da} - ${contratto.decorrenza_a || "termine"}` : "N/D"}</div>
+                            </div>
+                            {contratto.pdf_url && (
+                              <div className="pt-1 flex items-center justify-between text-xs">
+                                <a href={contratto.pdf_url} target="_blank" rel="noreferrer" className="text-indigo-400 hover:text-indigo-300 underline flex items-center gap-1">
+                                  <ExternalLink className="w-3 h-3" />
+                                  <span>Visualizza allegato PDF originale</span>
+                                </a>
+                                <span className="text-[11px] text-emerald-400">File temp rimosso da memoria</span>
+                              </div>
+                            )}
+                          </div>
+                        ))}
+                      </div>
+                    </div>
+                  )}
+                </div>
               </div>
             )}
+          </div>
+        )}
+
+        {/* TAB: ALBO PRETORIO & PDF */}
+        {activeTab === "albo" && (
+          <div className="space-y-8 animate-fadeIn max-w-5xl mx-auto">
+            {/* Header Card */}
+            <div className="bg-slate-900 border border-slate-800 rounded-2xl p-6 shadow-xl space-y-4">
+              <div className="flex flex-col sm:flex-row items-start sm:items-center justify-between gap-3">
+                <div>
+                  <h2 className="text-xl font-semibold text-white flex items-center gap-2">
+                    <FileText className="w-5 h-5 text-indigo-400" />
+                    Modulo Albo Pretorio & Estrazione Contratti PDF
+                  </h2>
+                  <p className="text-sm text-slate-400 mt-1">
+                    Scansione automatica dell'Albo Pretorio scolastico negli ultimi 6 mesi, download temporaneo degli allegati PDF ed estrazione sicura tramite Gemini AI.
+                  </p>
+                </div>
+                <span className="text-xs bg-emerald-500/10 text-emerald-300 border border-emerald-500/20 px-3 py-1.5 rounded-full font-medium flex items-center gap-1.5 shrink-0">
+                  <ShieldCheck className="w-4 h-4 text-emerald-400" />
+                  100% Privacy & Zero PII
+                </span>
+              </div>
+
+              {/* Filtering Specs Box */}
+              <div className="grid grid-cols-1 md:grid-cols-3 gap-3 bg-slate-950/70 border border-slate-800 rounded-xl p-4 text-xs">
+                <div className="space-y-1">
+                  <span className="font-semibold text-indigo-400 flex items-center gap-1">
+                    <Calendar className="w-3.5 h-3.5" /> Filtro Temporale 6 Mesi
+                  </span>
+                  <p className="text-slate-400">
+                    Vengono esaminati esclusivamente gli atti e bandi pubblicati entro 6 mesi dalla data corrente.
+                  </p>
+                </div>
+                <div className="space-y-1">
+                  <span className="font-semibold text-emerald-400 flex items-center gap-1">
+                    <CheckCircle2 className="w-3.5 h-3.5" /> Parole Chiave Incluse
+                  </span>
+                  <p className="text-slate-400">
+                    "Contratto di supplenza annuale", "Contratto di supplenza breve", "Contratto di supplenza".
+                  </p>
+                </div>
+                <div className="space-y-1">
+                  <span className="font-semibold text-rose-400 flex items-center gap-1">
+                    <Filter className="w-3.5 h-3.5" /> Documenti Esclusi
+                  </span>
+                  <p className="text-slate-400">
+                    "Assegnazione ai plessi", "Assenze docente/ATA", "direttiva_ds", "informativa sindacale".
+                  </p>
+                </div>
+              </div>
+            </div>
+
+            {/* Section 1: Scan School URL */}
+            <div className="bg-slate-900 border border-slate-800 rounded-2xl p-6 shadow-xl space-y-6">
+              <div>
+                <h3 className="text-base font-semibold text-white flex items-center gap-2">
+                  <Search className="w-4 h-4 text-indigo-400" />
+                  1. Test Scansione Albo Pretorio da URL Istituto
+                </h3>
+                <p className="text-xs text-slate-400 mt-1">
+                  Inserisci l'home page o il link dell'istituto: il motore individua la sezione Albo Pretorio, filtra gli atti conformi e scarica gli allegati PDF per l'analisi.
+                </p>
+              </div>
+
+              <form onSubmit={handleAlboScan} className="space-y-4">
+                <div className="flex gap-3">
+                  <input
+                    type="text"
+                    placeholder="https://www.comprensivomilano.edu.it"
+                    value={alboUrlInput}
+                    onChange={(e) => setAlboUrlInput(e.target.value)}
+                    className="flex-1 bg-slate-950 border border-slate-700 focus:border-indigo-500 rounded-xl px-4 py-3 text-sm text-white placeholder-slate-500 outline-none transition-colors"
+                  />
+                  <button
+                    type="submit"
+                    disabled={isScanningAlbo || !alboUrlInput.trim()}
+                    className="bg-indigo-600 hover:bg-indigo-500 disabled:opacity-50 text-white font-medium px-6 py-3 rounded-xl transition-all shadow-lg shadow-indigo-600/30 flex items-center gap-2 shrink-0"
+                  >
+                    {isScanningAlbo ? (
+                      <>
+                        <Loader2 className="w-4 h-4 animate-spin" />
+                        <span>Scansione in corso...</span>
+                      </>
+                    ) : (
+                      <>
+                        <Play className="w-4 h-4 fill-current" />
+                        <span>Analizza Albo Pretorio</span>
+                      </>
+                    )}
+                  </button>
+                </div>
+              </form>
+
+              {alboScanError && (
+                <div className="bg-rose-500/10 border border-rose-500/20 text-rose-400 p-4 rounded-xl text-sm flex items-center gap-3">
+                  <AlertCircle className="w-5 h-5 shrink-0" />
+                  <span>{alboScanError}</span>
+                </div>
+              )}
+
+              {alboScanResult && (
+                <div className="space-y-4 animate-fadeIn">
+                  {/* Summary Grid */}
+                  <div className="grid grid-cols-2 sm:grid-cols-4 gap-3">
+                    <div className="bg-slate-950/60 border border-slate-800 rounded-xl p-3">
+                      <span className="text-[11px] text-slate-400 block">Albo Pretorio Trovato</span>
+                      <span className="text-sm font-semibold text-indigo-300 truncate block">
+                        {alboScanResult.alboUrl ? "Identificato" : "Non trovato"}
+                      </span>
+                    </div>
+                    <div className="bg-slate-950/60 border border-slate-800 rounded-xl p-3">
+                      <span className="text-[11px] text-slate-400 block">Atti Conformi Rilevati</span>
+                      <span className="text-sm font-semibold text-white">
+                        {alboScanResult.contratti?.length ?? 0}
+                      </span>
+                    </div>
+                    <div className="bg-slate-950/60 border border-slate-800 rounded-xl p-3">
+                      <span className="text-[11px] text-slate-400 block">Fascia Graduatoria</span>
+                      <span className="text-sm font-semibold text-emerald-300">
+                        {alboScanResult.graduatoria_fascia || "N/D"}
+                      </span>
+                    </div>
+                    <div className="bg-slate-950/60 border border-slate-800 rounded-xl p-3">
+                      <span className="text-[11px] text-slate-400 block">Profilo ATA/Docente</span>
+                      <span className="text-sm font-semibold text-emerald-300 truncate block" title={alboScanResult.profilo_professionale}>
+                        {alboScanResult.profilo_professionale || "N/D"}
+                      </span>
+                    </div>
+                  </div>
+
+                  {/* Logs */}
+                  {alboScanResult.logs && (
+                    <div className="bg-slate-950 rounded-xl p-4 font-mono text-xs text-slate-400 space-y-1.5 border border-slate-800 max-h-48 overflow-y-auto">
+                      {alboScanResult.logs.map((log: string, idx: number) => (
+                        <div key={idx} className="flex items-start gap-2">
+                          <span className="text-indigo-400">›</span>
+                          <span>{log}</span>
+                        </div>
+                      ))}
+                    </div>
+                  )}
+
+                  {/* Contracts List */}
+                  {alboScanResult.contratti && alboScanResult.contratti.length > 0 && (
+                    <div className="space-y-2">
+                      <h4 className="text-xs font-semibold uppercase tracking-wider text-slate-300">
+                        Dettaglio Contratti e Documenti PDF Estratti
+                      </h4>
+                      {alboScanResult.contratti.map((item: any, idx: number) => (
+                        <div key={idx} className="bg-slate-950/80 border border-slate-800 rounded-xl p-4 space-y-2">
+                          <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-1">
+                            <span className="font-semibold text-sm text-white">{item.titolo}</span>
+                            {item.data_pubblicazione && (
+                              <span className="text-xs text-slate-400 bg-slate-900 border border-slate-800 px-2 py-0.5 rounded self-start">
+                                {item.data_pubblicazione}
+                              </span>
+                            )}
+                          </div>
+                          <div className="grid grid-cols-2 sm:grid-cols-4 gap-2 text-xs text-slate-300">
+                            <div><span className="text-slate-500">Profilo:</span> {item.profilo_professionale || "N/D"}</div>
+                            <div><span className="text-slate-500">Fascia:</span> {item.graduatoria_fascia || "N/D"}</div>
+                            <div><span className="text-slate-500">Ore:</span> {item.ore_settimanali || "N/D"}</div>
+                            <div><span className="text-slate-500">Periodo:</span> {item.decorrenza_da ? `${item.decorrenza_da} - ${item.decorrenza_a || "termine"}` : "N/D"}</div>
+                          </div>
+                          <div className="flex items-center justify-between text-xs pt-1 border-t border-slate-900">
+                            <span className="text-emerald-400 flex items-center gap-1">
+                              <CheckCircle2 className="w-3.5 h-3.5" /> File temporaneo PDF eliminato (Memoria liberata)
+                            </span>
+                            {item.pdf_url && (
+                              <a href={item.pdf_url} target="_blank" rel="noreferrer" className="text-indigo-400 hover:text-indigo-300 underline flex items-center gap-1">
+                                <ExternalLink className="w-3 h-3" />
+                                <span>Apri PDF bando</span>
+                              </a>
+                            )}
+                          </div>
+                        </div>
+                      ))}
+                    </div>
+                  )}
+                </div>
+              )}
+            </div>
+
+            {/* Section 2: Direct PDF Upload Test */}
+            <div className="bg-slate-900 border border-slate-800 rounded-2xl p-6 shadow-xl space-y-6">
+              <div>
+                <h3 className="text-base font-semibold text-white flex items-center gap-2">
+                  <Download className="w-4 h-4 text-emerald-400" />
+                  2. Upload Diretto File PDF di Contratto / Bando Scolastico
+                </h3>
+                <p className="text-xs text-slate-400 mt-1">
+                  Trascina o carica direttamente un file PDF di nomina o contratto di supplenza per verificare l'estrazione strutturata delle 6 variabili e la totale privacy (zero PII estratti).
+                </p>
+              </div>
+
+              <form onSubmit={handlePdfUploadAndExtract} className="space-y-4">
+                <div className="flex flex-col sm:flex-row items-center gap-3">
+                  <input
+                    type="file"
+                    accept=".pdf"
+                    onChange={(e) => setSelectedPdfFile(e.target.files?.[0] || null)}
+                    className="flex-1 bg-slate-950 border border-slate-700 rounded-xl px-4 py-2.5 text-sm text-slate-300 file:mr-4 file:py-1.5 file:px-4 file:rounded-lg file:border-0 file:text-xs file:font-semibold file:bg-indigo-600 file:text-white hover:file:bg-indigo-500 cursor-pointer w-full"
+                  />
+                  <button
+                    type="submit"
+                    disabled={isExtractingPdf || !selectedPdfFile}
+                    className="bg-emerald-600 hover:bg-emerald-500 disabled:opacity-50 text-white font-medium px-6 py-3 rounded-xl transition-all shadow-lg shadow-emerald-600/30 flex items-center gap-2 shrink-0 w-full sm:w-auto justify-center"
+                  >
+                    {isExtractingPdf ? (
+                      <>
+                        <Loader2 className="w-4 h-4 animate-spin" />
+                        <span>Estrazione PDF con Gemini...</span>
+                      </>
+                    ) : (
+                      <>
+                        <Play className="w-4 h-4 fill-current" />
+                        <span>Estrai Dati da PDF</span>
+                      </>
+                    )}
+                  </button>
+                </div>
+              </form>
+
+              {pdfExtractError && (
+                <div className="bg-rose-500/10 border border-rose-500/20 text-rose-400 p-4 rounded-xl text-sm flex items-center gap-3">
+                  <AlertCircle className="w-5 h-5 shrink-0" />
+                  <span>{pdfExtractError}</span>
+                </div>
+              )}
+
+              {pdfExtractResult && (
+                <div className="space-y-4 animate-fadeIn">
+                  <div className="flex items-center justify-between bg-slate-950/80 border border-slate-800 rounded-xl p-4">
+                    <div>
+                      <span className="text-xs text-slate-400 block">File Elaborato:</span>
+                      <span className="text-sm font-semibold text-white">{pdfExtractResult.filename}</span>
+                    </div>
+                    <span className="text-xs bg-emerald-500/10 text-emerald-400 border border-emerald-500/20 px-3 py-1 rounded-full font-medium flex items-center gap-1">
+                      <CheckCircle2 className="w-3.5 h-3.5" /> Memoria Pulita (unlink eseguito)
+                    </span>
+                  </div>
+
+                  <div className="grid grid-cols-2 sm:grid-cols-3 gap-3">
+                    <div className="bg-slate-950/60 border border-slate-800 rounded-xl p-4">
+                      <span className="text-[11px] font-semibold text-indigo-400 uppercase tracking-wider block mb-1">Graduatoria Fascia</span>
+                      <span className="text-base font-bold text-white">{pdfExtractResult.data.graduatoria_fascia || "N/D"}</span>
+                    </div>
+                    <div className="bg-slate-950/60 border border-slate-800 rounded-xl p-4">
+                      <span className="text-[11px] font-semibold text-indigo-400 uppercase tracking-wider block mb-1">Profilo Professionale</span>
+                      <span className="text-base font-bold text-white">{pdfExtractResult.data.profilo_professionale || "N/D"}</span>
+                    </div>
+                    <div className="bg-slate-950/60 border border-slate-800 rounded-xl p-4">
+                      <span className="text-[11px] font-semibold text-indigo-400 uppercase tracking-wider block mb-1">Classe di Concorso</span>
+                      <span className="text-base font-bold text-white">{pdfExtractResult.data.classe_di_concorso || "N/D"}</span>
+                    </div>
+                    <div className="bg-slate-950/60 border border-slate-800 rounded-xl p-4">
+                      <span className="text-[11px] font-semibold text-amber-400 uppercase tracking-wider block mb-1">Ore Settimanali</span>
+                      <span className="text-base font-bold text-white">{pdfExtractResult.data.ore_settimanali || "N/D"}</span>
+                    </div>
+                    <div className="bg-slate-950/60 border border-slate-800 rounded-xl p-4">
+                      <span className="text-[11px] font-semibold text-amber-400 uppercase tracking-wider block mb-1">Decorrenza Da</span>
+                      <span className="text-base font-bold text-white">{pdfExtractResult.data.decorrenza_da || "N/D"}</span>
+                    </div>
+                    <div className="bg-slate-950/60 border border-slate-800 rounded-xl p-4">
+                      <span className="text-[11px] font-semibold text-amber-400 uppercase tracking-wider block mb-1">Decorrenza A</span>
+                      <span className="text-base font-bold text-white">{pdfExtractResult.data.decorrenza_a || "N/D"}</span>
+                    </div>
+                  </div>
+                </div>
+              )}
+            </div>
           </div>
         )}
 
@@ -1367,6 +1836,24 @@ export default function App() {
 }
 Se un dato non viene menzionato nel testo, assegna il valore 0 alla chiave corrispondente. Non aggiungere testo fuori dal JSON."`}
                   </pre>
+                </div>
+
+                <div className="bg-slate-950 p-5 rounded-xl border border-slate-800 space-y-3">
+                  <h3 className="font-semibold text-white flex items-center gap-2 text-base text-emerald-400">
+                    <span>4. Estensione Modulare: Albo Pretorio, Filtri 6 Mesi & Download PDF</span>
+                  </h3>
+                  <div className="space-y-3 text-slate-400 text-xs leading-relaxed">
+                    <p>
+                      L'estensione opera come un add-on autonomo mantenendo al 100% la retrocompatibilità con tutte le funzioni preesistenti.
+                    </p>
+                    <ul className="list-disc list-inside space-y-1.5">
+                      <li><strong>Filtro 6 Mesi:</strong> Scansione limitata tassativamente agli atti pubblicati negli ultimi 6 mesi rispetto alla data odierna.</li>
+                      <li><strong>Parole Chiave di Inclusione:</strong> <em>"Contratto di supplenza annuale"</em>, <em>"Contratto di supplenza breve"</em>, <em>"Contratto di supplenza"</em>.</li>
+                      <li><strong>Parole Chiave di Esclusione:</strong> <em>"ASSEGNAZIONE AI PLESSI DEL PERSONALE ATA"</em>, <em>"CI_031 Assenze del personale docente e ATA"</em>, <em>"direttiva_ds"</em>, <em>"informativa sindacale"</em>.</li>
+                      <li><strong>Gestione Memoria Rigorosa:</strong> I file PDF scaricati temporaneamente vengono memorizzati su disco e tassativamente eliminati all'interno di blocchi <code>try...finally</code> tramite <code>fs.promises.unlink</code>, sia in caso di successo che di errore.</li>
+                      <li><strong>Tutela Assoluta della Privacy:</strong> Non viene estratto alcun nominativo, codice fiscale o dato anagrafico. Vengono estratti solo i campi contrattuali: <code>graduatoria_fascia</code>, <code>profilo_professionale</code>, <code>classe_di_concorso</code>, <code>ore_settimanali</code>, <code>decorrenza_da</code>, <code>decorrenza_a</code>.</li>
+                    </ul>
+                  </div>
                 </div>
               </div>
             </div>

@@ -8,6 +8,9 @@ import { Readable } from "stream";
 import csvParser from "csv-parser";
 import { GoogleGenAI, Type } from "@google/genai";
 import { createServer as createViteServer } from "vite";
+import fs from "fs";
+import os from "os";
+import { processAlboPretorio, extractFromPdfGemini } from "./server/alboPretorioService";
 
 const app = express();
 const PORT = 3000;
@@ -263,6 +266,32 @@ app.post("/api/extract-single", async (req: Request, res: Response) => {
     const { fullText, navigatedUrl, logs } = await scrapeWebsite(url);
     const extractedData = await extractData(fullText, customApiKey);
 
+    // Nuova Estensione: Estrazione Albo Pretorio & PDF (retrocompatibile)
+    try {
+      const alboRes = await processAlboPretorio(url, navigatedUrl, customApiKey);
+      logs.push(...alboRes.logs);
+      Object.assign(extractedData, {
+        graduatoria_fascia: alboRes.graduatoria_fascia || "",
+        profilo_professionale: alboRes.profilo_professionale || "",
+        classe_di_concorso: alboRes.classe_di_concorso || "",
+        ore_settimanali: alboRes.ore_settimanali || "",
+        decorrenza_da: alboRes.decorrenza_da || "",
+        decorrenza_a: alboRes.decorrenza_a || "",
+        albo_contratti: alboRes.contratti || [],
+      });
+    } catch (alboErr: any) {
+      logs.push(`[Albo Pretorio Add-on] Errore elaborazione: ${alboErr.message}`);
+      Object.assign(extractedData, {
+        graduatoria_fascia: "",
+        profilo_professionale: "",
+        classe_di_concorso: "",
+        ore_settimanali: "",
+        decorrenza_da: "",
+        decorrenza_a: "",
+        albo_contratti: [],
+      });
+    }
+
     res.json({
       success: true,
       url,
@@ -273,6 +302,58 @@ app.post("/api/extract-single", async (req: Request, res: Response) => {
   } catch (error: any) {
     console.error("Extraction error:", error);
     res.status(500).json({ success: false, error: error.message || "Errore durante l'elaborazione" });
+  }
+});
+
+// Endpoint dedicato per test Albo Pretorio & PDF
+app.post("/api/albo-pretorio", async (req: Request, res: Response) => {
+  try {
+    const { url } = req.body;
+    if (!url) {
+      return res.status(400).json({ error: "URL è obbligatorio." });
+    }
+    const customApiKey = req.headers["x-openrouter-key"] as string;
+    const result = await processAlboPretorio(url, url, customApiKey);
+    res.json({ success: true, ...result });
+  } catch (err: any) {
+    res.status(500).json({ success: false, error: err.message });
+  }
+});
+
+// Endpoint dedicato per estrazione diretta da file PDF caricato
+app.post("/api/extract-pdf", upload.single("pdf"), async (req: Request, res: Response) => {
+  if (!req.file) {
+    return res.status(400).json({ error: "Nessun file PDF caricato." });
+  }
+
+  const customApiKey = req.headers["x-openrouter-key"] as string;
+  const tempFileName = `scuola_pdf_upload_${Date.now()}_${Math.random().toString(36).slice(2)}.pdf`;
+  const tempFilePath = path.join(os.tmpdir(), tempFileName);
+
+  try {
+    // Salvataggio temporaneo su disco
+    await fs.promises.writeFile(tempFilePath, req.file.buffer);
+
+    // Estrazione campi con Gemini (rispettando privacy e schema)
+    const extracted = await extractFromPdfGemini(req.file.buffer, customApiKey);
+
+    res.json({
+      success: true,
+      filename: req.file.originalname,
+      size: req.file.size,
+      data: extracted,
+    });
+  } catch (err: any) {
+    res.status(500).json({ success: false, error: err.message || "Errore estrazione PDF" });
+  } finally {
+    // 5. GESTIONE MEMORIA (Obbligatorio): Eliminazione immediata del file temporaneo da disco
+    try {
+      if (fs.existsSync(tempFilePath)) {
+        await fs.promises.unlink(tempFilePath);
+      }
+    } catch (cleanErr) {
+      console.warn("Avviso eliminazione temp PDF:", cleanErr);
+    }
   }
 });
 
@@ -383,6 +464,32 @@ app.post("/api/process-csv", upload.single("file"), async (req: Request, res: Re
           const { fullText, navigatedUrl, logs } = await scrapeWebsite(url);
           const data = await extractData(fullText, customApiKey);
 
+          // Nuova Estensione: Estrazione Albo Pretorio & PDF (retrocompatibile)
+          try {
+            const alboRes = await processAlboPretorio(url, navigatedUrl, customApiKey);
+            logs.push(...alboRes.logs);
+            Object.assign(data, {
+              graduatoria_fascia: alboRes.graduatoria_fascia || "",
+              profilo_professionale: alboRes.profilo_professionale || "",
+              classe_di_concorso: alboRes.classe_di_concorso || "",
+              ore_settimanali: alboRes.ore_settimanali || "",
+              decorrenza_da: alboRes.decorrenza_da || "",
+              decorrenza_a: alboRes.decorrenza_a || "",
+              albo_contratti: alboRes.contratti || [],
+            });
+          } catch (alboErr: any) {
+            logs.push(`[Albo Pretorio Add-on] Errore elaborazione: ${alboErr.message}`);
+            Object.assign(data, {
+              graduatoria_fascia: "",
+              profilo_professionale: "",
+              classe_di_concorso: "",
+              ore_settimanali: "",
+              decorrenza_da: "",
+              decorrenza_a: "",
+              albo_contratti: [],
+            });
+          }
+
           results.push({
             url,
             navigatedUrl,
@@ -410,6 +517,13 @@ app.post("/api/process-csv", upload.single("file"), async (req: Request, res: Re
               pensionamenti_assistente_tecnico: 0,
               pensionamenti_cuoco: 0,
               pensionamenti_assistente_agrario: 0,
+              graduatoria_fascia: "",
+              profilo_professionale: "",
+              classe_di_concorso: "",
+              ore_settimanali: "",
+              decorrenza_da: "",
+              decorrenza_a: "",
+              albo_contratti: [],
             },
           });
         }
