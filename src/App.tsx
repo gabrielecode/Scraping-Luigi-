@@ -201,90 +201,164 @@ export default function App() {
   const [isSearching, setIsSearching] = useState(false);
   const [searchError, setSearchError] = useState("");
 
-  const handleAlboScan = async (e: React.FormEvent) => {
-    e.preventDefault();
-    if (!alboUrlInput.trim()) return;
-    setIsScanningAlbo(true);
-    setAlboScanError("");
-    setAlboScanResult(null);
+  const EXTRACTION_SYSTEM_PROMPT = `Sei un assistente specializzato nell'analisi di documenti scolastici e bandi di gara. Leggi il testo seguente e restituisci ESCLUSIVAMENTE un oggetto JSON con le seguenti chiavi:
+{
+  "convocazioni_collaboratore_scolastico": numero,
+  "convocazioni_assistente_amministrativo": numero,
+  "convocazioni_docenti": numero,
+  "convocazioni_assistente_tecnico": numero,
+  "convocazioni_cuoco": numero,
+  "convocazioni_assistente_agrario": numero,
+  "pensionamenti_collaboratore_scolastico": numero,
+  "pensionamenti_assistente_amministrativo": numero,
+  "pensionamenti_docenti": numero,
+  "pensionamenti_assistente_tecnico": numero,
+  "pensionamenti_cuoco": numero,
+  "pensionamenti_assistente_agrario": numero
+}
+Se un dato non viene menzionato nel testo, assegna il valore 0 alla chiave corrispondente. Non aggiungere testo fuori dal JSON.`;
 
-    const formattedUrl = alboUrlInput.trim().startsWith("http") ? alboUrlInput.trim() : `https://${alboUrlInput.trim()}`;
+  const PDF_EXTRACTION_SYSTEM_PROMPT = `Sei un assistente specializzato nell'analisi di contratti scolastici di supplenza e atti dell'Albo Pretorio per il personale scolastico (ATA e Docenti) delle scuole italiane.
+Analizza il documento PDF del contratto di supplenza ed estrai con la massima precisione le informazioni contrattuali.
 
-    try {
-      const res = await fetch("/api/albo-pretorio", {
-        method: "POST",
-        headers: {
-          "Content-Type": "application/json",
-          ...(openRouterApiKey.trim() ? { "x-openrouter-key": openRouterApiKey.trim() } : {})
-        },
-        body: JSON.stringify({ url: formattedUrl })
-      });
+⚠️ VINCOLO FONDAMENTALE DI PRIVACY (NON NEGOZIABILE):
+- NON estrarre MAI nomi, cognomi, codici fiscali, indirizzi, numeri di telefono o dati anagrafici individuali. Ometti categoricamente qualsiasi dato personale identificativo del lavoratore o del dirigente.
 
-      const rawText = await res.text();
-      if (!rawText || rawText.trim() === "") {
-        throw new Error("Il server non ha restituito una risposta valida o è andato in timeout");
+Restituisci ESCLUSIVAMENTE un oggetto JSON valido con la seguente struttura:
+{
+  "graduatoria_fascia": stringa (es. "I Fascia", "II Fascia", "III Fascia", oppure "Non specificata"),
+  "profilo_professionale": stringa (es. "Collaboratore Scolastico", "Assistente Amministrativo", "Assistente Tecnico", "Docente", ecc.),
+  "classe_di_concorso": stringa (es. "A012", "A022", "AA25", oppure "" se non applicabile o non presente),
+  "ore_settimanali": stringa (es. "36 ore", "18 ore", "12 ore", ecc.),
+  "decorrenza_da": stringa (Formato obbligatorio: GG/MM/AA, es. "01/09/25" o "15/01/26"),
+  "decorrenza_a": stringa (Formato obbligatorio: GG/MM/AA, es. "30/06/26" o "31/08/26")
+}
+Se un campo non è deducibile dal testo del documento, assegna come valore una stringa vuota "". Non aggiungere testo prima o dopo il JSON.`;
+
+  const matchesNoticeFilters = (rawTitle: string): { included: boolean; reason: string } => {
+    const norm = (rawTitle || "").toLowerCase().replace(/[\s_-]+/g, " ").trim();
+
+    // 1. Strict Exclusions
+    const excludeTerms = [
+      "assegnazione ai plessi del personale ata",
+      "ci_031 assenze del personale docente e ata",
+      "direttiva_ds",
+      "direttiva ds",
+      "informativa sindacale",
+    ];
+
+    for (const exc of excludeTerms) {
+      if (norm.includes(exc)) {
+        return {
+          included: false,
+          reason: `Escluso categoricamente: contiene "${exc}"`,
+        };
       }
-
-      let data: any;
-      try {
-        data = JSON.parse(rawText);
-      } catch {
-        throw new Error("Il server non ha restituito una risposta valida o è andato in timeout");
-      }
-
-      if (!res.ok || !data.success) {
-        throw new Error(data.error || "Il server non ha restituito una risposta valida o è andato in timeout");
-      }
-
-      setAlboScanResult(data);
-    } catch (err: any) {
-      setAlboScanError(err.message || "Il server non ha restituito una risposta valida o è andato in timeout");
-    } finally {
-      setIsScanningAlbo(false);
     }
+
+    // 2. Strict Inclusions
+    const includeTerms = [
+      "contratto di supplenza annuale",
+      "contratto di supplenza breve",
+      "contratto di supplenza",
+    ];
+
+    for (const inc of includeTerms) {
+      if (norm.includes(inc)) {
+        return {
+          included: true,
+          reason: `Incluso: contiene "${inc}"`,
+        };
+      }
+    }
+
+    return {
+      included: false,
+      reason: "Non contiene i termini obbligatori di contratto di supplenza",
+    };
   };
 
-  const handlePdfUploadAndExtract = async (e: React.FormEvent) => {
-    e.preventDefault();
-    if (!selectedPdfFile) return;
-    setIsExtractingPdf(true);
-    setPdfExtractError("");
-    setPdfExtractResult(null);
+  const parseItalianDate = (dateStr: string): Date | null => {
+    if (!dateStr) return null;
+    const clean = dateStr.trim();
 
-    try {
-      const formData = new FormData();
-      formData.append("pdf", selectedPdfFile);
-
-      const res = await fetch("/api/extract-pdf", {
-        method: "POST",
-        headers: {
-          ...(openRouterApiKey.trim() ? { "x-openrouter-key": openRouterApiKey.trim() } : {})
-        },
-        body: formData
-      });
-
-      const rawText = await res.text();
-      if (!rawText || rawText.trim() === "") {
-        throw new Error("Il server non ha restituito una risposta valida o è andato in timeout");
-      }
-
-      let data: any;
-      try {
-        data = JSON.parse(rawText);
-      } catch {
-        throw new Error("Il server non ha restituito una risposta valida o è andato in timeout");
-      }
-
-      if (!res.ok || !data.success) {
-        throw new Error(data.error || "Il server non ha restituito una risposta valida o è andato in timeout");
-      }
-
-      setPdfExtractResult(data);
-    } catch (err: any) {
-      setPdfExtractError(err.message || "Il server non ha restituito una risposta valida o è andato in timeout");
-    } finally {
-      setIsExtractingPdf(false);
+    // DD/MM/YYYY or DD-MM-YYYY or DD.MM.YYYY
+    const dmyMatch = clean.match(/(\d{1,2})[\/\.-](\d{1,2})[\/\.-](\d{2,4})/);
+    if (dmyMatch) {
+      const day = parseInt(dmyMatch[1], 10);
+      const month = parseInt(dmyMatch[2], 10) - 1;
+      let year = parseInt(dmyMatch[3], 10);
+      if (year < 100) year += 2000;
+      const d = new Date(year, month, day);
+      if (!isNaN(d.getTime())) return d;
     }
+
+    // YYYY-MM-DD
+    const ymdMatch = clean.match(/(\d{4})[\/\.-](\d{1,2})[\/\.-](\d{1,2})/);
+    if (ymdMatch) {
+      const year = parseInt(ymdMatch[1], 10);
+      const month = parseInt(ymdMatch[2], 10) - 1;
+      const day = parseInt(ymdMatch[3], 10);
+      const d = new Date(year, month, day);
+      if (!isNaN(d.getTime())) return d;
+    }
+
+    // Italian textual month: es. "15 maggio 2026"
+    const monthsMap: Record<string, number> = {
+      gennaio: 0,
+      febbraio: 1,
+      marzo: 2,
+      aprile: 3,
+      maggio: 4,
+      giugno: 5,
+      luglio: 6,
+      agosto: 7,
+      settembre: 8,
+      ottobre: 9,
+      novembre: 10,
+      dicembre: 11,
+      gen: 0,
+      feb: 1,
+      mar: 2,
+      apr: 3,
+      mag: 4,
+      giu: 5,
+      lug: 6,
+      ago: 7,
+      set: 8,
+      ott: 9,
+      nov: 10,
+      dic: 11,
+    };
+
+    const textMatch = clean.toLowerCase().match(/(\d{1,2})\s+([a-z]+)\s+(\d{4})/);
+    if (textMatch) {
+      const day = parseInt(textMatch[1], 10);
+      const monthName = textMatch[2];
+      const year = parseInt(textMatch[3], 10);
+      if (monthsMap[monthName] !== undefined) {
+        const d = new Date(year, monthsMap[monthName], day);
+        if (!isNaN(d.getTime())) return d;
+      }
+    }
+
+    return null;
+  };
+
+  const formatDateToGG_MM_AA = (d: Date): string => {
+    const day = String(d.getDate()).padStart(2, "0");
+    const month = String(d.getMonth() + 1).padStart(2, "0");
+    const year = String(d.getFullYear()).slice(-2);
+    return `${day}/${month}/${year}`;
+  };
+
+  const normalizeDateOutput = (dateStr: string): string => {
+    if (!dateStr || dateStr.trim() === "" || dateStr === "N/D") return "";
+    const parsed = parseItalianDate(dateStr);
+    if (parsed) {
+      return formatDateToGG_MM_AA(parsed);
+    }
+    return dateStr.trim();
   };
 
   // Client-side fallback helpers for Vercel static hosting
@@ -302,25 +376,54 @@ export default function App() {
       doc.querySelectorAll("script, style, nav, footer, header").forEach(el => el.remove());
       pageText = doc.body?.innerText || doc.documentElement.textContent || "";
       logs.push(`Testo estratto via CORS proxy (${pageText.length} caratteri)`);
+
+      const keywords = ["ata", "bandi di gara", "graduatorie", "collaboratore scolastico", "avvisi", "albo pretorio", "convocazioni"];
+      const links = doc.querySelectorAll("a");
+      let targetSubUrl = "";
+      let matchedKeyword = "";
+      for (const link of Array.from(links)) {
+        const text = (link.textContent || "").toLowerCase().trim();
+        const href = link.getAttribute("href");
+        if (href && href !== "#" && !href.startsWith("javascript:")) {
+          for (const kw of keywords) {
+            if (text.includes(kw) || href.toLowerCase().includes(kw)) {
+              try {
+                targetSubUrl = new URL(href, targetUrl).href;
+                matchedKeyword = kw;
+                break;
+              } catch {
+                // Ignore invalid URLs
+              }
+            }
+          }
+          if (targetSubUrl) break;
+        }
+      }
+
+      if (targetSubUrl) {
+        logs.push(`Sezione trovata tramite parola chiave "${matchedKeyword}": ${targetSubUrl}`);
+        try {
+          const subProxyUrl = `https://api.allorigins.win/raw?url=${encodeURIComponent(targetSubUrl)}`;
+          const subRes = await fetch(subProxyUrl);
+          const subHtml = await subRes.text();
+          const subDoc = parser.parseFromString(subHtml, "text/html");
+          subDoc.querySelectorAll("script, style, nav, footer, header").forEach(el => el.remove());
+          const subText = subDoc.body?.innerText || subDoc.documentElement.textContent || "";
+          pageText = `--- HOMEPAGE ---\n${pageText}\n\n--- SEZIONE ${matchedKeyword.toUpperCase()} (${targetSubUrl}) ---\n${subText}`;
+          navigatedUrl = targetSubUrl;
+        } catch (subErr: any) {
+          logs.push(`Impossibile aprire la sezione ${targetSubUrl}: ${subErr.message}. Uso il testo della home.`);
+        }
+      }
     } catch (err: any) {
       logs.push(`Impossibile leggere il sito direttamente (${err.message}). Utilizzo OpenRouter Web Search.`);
     }
 
-    const prompt = `Sei un assistente specializzato nell'analisi di documenti scolastici e bandi di gara. Analizza il seguente testo estratto dal sito ${targetUrl}:\n\n${pageText}\n\nRestituisci ESCLUSIVAMENTE un oggetto JSON con le seguenti chiavi (numeriche, se non menzionate metti 0):
-{
-  "convocazioni_collaboratore_scolastico": 0,
-  "convocazioni_assistente_amministrativo": 0,
-  "convocazioni_docenti": 0,
-  "convocazioni_assistente_tecnico": 0,
-  "convocazioni_cuoco": 0,
-  "convocazioni_assistente_agrario": 0,
-  "pensionamenti_collaboratore_scolastico": 0,
-  "pensionamenti_assistente_amministrativo": 0,
-  "pensionamenti_docenti": 0,
-  "pensionamenti_assistente_tecnico": 0,
-  "pensionamenti_cuoco": 0,
-  "pensionamenti_assistente_agrario": 0
-}`;
+    if (pageText.length > 30000) {
+      pageText = pageText.substring(0, 30000);
+    }
+
+    const prompt = `${EXTRACTION_SYSTEM_PROMPT}\n\nAnalizza il seguente testo estratto dal sito ${targetUrl}:\n\n${pageText}`;
 
     const response = await fetch("https://openrouter.ai/api/v1/chat/completions", {
       method: "POST",
@@ -336,7 +439,6 @@ export default function App() {
           { role: "system", content: "Sei un assistente JSON rigoroso. Rispondi solo con JSON valido." },
           { role: "user", content: prompt }
         ],
-        plugins: [{ id: "web" }],
         response_format: { type: "json_object" }
       })
     });
@@ -383,6 +485,331 @@ export default function App() {
     };
   };
 
+  const executeClientSideAlboPretorio = async (originalUrl: string, navigatedUrl: string, apiKey: string) => {
+    const logs = [`[Albo Pretorio Add-on Client-side] Avvio ricerca Albo Pretorio per: ${navigatedUrl || originalUrl}`];
+    const baseUrl = navigatedUrl || originalUrl;
+    let alboUrl = "";
+    let alboHtml = "";
+
+    const cutoffDate = new Date();
+    cutoffDate.setMonth(cutoffDate.getMonth() - 6);
+    logs.push(`[Albo Pretorio Add-on] Finestra temporale: ultimi 6 mesi (a partire dal ${formatDateToGG_MM_AA(cutoffDate)})`);
+
+    // 1. Probing & discovering Albo Pretorio section
+    try {
+      const proxyUrl = `https://api.allorigins.win/raw?url=${encodeURIComponent(baseUrl)}`;
+      const res = await fetch(proxyUrl);
+      const html = await res.text();
+      const parser = new DOMParser();
+      const doc = parser.parseFromString(html, "text/html");
+      const candidateKeywords = [
+        "albo pretorio",
+        "albo online",
+        "albo-pretorio",
+        "albo_pretorio",
+        "pubblicità legale",
+        "pubblicita legale",
+        "albo sindacale",
+        "albo",
+      ];
+
+      const links = doc.querySelectorAll("a");
+      for (const link of Array.from(links)) {
+        const text = (link.textContent || "").toLowerCase().trim();
+        const href = link.getAttribute("href");
+        if (href && href !== "#" && !href.startsWith("javascript:")) {
+          for (const kw of candidateKeywords) {
+            if (text.includes(kw) || href.toLowerCase().includes(kw)) {
+              try {
+                alboUrl = new URL(href, baseUrl).href;
+                logs.push(`[Albo Pretorio Add-on] Individuato link Albo Pretorio: ${alboUrl} (parola chiave: "${kw}")`);
+                break;
+              } catch {
+                // Ignore invalid URLs
+              }
+            }
+          }
+          if (alboUrl) break;
+        }
+      }
+    } catch (err: any) {
+      logs.push(`[Albo Pretorio Add-on] Avviso verifica homepage: ${err.message}`);
+    }
+
+    // If not found directly, try standard well-known endpoints
+    if (!alboUrl) {
+      const probePaths = ["/albo-pretorio/", "/albo-online/", "/albo/", "/pubblicita-legale/"];
+      for (const p of probePaths) {
+        try {
+          const testUrl = new URL(p, baseUrl).href;
+          const proxyUrl = `https://api.allorigins.win/raw?url=${encodeURIComponent(testUrl)}`;
+          const probeRes = await fetch(proxyUrl);
+          if (probeRes.ok) {
+            const probeText = await probeRes.text();
+            if (probeText.length > 500) {
+              alboUrl = testUrl;
+              alboHtml = probeText;
+              logs.push(`[Albo Pretorio Add-on] Trovata sezione Albo standard: ${alboUrl}`);
+              break;
+            }
+          }
+        } catch {
+          // Continue to next probe
+        }
+      }
+    }
+
+    // If found and not yet loaded, fetch Albo Pretorio page
+    if (alboUrl && !alboHtml) {
+      try {
+        const proxyUrl = `https://api.allorigins.win/raw?url=${encodeURIComponent(alboUrl)}`;
+        const res = await fetch(proxyUrl);
+        alboHtml = await res.text();
+      } catch (err: any) {
+        logs.push(`[Albo Pretorio Add-on] Errore apertura Albo Pretorio (${alboUrl}): ${err.message}`);
+      }
+    }
+
+    if (!alboUrl || !alboHtml) {
+      logs.push("[Albo Pretorio Add-on] Nessuna sezione Albo Pretorio pubblica accessibile trovata.");
+      return {
+        alboUrl: alboUrl || baseUrl,
+        attiTrovatiTotali: 0,
+        attiFiltratiValidi: 0,
+        attiEsclusi: 0,
+        contratti: [],
+        graduatoria_fascia: "",
+        profilo_professionale: "",
+        classe_di_concorso: "",
+        ore_settimanali: "",
+        decorrenza_da: "",
+        decorrenza_a: "",
+        logs,
+      };
+    }
+
+    // 2. Parse notices from Albo Pretorio page
+    const parser = new DOMParser();
+    const alboDoc = parser.parseFromString(alboHtml, "text/html");
+    const rawNotices: any[] = [];
+
+    // Strategy A: Tables (tr rows)
+    const rows = alboDoc.querySelectorAll("table tr");
+    rows.forEach((tr) => {
+      const text = (tr.textContent || "").replace(/\s+/g, " ").trim();
+      if (!text || text.length < 10) return;
+
+      let pdfUrl = "";
+      let detailUrl = "";
+
+      const links = tr.querySelectorAll("a");
+      links.forEach((a) => {
+        const href = a.getAttribute("href");
+        if (href) {
+          try {
+            const fullHref = new URL(href, alboUrl).href;
+            if (fullHref.toLowerCase().includes(".pdf")) {
+              pdfUrl = fullHref;
+            } else if (!detailUrl && !href.startsWith("#") && !href.startsWith("javascript:")) {
+              detailUrl = fullHref;
+            }
+          } catch {
+            // Ignore invalid URLs
+          }
+        }
+      });
+
+      const dateMatch = text.match(/\b(\d{1,2})[\/\.-](\d{1,2})[\/\.-](\d{2,4})\b/);
+      const dateStr = dateMatch ? dateMatch[1] : "";
+      const dateObj = dateStr ? parseItalianDate(dateStr) : null;
+
+      rawNotices.push({
+        title: text,
+        dateStr,
+        dateObj,
+        detailUrl,
+        pdfUrl,
+      });
+    });
+
+    // Strategy B: Cards / Articles / Lists
+    const cards = alboDoc.querySelectorAll("article, .card, .atto, .bando, .documento, .post, .item, li");
+    cards.forEach((el) => {
+      const titleEl = el.querySelector("h1, h2, h3, h4, h5, .title, .titolo, strong, a");
+      const title = (titleEl ? titleEl.textContent : "").replace(/\s+/g, " ").trim() || (el.textContent || "").replace(/\s+/g, " ").trim();
+      if (!title || title.length < 10) return;
+
+      let pdfUrl = "";
+      let detailUrl = "";
+
+      const links = el.querySelectorAll("a");
+      links.forEach((a) => {
+        const href = a.getAttribute("href");
+        if (href) {
+          try {
+            const fullHref = new URL(href, alboUrl).href;
+            if (fullHref.toLowerCase().includes(".pdf")) {
+              pdfUrl = fullHref;
+            } else if (!detailUrl && !href.startsWith("#")) {
+              detailUrl = fullHref;
+            }
+          } catch {
+            // Ignore invalid URLs
+          }
+        }
+      });
+
+      const fullText = (el.textContent || "").replace(/\s+/g, " ").trim();
+      const dateMatch = fullText.match(/\b(\d{1,2})[\/\.-](\d{1,2})[\/\.-](\d{2,4})\b/);
+      const dateStr = dateMatch ? dateMatch[1] : "";
+      const dateObj = dateStr ? parseItalianDate(dateStr) : null;
+
+      rawNotices.push({
+        title,
+        dateStr,
+        dateObj,
+        detailUrl,
+        pdfUrl,
+      });
+    });
+
+    logs.push(`[Albo Pretorio Add-on] Rilevati ${rawNotices.length} elementi/righe nell'Albo Pretorio.`);
+
+    let attiEsclusi = 0;
+    const matchedNotices: any[] = [];
+
+    for (const notice of rawNotices) {
+      if (notice.dateObj && notice.dateObj < cutoffDate) {
+        attiEsclusi++;
+        continue;
+      }
+
+      const filterRes = matchesNoticeFilters(notice.title);
+      if (!filterRes.included) {
+        attiEsclusi++;
+        continue;
+      }
+
+      matchedNotices.push(notice);
+    }
+
+    logs.push(`[Albo Pretorio Add-on] Bandi conformi ai filtri (ultimi 6 mesi & supplenze): ${matchedNotices.length} (Esclusi: ${attiEsclusi})`);
+
+    const extractedContracts: any[] = [];
+    const maxPdfToProcess = Math.min(matchedNotices.length, 5);
+
+    for (let i = 0; i < maxPdfToProcess; i++) {
+      const notice = matchedNotices[i];
+      let pdfDownloadUrl = notice.pdfUrl;
+
+      if (!pdfDownloadUrl && notice.detailUrl) {
+        try {
+          const detailProxy = `https://api.allorigins.win/raw?url=${encodeURIComponent(notice.detailUrl)}`;
+          const detRes = await fetch(detailProxy);
+          const detHtml = await detRes.text();
+          const detDoc = parser.parseFromString(detHtml, "text/html");
+          const links = detDoc.querySelectorAll("a");
+          for (const a of Array.from(links)) {
+            const href = a.getAttribute("href");
+            if (href && (href.toLowerCase().includes(".pdf") || href.toLowerCase().includes("allegato") || href.toLowerCase().includes("download"))) {
+              pdfDownloadUrl = new URL(href, notice.detailUrl).href;
+              break;
+            }
+          }
+        } catch (detErr: any) {
+          logs.push(`[Albo Pretorio Add-on] Impossibile aprire dettaglio atto (${notice.detailUrl}): ${detErr.message}`);
+        }
+      }
+
+      if (!pdfDownloadUrl) {
+        logs.push(`[Albo Pretorio Add-on] Nessun allegato PDF trovato per l'atto: "${notice.title.substring(0, 60)}..."`);
+        continue;
+      }
+
+      logs.push(`[Albo Pretorio Add-on] Download temporaneo PDF allegato da: ${pdfDownloadUrl}`);
+
+      try {
+        const pdfProxy = `https://api.allorigins.win/raw?url=${encodeURIComponent(pdfDownloadUrl)}`;
+        const pdfRes = await fetch(pdfProxy);
+        const arrayBuffer = await pdfRes.arrayBuffer();
+        const uint8Array = new Uint8Array(arrayBuffer);
+        let binary = "";
+        for (let j = 0; j < uint8Array.length; j++) {
+          binary += String.fromCharCode(uint8Array[j]);
+        }
+        const rawPdfText = binary.replace(/[^\x20-\x7E\xC0-\xFF\n\r]/g, " ");
+        const textSnippet = rawPdfText.substring(0, 15000);
+
+        logs.push(`[Albo Pretorio Add-on] Analisi testo estratto bando tramite OpenRouter...`);
+
+        const prompt = `${PDF_EXTRACTION_SYSTEM_PROMPT}\n\nAnalizza il testo estratto dal PDF del contratto di supplenza:\n\n${textSnippet}`;
+
+        const response = await fetch("https://openrouter.ai/api/v1/chat/completions", {
+          method: "POST",
+          headers: {
+            "Authorization": `Bearer ${apiKey}`,
+            "HTTP-Referer": window.location.origin,
+            "X-Title": "ScuolaATA Scraper",
+            "Content-Type": "application/json"
+          },
+          body: JSON.stringify({
+            model: "google/gemini-2.5-flash",
+            messages: [
+              { role: "system", content: "Sei un assistente JSON rigoroso. Rispondi solo con JSON valido." },
+              { role: "user", content: prompt }
+            ],
+            response_format: { type: "json_object" }
+          })
+        });
+
+        const respData = await response.json();
+        const content = respData?.choices?.[0]?.message?.content || "{}";
+        const extracted = JSON.parse(content);
+
+        extractedContracts.push({
+          id: `contratto_${Date.now()}_${i}`,
+          titolo_bando: notice.title.substring(0, 150),
+          data_pubblicazione: notice.dateStr || (notice.dateObj ? formatDateToGG_MM_AA(notice.dateObj) : formatDateToGG_MM_AA(new Date())),
+          pdf_url: pdfDownloadUrl,
+          graduatoria_fascia: extracted.graduatoria_fascia || "Non specificata",
+          profilo_professionale: extracted.profilo_professionale || "Personale ATA / Docente",
+          classe_di_concorso: extracted.classe_di_concorso || "",
+          ore_settimanali: extracted.ore_settimanali || "",
+          decorrenza_da: normalizeDateOutput(extracted.decorrenza_da || ""),
+          decorrenza_a: normalizeDateOutput(extracted.decorrenza_a || ""),
+        });
+
+        logs.push(
+          `[Albo Pretorio Add-on] Estrazione completata per Atto #${i + 1}: Profilo="${extracted.profilo_professionale}", Fascia="${extracted.graduatoria_fascia}", Ore="${extracted.ore_settimanali}"`
+        );
+      } catch (pdfErr: any) {
+        logs.push(`[Albo Pretorio Add-on] Errore elaborazione PDF (${pdfDownloadUrl}): ${pdfErr.message}`);
+      }
+    }
+
+    const graduatoria_fascia = extractedContracts.map((c) => c.graduatoria_fascia).filter(Boolean).join(" | ") || (matchedNotices.length > 0 ? "Bandi rilevati" : "");
+    const profilo_professionale = extractedContracts.map((c) => c.profilo_professionale).filter(Boolean).join(" | ") || "";
+    const classe_di_concorso = extractedContracts.map((c) => c.classe_di_concorso).filter(Boolean).join(" | ") || "";
+    const ore_settimanali = extractedContracts.map((c) => c.ore_settimanali).filter(Boolean).join(" | ") || "";
+    const decorrenza_da = extractedContracts.map((c) => c.decorrenza_da).filter(Boolean).join(" | ") || "";
+    const decorrenza_a = extractedContracts.map((c) => c.decorrenza_a).filter(Boolean).join(" | ") || "";
+
+    return {
+      alboUrl,
+      attiTrovatiTotali: rawNotices.length,
+      attiFiltratiValidi: matchedNotices.length,
+      attiEsclusi,
+      contratti: extractedContracts,
+      graduatoria_fascia,
+      profilo_professionale,
+      classe_di_concorso,
+      ore_settimanali,
+      decorrenza_da,
+      decorrenza_a,
+      logs,
+    };
+  };
+
   const executeClientSideSearch = async (queryStr: string, apiKey: string) => {
     const response = await fetch("https://openrouter.ai/api/v1/chat/completions", {
       method: "POST",
@@ -414,6 +841,94 @@ export default function App() {
     return respData?.choices?.[0]?.message?.content || "Nessun risultato trovato.";
   };
 
+  const handleAlboScan = async (e: React.FormEvent) => {
+    e.preventDefault();
+    if (!alboUrlInput.trim()) return;
+    setIsScanningAlbo(true);
+    setAlboScanError("");
+    setAlboScanResult(null);
+
+    const formattedUrl = alboUrlInput.trim().startsWith("http") ? alboUrlInput.trim() : `https://${alboUrlInput.trim()}`;
+
+    try {
+      if (!openRouterApiKey.trim()) {
+        throw new Error("Inserisci la tua OpenRouter API Key nelle Impostazioni per abilitare la scansione client-side dell'Albo Pretorio.");
+      }
+
+      const res = await executeClientSideAlboPretorio(formattedUrl, formattedUrl, openRouterApiKey.trim());
+      setAlboScanResult({ success: true, ...res });
+    } catch (err: any) {
+      setAlboScanError(err.message || "Errore durante la scansione dell'Albo Pretorio.");
+    } finally {
+      setIsScanningAlbo(false);
+    }
+  };
+
+  const handlePdfUploadAndExtract = async (e: React.FormEvent) => {
+    e.preventDefault();
+    if (!selectedPdfFile) return;
+    setIsExtractingPdf(true);
+    setPdfExtractError("");
+    setPdfExtractResult(null);
+
+    try {
+      if (!openRouterApiKey.trim()) {
+        throw new Error("Inserisci la tua OpenRouter API Key nelle Impostazioni per abilitare l'estrazione client-side dei PDF.");
+      }
+
+      const arrayBuffer = await selectedPdfFile.arrayBuffer();
+      const uint8Array = new Uint8Array(arrayBuffer);
+      let binary = "";
+      for (let j = 0; j < uint8Array.length; j++) {
+        binary += String.fromCharCode(uint8Array[j]);
+      }
+      const rawPdfText = binary.replace(/[^\x20-\x7E\xC0-\xFF\n\r]/g, " ");
+      const textSnippet = rawPdfText.substring(0, 15000);
+
+      const prompt = `${PDF_EXTRACTION_SYSTEM_PROMPT}\n\nAnalizza il testo estratto dal PDF del contratto di supplenza:\n\n${textSnippet}`;
+
+      const response = await fetch("https://openrouter.ai/api/v1/chat/completions", {
+        method: "POST",
+        headers: {
+          "Authorization": `Bearer ${openRouterApiKey.trim()}`,
+          "HTTP-Referer": window.location.origin,
+          "X-Title": "ScuolaATA Scraper",
+          "Content-Type": "application/json"
+        },
+        body: JSON.stringify({
+          model: "google/gemini-2.5-flash",
+          messages: [
+            { role: "system", content: "Sei un assistente JSON rigoroso. Rispondi solo con JSON valido." },
+            { role: "user", content: prompt }
+          ],
+          response_format: { type: "json_object" }
+        })
+      });
+
+      const respData = await response.json();
+      const content = respData?.choices?.[0]?.message?.content || "{}";
+      const extracted = JSON.parse(content);
+
+      setPdfExtractResult({
+        success: true,
+        filename: selectedPdfFile.name,
+        size: selectedPdfFile.size,
+        data: {
+          graduatoria_fascia: extracted.graduatoria_fascia || "Non specificata",
+          profilo_professionale: extracted.profilo_professionale || "Personale ATA / Docente",
+          classe_di_concorso: extracted.classe_di_concorso || "",
+          ore_settimanali: extracted.ore_settimanali || "",
+          decorrenza_da: normalizeDateOutput(extracted.decorrenza_da || ""),
+          decorrenza_a: normalizeDateOutput(extracted.decorrenza_a || ""),
+        }
+      });
+    } catch (err: any) {
+      setPdfExtractError(err.message || "Errore durante l'elaborazione del PDF");
+    } finally {
+      setIsExtractingPdf(false);
+    }
+  };
+
   const handleGoogleSearch = async (e: React.FormEvent) => {
     e.preventDefault();
     if (!searchQuery.trim()) return;
@@ -423,37 +938,11 @@ export default function App() {
     setSearchResult("");
 
     try {
-      const res = await fetch("/api/google-search", {
-        method: "POST",
-        headers: {
-          "Content-Type": "application/json",
-          ...(openRouterApiKey.trim() ? { "x-openrouter-key": openRouterApiKey.trim() } : {})
-        },
-        body: JSON.stringify({ query: searchQuery.trim() })
-      });
-
-      if (res.status === 405 || res.status === 404 || !res.ok) {
-        if (!openRouterApiKey.trim()) {
-          throw new Error("Errore backend (405/404 Vercel static mode). Inserisci la tua OpenRouter API Key nelle Impostazioni per abilitare la ricerca client-side.");
-        }
-        const resultText = await executeClientSideSearch(searchQuery.trim(), openRouterApiKey.trim());
-        setSearchResult(resultText);
-        return;
+      if (!openRouterApiKey.trim()) {
+        throw new Error("Inserisci la tua OpenRouter API Key nelle Impostazioni per abilitare la ricerca client-side.");
       }
-
-      const textRes = await res.text();
-      let data;
-      try {
-        data = JSON.parse(textRes);
-      } catch {
-        throw new Error(`Risposta server non valida (${res.status}): ${textRes.substring(0, 100)}`);
-      }
-
-      if (!data.success) {
-        throw new Error(data.error || "Errore durante la ricerca web.");
-      }
-
-      setSearchResult(data.result);
+      const resultText = await executeClientSideSearch(searchQuery.trim(), openRouterApiKey.trim());
+      setSearchResult(resultText);
     } catch (err: any) {
       setSearchError(err.message || "Errore durante la richiesta di ricerca.");
     } finally {
@@ -474,11 +963,46 @@ export default function App() {
     document.body.removeChild(link);
   };
 
-  // Handle batch CSV upload & processing with polling
+  const parseCsvClientSide = (csvText: string): string[] => {
+    const lines = csvText.split(/\r?\n/);
+    const results: string[] = [];
+
+    for (const line of lines) {
+      if (!line.trim()) continue;
+      const parts = line.split(/[;,]/);
+      for (const part of parts) {
+        const clean = part.trim().replace(/^["']|["']$/g, "");
+        if (
+          clean.startsWith("http://") ||
+          clean.startsWith("https://") ||
+          clean.includes(".edu.it") ||
+          clean.includes(".gov.it") ||
+          clean.includes("www.") ||
+          clean.includes(".it")
+        ) {
+          let foundUrl = clean;
+          if (!foundUrl.startsWith("http://") && !foundUrl.startsWith("https://")) {
+            foundUrl = `https://${foundUrl}`;
+          }
+          results.push(foundUrl);
+          break;
+        }
+      }
+    }
+    return Array.from(new Set(results));
+  };
+
+  // Handle batch CSV upload & processing client-side
   const handleBatchProcess = async (e: React.FormEvent) => {
     e.preventDefault();
     if (!selectedFile) {
       setBatchError("Si prega di selezionare un file CSV.");
+      return;
+    }
+
+    if (!openRouterApiKey.trim()) {
+      setBatchError("Inserisci la tua OpenRouter API Key nelle Impostazioni per abilitare l'elaborazione client-side.");
+      setIsSettingsOpen(true);
       return;
     }
 
@@ -497,152 +1021,113 @@ export default function App() {
     setGithubExportStatus("");
     setGithubExportUrl("");
 
-    const formData = new FormData();
-    formData.append("file", selectedFile);
-
     try {
-      const response = await fetch("/api/process-csv", {
-        method: "POST",
-        headers: {
-          ...(openRouterApiKey.trim() ? { "x-openrouter-key": openRouterApiKey.trim() } : {})
-        },
-        body: formData,
-      });
+      const csvText = await selectedFile.text();
+      const urls = parseCsvClientSide(csvText);
 
-      if (response.status === 405 || response.status === 404 || !response.ok) {
-        if (!openRouterApiKey.trim()) {
-          throw new Error("Errore backend (405/404 Vercel static mode). Inserisci la tua OpenRouter API Key nelle Impostazioni per abilitare l'elaborazione client-side.");
-        }
-
-        const csvText = await selectedFile.text();
-        const lines = csvText.split(/\r?\n/).map(l => l.trim().replace(/^["']|["']$/g, "")).filter(Boolean);
-        const urls = lines.filter(l => l.startsWith("http") || l.includes(".it"));
-        const results: ExtractionResult[] = [];
-        
-        const BATCH_SIZE = 15;
-        const batches: string[][] = [];
-        for (let i = 0; i < urls.length; i += BATCH_SIZE) {
-          batches.push(urls.slice(i, i + BATCH_SIZE));
-        }
-        const totalBatches = batches.length;
-
-        setBatchProgress({ current: 0, total: urls.length });
-        setBatchInfo({
-          currentBatch: 1,
-          totalBatches,
-          batchSize: BATCH_SIZE,
-        });
-
-        let processedCount = 0;
-        for (let b = 0; b < batches.length; b++) {
-          const currentBatchNum = b + 1;
-          const currentBatchUrls = batches[b];
-          setBatchInfo(prev => ({ ...prev, currentBatch: currentBatchNum, totalBatches }));
-
-          for (const u of currentBatchUrls) {
-            try {
-              const resData = await executeClientSideExtract(u.startsWith("http") ? u : `https://${u}`, openRouterApiKey.trim());
-              results.push(resData);
-            } catch (itemErr: any) {
-              results.push({
-                status: "error",
-                url: u,
-                navigatedUrl: u,
-                logs: [itemErr.message],
-                data: {
-                  convocazioni_collaboratore_scolastico: 0,
-                  convocazioni_assistente_amministrativo: 0,
-                  convocazioni_docenti: 0,
-                  convocazioni_assistente_tecnico: 0,
-                  convocazioni_cuoco: 0,
-                  convocazioni_assistente_agrario: 0,
-                  pensionamenti_collaboratore_scolastico: 0,
-                  pensionamenti_assistente_amministrativo: 0,
-                  pensionamenti_docenti: 0,
-                  pensionamenti_assistente_tecnico: 0,
-                  pensionamenti_cuoco: 0,
-                  pensionamenti_assistente_agrario: 0,
-                }
-              });
-            }
-            processedCount++;
-            setBatchProgress({ current: processedCount, total: urls.length });
-          }
-        }
-
-        const clientSuccessMsg = `Elaborazione completata: ${urls.length} link processati su ${urls.length} totali in ${totalBatches} batch.`;
-        setBatchInfo(prev => ({ ...prev, finalMessage: clientSuccessMsg }));
-        setBatchResults(results);
-        saveBatchToHistory(results, selectedFile?.name || "batch_urls.csv");
-        setIsProcessingBatch(false);
-        return;
+      if (urls.length === 0) {
+        throw new Error("Nessun URL valido trovato nel file CSV. Assicurarsi che il file contenga una colonna con link validi.");
       }
 
-      const textRes = await response.text();
-      let initData;
-      try {
-        initData = JSON.parse(textRes);
-      } catch {
-        throw new Error(`Risposta server non valida (${response.status}): ${textRes.substring(0, 100)}`);
+      const BATCH_SIZE = 15;
+      const batches: string[][] = [];
+      for (let i = 0; i < urls.length; i += BATCH_SIZE) {
+        batches.push(urls.slice(i, i + BATCH_SIZE));
       }
+      const totalBatches = batches.length;
 
-      if (!initData.success || !initData.jobId) {
-        throw new Error(initData.error || "Errore avvio elaborazione batch.");
-      }
-
-      const jobId = initData.jobId;
+      setBatchProgress({ current: 0, total: urls.length });
       setBatchInfo({
         currentBatch: 1,
-        totalBatches: initData.totalBatches || 1,
-        batchSize: initData.batchSize || 15,
-        jobId,
-        outputFilename: initData.outputCsvFilename,
+        totalBatches,
+        batchSize: BATCH_SIZE,
       });
 
-      const pollInterval = 1500;
-      let isDone = false;
+      const results: ExtractionResult[] = [];
+      let processedCount = 0;
 
-      while (!isDone) {
-        await new Promise(resolve => setTimeout(resolve, pollInterval));
-        const statusRes = await fetch(`/api/batch-status/${jobId}`);
-        const statusText = await statusRes.text();
-        let statusData;
-        try {
-          statusData = JSON.parse(statusText);
-        } catch {
-          continue;
-        }
+      for (let b = 0; b < batches.length; b++) {
+        const currentBatchNum = b + 1;
+        const currentBatchUrls = batches[b];
+        setBatchInfo(prev => ({ ...prev, currentBatch: currentBatchNum, totalBatches }));
 
-        if (!statusRes.ok || !statusData.success) {
-          throw new Error(statusData.error || "Errore durante il controllo dello stato del job.");
-        }
+        for (const u of currentBatchUrls) {
+          try {
+            const clientData = await executeClientSideExtract(u, openRouterApiKey.trim());
+            
+            // Nuova Estensione: Estrazione Albo Pretorio & PDF (retrocompatibile)
+            try {
+              const alboRes = await executeClientSideAlboPretorio(u, clientData.navigatedUrl, openRouterApiKey.trim());
+              clientData.logs.push(...alboRes.logs);
+              Object.assign(clientData.data, {
+                graduatoria_fascia: alboRes.graduatoria_fascia || "",
+                profilo_professionale: alboRes.profilo_professionale || "",
+                classe_di_concorso: alboRes.classe_di_concorso || "",
+                ore_settimanali: alboRes.ore_settimanali || "",
+                decorrenza_da: alboRes.decorrenza_da || "",
+                decorrenza_a: alboRes.decorrenza_a || "",
+                albo_contratti: alboRes.contratti || [],
+              });
+            } catch (alboErr: any) {
+              clientData.logs.push(`[Albo Pretorio Add-on] Errore: ${alboErr.message}`);
+              Object.assign(clientData.data, {
+                graduatoria_fascia: "",
+                profilo_professionale: "",
+                classe_di_concorso: "",
+                ore_settimanali: "",
+                decorrenza_da: "",
+                decorrenza_a: "",
+                albo_contratti: [],
+              });
+            }
 
-        const job = statusData.job;
-        setBatchProgress({ current: job.current, total: job.total });
-        setBatchInfo(prev => ({
-          ...prev,
-          currentBatch: job.currentBatch || prev.currentBatch,
-          totalBatches: job.totalBatches || prev.totalBatches,
-          finalMessage: job.finalMessage || prev.finalMessage,
-          outputFilename: job.outputCsvFilename || prev.outputFilename,
-        }));
-
-        if (job.status === "completed") {
-          setBatchResults(job.results);
-          saveBatchToHistory(job.results, selectedFile?.name || "batch_urls.csv");
-          isDone = true;
-          setIsProcessingBatch(false);
-        } else if (job.status === "error") {
-          throw new Error(job.error || "Errore riscontrato durante l'elaborazione dei job.");
+            results.push(clientData);
+          } catch (itemErr: any) {
+            results.push({
+              status: "error",
+              url: u,
+              navigatedUrl: u,
+              logs: [itemErr.message],
+              data: {
+                convocazioni_collaboratore_scolastico: 0,
+                convocazioni_assistente_amministrativo: 0,
+                convocazioni_docenti: 0,
+                convocazioni_assistente_tecnico: 0,
+                convocazioni_cuoco: 0,
+                convocazioni_assistente_agrario: 0,
+                pensionamenti_collaboratore_scolastico: 0,
+                pensionamenti_assistente_amministrativo: 0,
+                pensionamenti_docenti: 0,
+                pensionamenti_assistente_tecnico: 0,
+                pensionamenti_cuoco: 0,
+                pensionamenti_assistente_agrario: 0,
+                graduatoria_fascia: "",
+                profilo_professionale: "",
+                classe_di_concorso: "",
+                ore_settimanali: "",
+                decorrenza_da: "",
+                decorrenza_a: "",
+                albo_contratti: [],
+              }
+            });
+          }
+          processedCount++;
+          setBatchProgress({ current: processedCount, total: urls.length });
         }
       }
+
+      const clientSuccessMsg = `Elaborazione completata: ${urls.length} link processati su ${urls.length} totali in ${totalBatches} batch.`;
+      setBatchInfo(prev => ({ ...prev, finalMessage: clientSuccessMsg }));
+      setBatchResults(results);
+      saveBatchToHistory(results, selectedFile?.name || "batch_urls.csv");
     } catch (err: any) {
-      setBatchError(err.message || "Errore di connessione al server.");
+      setBatchError(err.message || "Errore di connessione.");
+    } finally {
       setIsProcessingBatch(false);
     }
   };
 
-  // Export results to GitHub securely via server-side endpoint
+  // Export results to GitHub securely and directly from client-side
   const exportToGitHub = async () => {
     if (batchResults.length === 0) return;
     if (!githubUser.trim() || !githubRepo.trim() || !githubPat.trim()) {
@@ -685,41 +1170,60 @@ export default function App() {
     const filePath = `risultati-scuole-ata-${new Date().toISOString().slice(0, 10)}.csv`;
 
     try {
-      const res = await fetch("/api/export-github", {
-        method: "POST",
+      const githubApiUrl = `https://api.github.com/repos/${githubUser.trim()}/${githubRepo.trim()}/contents/${filePath}`;
+      let fileSha: string | undefined;
+
+      try {
+        const existingRes = await fetch(githubApiUrl, {
+          headers: {
+            "Authorization": `Bearer ${githubPat.trim()}`,
+            "Accept": "application/vnd.github.v3+json"
+          }
+        });
+        if (existingRes.ok) {
+          const existingData = await existingRes.json();
+          fileSha = existingData?.sha;
+        }
+      } catch {
+        // File doesn't exist yet
+      }
+
+      // Convert text to base64 safely supporting UTF-8 characters
+      const u8 = new TextEncoder().encode(csvContent);
+      let binString = "";
+      for (let i = 0; i < u8.length; i++) {
+        binString += String.fromCharCode(u8[i]);
+      }
+      const base64Content = btoa(binString);
+
+      const putRes = await fetch(githubApiUrl, {
+        method: "PUT",
         headers: {
-          "Content-Type": "application/json",
-          "x-github-pat": githubPat.trim()
+          "Authorization": `Bearer ${githubPat.trim()}`,
+          "Accept": "application/vnd.github.v3+json",
+          "Content-Type": "application/json"
         },
         body: JSON.stringify({
-          owner: githubUser.trim(),
-          repo: githubRepo.trim(),
-          path: filePath,
-          content: csvContent,
-          message: `Export risultati ScuolaATA ${new Date().toISOString().slice(0, 10)}`
+          message: `Export risultati ScuolaATA ${new Date().toISOString().slice(0, 10)}`,
+          content: base64Content,
+          ...(fileSha ? { sha: fileSha } : {})
         })
       });
 
-      const textRes = await res.text();
-      let data;
-      try {
-        data = JSON.parse(textRes);
-      } catch {
-        throw new Error(`Risposta server non valida (${res.status}): ${textRes.substring(0, 100)}`);
+      if (!putRes.ok) {
+        const putErrData = await putRes.json();
+        throw new Error(putErrData?.message || "Impossibile salvare su GitHub.");
       }
 
-      if (!res.ok || !data.success) {
-        throw new Error(data.error || "Errore durante l'esportazione su GitHub.");
-      }
-
+      const putData = await putRes.json();
       setGithubExportStatus("Esportazione completata con successo su GitHub!");
-      setGithubExportUrl(data.commitUrl);
+      setGithubExportUrl(putData?.commit?.html_url || `https://github.com/${githubUser.trim()}/${githubRepo.trim()}/blob/main/${filePath}`);
     } catch (err: any) {
       setGithubExportStatus(`Errore GitHub: ${err.message}`);
     }
   };
 
-  // Handle single URL test
+  // Handle single URL test client-side
   const handleSingleProcess = async (e: React.FormEvent) => {
     e.preventDefault();
     if (!singleUrl.trim()) {
@@ -734,43 +1238,39 @@ export default function App() {
     const formattedUrl = singleUrl.trim().startsWith("http") ? singleUrl.trim() : `https://${singleUrl.trim()}`;
 
     try {
-      const response = await fetch("/api/extract-single", {
-        method: "POST",
-        headers: {
-          "Content-Type": "application/json",
-          ...(openRouterApiKey.trim() ? { "x-openrouter-key": openRouterApiKey.trim() } : {})
-        },
-        body: JSON.stringify({ url: formattedUrl }),
-      });
-
-      if (response.status === 405 || response.status === 404 || !response.ok) {
-        if (!openRouterApiKey.trim()) {
-          throw new Error("Errore backend (405/404 Vercel static mode). Inserisci la tua OpenRouter API Key nelle Impostazioni per abilitare l'estrazione client-side.");
-        }
-        const clientData = await executeClientSideExtract(formattedUrl, openRouterApiKey.trim());
-        setSingleResult(clientData);
-        return;
+      if (!openRouterApiKey.trim()) {
+        throw new Error("Inserisci la tua OpenRouter API Key nelle Impostazioni per abilitare l'estrazione client-side.");
       }
 
-      const textRes = await response.text();
-      let data;
+      const clientData = await executeClientSideExtract(formattedUrl, openRouterApiKey.trim());
+      
+      // Nuova Estensione: Estrazione Albo Pretorio & PDF (retrocompatibile)
       try {
-        data = JSON.parse(textRes);
-      } catch {
-        throw new Error(`Risposta server non valida (${response.status}): ${textRes.substring(0, 100)}`);
+        const alboRes = await executeClientSideAlboPretorio(formattedUrl, clientData.navigatedUrl, openRouterApiKey.trim());
+        clientData.logs.push(...alboRes.logs);
+        Object.assign(clientData.data, {
+          graduatoria_fascia: alboRes.graduatoria_fascia || "",
+          profilo_professionale: alboRes.profilo_professionale || "",
+          classe_di_concorso: alboRes.classe_di_concorso || "",
+          ore_settimanali: alboRes.ore_settimanali || "",
+          decorrenza_da: alboRes.decorrenza_da || "",
+          decorrenza_a: alboRes.decorrenza_a || "",
+          albo_contratti: alboRes.contratti || [],
+        });
+      } catch (alboErr: any) {
+        clientData.logs.push(`[Albo Pretorio Add-on] Errore: ${alboErr.message}`);
+        Object.assign(clientData.data, {
+          graduatoria_fascia: "",
+          profilo_professionale: "",
+          classe_di_concorso: "",
+          ore_settimanali: "",
+          decorrenza_da: "",
+          decorrenza_a: "",
+          albo_contratti: [],
+        });
       }
 
-      if (!data.success) {
-        throw new Error(data.error || "Errore durante l'estrazione.");
-      }
-
-      setSingleResult({
-        url: data.url,
-        navigatedUrl: data.navigatedUrl,
-        status: "success",
-        logs: data.logs,
-        data: data.data,
-      });
+      setSingleResult(clientData);
     } catch (err: any) {
       setSingleError(err.message || "Errore durante la richiesta.");
     } finally {
@@ -778,7 +1278,7 @@ export default function App() {
     }
   };
 
-  // Export results to CSV
+  // Export results to CSV client-side
   const exportResultsToCsv = () => {
     if (batchResults.length === 0) return;
 
