@@ -190,6 +190,14 @@ export default function App() {
   const [selectedFile, setSelectedFile] = useState<File | null>(null);
   const [isProcessingBatch, setIsProcessingBatch] = useState(false);
   const [batchProgress, setBatchProgress] = useState({ current: 0, total: 0 });
+  const [batchLiveLog, setBatchLiveLog] = useState<string[]>([]);
+  const batchLogEndRef = React.useRef<HTMLDivElement>(null);
+
+  React.useEffect(() => {
+    if (batchLogEndRef.current) {
+      batchLogEndRef.current.scrollIntoView({ behavior: "smooth" });
+    }
+  }, [batchLiveLog]);
   const [batchInfo, setBatchInfo] = useState<{
     currentBatch: number;
     totalBatches: number;
@@ -1119,6 +1127,7 @@ const executeClientSideExtract = async (targetUrl: string, apiKey: string, custo
     setBatchError("");
     setIsProcessingBatch(true);
     setBatchResults([]);
+    setBatchLiveLog([]);
     setBatchProgress({ current: 0, total: 0 });
     setBatchInfo({
       currentBatch: 0,
@@ -1162,10 +1171,14 @@ const executeClientSideExtract = async (targetUrl: string, apiKey: string, custo
         setBatchInfo(prev => ({ ...prev, currentBatch: currentBatchNum, totalBatches }));
 
         for (const u of currentBatchUrls) {
+          setBatchLiveLog(prev => [...prev, `▶ ${u}`]);
           try {
             const clientData = await executeClientSideExtract(u, openRouterApiKey.trim(), customProxyUrl.trim());
+            const lastLog = clientData.logs && clientData.logs.length > 0 ? clientData.logs[clientData.logs.length - 1] : "Completato";
+            setBatchLiveLog(prev => [...prev, `✅ ${u} — ${lastLog}`]);
             results.push(clientData as any);
           } catch (itemErr: any) {
+            setBatchLiveLog(prev => [...prev, `❌ ${u} — ${itemErr.message}`]);
             results.push({
               status: "error",
               url: u,
@@ -1795,6 +1808,29 @@ const executeClientSideExtract = async (targetUrl: string, apiKey: string, custo
                 <div className="flex items-center justify-between text-xs text-slate-400">
                   <span>Salvataggio/append automatico nel file CSV al termine di ogni pacchetto di 15 link.</span>
                   <span>{Math.round((batchProgress.current / batchProgress.total) * 100)}%</span>
+                </div>
+              </div>
+            )}
+
+            {/* Batch Live Log Panel */}
+            {(isProcessingBatch || batchLiveLog.length > 0) && (
+              <div className="bg-slate-900 border border-slate-800 rounded-2xl p-6 shadow-xl space-y-3">
+                <h3 className="text-sm font-semibold text-slate-300 flex items-center gap-2">
+                  <Terminal className="w-4 h-4 text-indigo-400" />
+                  Log di Navigazione e Scansione (Batch)
+                </h3>
+                <div className="bg-slate-950 rounded-xl p-4 font-mono text-xs text-slate-400 space-y-1.5 border border-slate-800 max-h-60 overflow-y-auto">
+                  {batchLiveLog.length === 0 ? (
+                    <div className="text-slate-500 italic">In attesa dell'avvio...</div>
+                  ) : (
+                    batchLiveLog.map((logMsg, idx) => (
+                      <div key={idx} className="flex items-start gap-2">
+                        <span className="text-indigo-400">›</span>
+                        <span>{logMsg}</span>
+                      </div>
+                    ))
+                  )}
+                  <div ref={batchLogEndRef} />
                 </div>
               </div>
             )}
