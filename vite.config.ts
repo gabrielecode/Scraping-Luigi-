@@ -29,31 +29,68 @@ function apiProxyPlugin(): Plugin {
             return;
           }
 
-          const response = await fetch(targetUrl, {
-            headers: {
-              'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/124.0.0.0 Safari/537.36',
-              'Accept': 'text/html,application/xhtml+xml,application/xml;q=0.9,image/avif,image/webp,image/apng,*/*;q=0.8',
-              'Accept-Language': 'it-IT,it;q=0.9,en-US;q=0.8,en;q=0.7',
-              'Cache-Control': 'no-cache',
-              'Pragma': 'no-cache'
-            },
-            redirect: 'follow'
-          });
+          let text = "";
+          let contentType = "text/html; charset=utf-8";
+          let directSuccess = false;
 
-          if (!response.ok) {
-            res.statusCode = response.status;
+          try {
+            const response = await fetch(targetUrl, {
+              headers: {
+                'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/126.0.0.0 Safari/537.36',
+                'Accept': 'text/html,application/xhtml+xml,application/xml;q=0.9,image/avif,image/webp,*/*;q=0.8',
+                'Accept-Language': 'it-IT,it;q=0.9,en-US;q=0.8,en;q=0.7',
+                'Cache-Control': 'no-cache',
+                'Pragma': 'no-cache'
+              },
+              redirect: 'follow'
+            });
+
+            if (response.ok) {
+              const ct = response.headers.get('content-type');
+              if (ct) contentType = ct;
+              text = await response.text();
+              if (text && text.length > 100) {
+                directSuccess = true;
+              }
+            }
+          } catch {
+            directSuccess = false;
+          }
+
+          if (!directSuccess) {
+            try {
+              const jinaUrl = `https://r.jina.ai/${targetUrl}`;
+              const jinaResponse = await fetch(jinaUrl, {
+                headers: {
+                  'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36',
+                  'Accept': 'text/html,text/plain,*/*',
+                  'x-return-format': 'html'
+                }
+              });
+              if (jinaResponse.ok) {
+                text = await jinaResponse.text();
+                contentType = 'text/html; charset=utf-8';
+              } else {
+                const jinaMd = await fetch(jinaUrl);
+                if (jinaMd.ok) {
+                  text = await jinaMd.text();
+                  contentType = 'text/plain; charset=utf-8';
+                }
+              }
+            } catch {
+              // fallback failed
+            }
+          }
+
+          if (!text || text.length < 50) {
+            res.statusCode = 502;
             res.setHeader('Content-Type', 'application/json');
-            res.end(JSON.stringify({ error: `Remote HTTP error: ${response.status} ${response.statusText}` }));
+            res.end(JSON.stringify({ error: 'Impossibile scaricare la pagina (blocco anti-bot o server offline)' }));
             return;
           }
 
-          const contentType = response.headers.get('content-type');
-          if (contentType) {
-            res.setHeader('Content-Type', contentType);
-          }
-
-          const text = await response.text();
           res.statusCode = 200;
+          res.setHeader('Content-Type', contentType);
           res.end(text);
         } catch (err: any) {
           res.statusCode = 500;

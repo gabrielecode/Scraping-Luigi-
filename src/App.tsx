@@ -51,6 +51,7 @@ export default function App() {
   const [githubUser, setGithubUser] = useState(() => typeof window !== "undefined" ? localStorage.getItem("scuola_github_user") || "" : "");
   const [githubRepo, setGithubRepo] = useState(() => typeof window !== "undefined" ? localStorage.getItem("scuola_github_repo") || "" : "");
   const [githubPat, setGithubPat] = useState(() => typeof window !== "undefined" ? localStorage.getItem("scuola_github_pat") || "" : "");
+  const [customProxyUrl, setCustomProxyUrl] = useState(() => typeof window !== "undefined" ? localStorage.getItem("scuola_custom_proxy") || "" : "");
   const [isSettingsOpen, setIsSettingsOpen] = useState(false);
   const [settingsSavedMessage, setSettingsSavedMessage] = useState("");
 
@@ -120,6 +121,7 @@ export default function App() {
     localStorage.setItem("scuola_github_user", githubUser.trim());
     localStorage.setItem("scuola_github_repo", githubRepo.trim());
     localStorage.setItem("scuola_github_pat", githubPat.trim());
+    localStorage.setItem("scuola_custom_proxy", customProxyUrl.trim());
     setSettingsSavedMessage("Impostazioni salvate con successo in LocalStorage!");
     setTimeout(() => {
       setSettingsSavedMessage("");
@@ -135,6 +137,7 @@ export default function App() {
       openRouterApiKey,
       githubUser,
       githubRepo,
+      customProxyUrl,
       batchHistory,
     };
     const blob = new Blob([JSON.stringify(backupData, null, 2)], { type: "application/json" });
@@ -171,8 +174,12 @@ export default function App() {
           setGithubRepo(json.githubRepo);
           localStorage.setItem("scuola_github_repo", json.githubRepo);
         }
+        if (json.customProxyUrl !== undefined) {
+          setCustomProxyUrl(json.customProxyUrl);
+          localStorage.setItem("scuola_custom_proxy", json.customProxyUrl);
+        }
         alert("Backup locale importato con successo sul device!");
-      } catch (err: any) {
+      } catch {
         alert("Errore durante l'importazione del file di backup: file JSON non valido.");
       }
     };
@@ -212,7 +219,21 @@ export default function App() {
   const [isSearching, setIsSearching] = useState(false);
   const [searchError, setSearchError] = useState("");
 
-  const EXTRACTION_SYSTEM_PROMPT = `Sei un assistente specializzato nell'analisi di documenti scolastici e bandi di gara. Leggi il testo seguente e restituisci ESCLUSIVAMENTE un oggetto JSON con le seguenti chiavi:
+  const EXTRACTION_SYSTEM_PROMPT = `Sei un assistente specializzato nell'analisi di documenti scolastici, delibere, circolari e atti dell'Albo Pretorio per le scuole italiane.
+Leggi attentamente il testo ed estrai il numero complessivo di atti, avvisi, bandi, interpelli, nomine e pensionamenti individuati per ciascun profilo del personale scolastico.
+
+REGOLE DI CONTEGGIO:
+1. CONVOCAZIONI: Includi convocazioni, interpelli, avvisi di selezione per supplenze brevi o annuali, nomine a tempo determinato, contratti e avvisi per la presa di servizio. Se un avviso indica più posti (es. "Interpello per 2 Collaboratori Scolastici"), somma il numero di posti/nomine; se è un bando singolo senza specifica numerica, conta 1.
+2. PENSIONAMENTI: Includi cessazioni dal servizio, collocamenti a riposo, pensionamenti (ordinari, quota 100/102/103, opzione donna), dispense dal servizio per limiti di età.
+3. Se sono presenti dettagli specifici di un contratto o nomina, compila i seguenti campi facoltativi (altrimenti lascia stringa vuota ""):
+   - "graduatoria_fascia": fascia graduatoria se specificata (es. "I Fascia", "II Fascia", "III Fascia", "Graduatoria d'Istituto").
+   - "profilo_professionale": profilo ATA o docente (es. "Collaboratore Scolastico", "Assistente Amministrativo", ecc.).
+   - "classe_di_concorso": eventuale codice classe di concorso (es. "A012", "B016").
+   - "ore_settimanali": orario settimanale (es. "36 ore", "18 ore", "12 ore").
+   - "decorrenza_da": data inizio contratto in formato GG/MM/AA (es. "01/09/25").
+   - "decorrenza_a": data fine contratto in formato GG/MM/AA (es. "30/06/26" o "31/08/26").
+
+Restituisci ESCLUSIVAMENTE un oggetto JSON valido con la seguente struttura:
 {
   "convocazioni_collaboratore_scolastico": numero,
   "convocazioni_assistente_amministrativo": numero,
@@ -225,9 +246,15 @@ export default function App() {
   "pensionamenti_docenti": numero,
   "pensionamenti_assistente_tecnico": numero,
   "pensionamenti_cuoco": numero,
-  "pensionamenti_assistente_agrario": numero
+  "pensionamenti_assistente_agrario": numero,
+  "graduatoria_fascia": stringa,
+  "profilo_professionale": stringa,
+  "classe_di_concorso": stringa,
+  "ore_settimanali": stringa,
+  "decorrenza_da": stringa,
+  "decorrenza_a": stringa
 }
-Se un dato non viene menzionato nel testo, assegna il valore 0 alla chiave corrispondente. Non aggiungere testo fuori dal JSON.`;
+Se un profilo o informazione non viene menzionata nel testo, assegna 0 (o "" per i campi di testo). Non aggiungere testo o commenti fuori dal JSON.`;
 
   const PDF_EXTRACTION_SYSTEM_PROMPT = `Sei un assistente specializzato nell'analisi di contratti scolastici di supplenza e atti dell'Albo Pretorio per il personale scolastico (ATA e Docenti) delle scuole italiane.
 Analizza il documento PDF del contratto di supplenza ed estrai con la massima precisione le informazioni contrattuali.
@@ -383,28 +410,148 @@ function isSelfAppHtml(html: string): boolean {
   );
 }
 
-const CORS_PROXIES = [
-  { name: "Server Proxy (/api/proxy)", url: (u: string) => `/api/proxy?url=${encodeURIComponent(u)}`, isLocal: true },
-  { name: "CorsProxy.io", url: (u: string) => `https://corsproxy.io/?url=${encodeURIComponent(u)}`, isLocal: false },
-  { name: "AllOrigins", url: (u: string) => `https://api.allorigins.win/raw?url=${encodeURIComponent(u)}`, isLocal: false },
-  { name: "CodeTabs", url: (u: string) => `https://api.codetabs.com/v1/proxy?quest=${encodeURIComponent(u)}`, isLocal: false }
-];
+interface DiscoveredSchoolLink {
+  url: string;
+  title: string;
+  priority: number;
+}
+
+function findRelevantSchoolLinks(rawContent: string, baseUrl: string, doc?: Document): DiscoveredSchoolLink[] {
+  const discovered: DiscoveredSchoolLink[] = [];
+  const seenUrls = new Set<string>();
+
+  const addLink = (rawUrl: string, title: string) => {
+    if (!rawUrl || rawUrl.startsWith("#") || rawUrl.startsWith("javascript:") || rawUrl.startsWith("mailto:") || rawUrl.startsWith("tel:")) return;
+    try {
+      const resolved = new URL(rawUrl, baseUrl).href;
+      if (seenUrls.has(resolved)) return;
+      seenUrls.add(resolved);
+
+      const lowerText = (title + " " + resolved).toLowerCase();
+      let priority = 0;
+
+      if (
+        lowerText.includes("albipretorionline") ||
+        lowerText.includes("portaleargo.it/albopretorio") ||
+        lowerText.includes("albo pretorio") ||
+        lowerText.includes("albo online") ||
+        lowerText.includes("trasparenza-pa") ||
+        lowerText.includes("pubblicita legale") ||
+        lowerText.includes("pubblicità legale")
+      ) {
+        priority = 10;
+      } else if (
+        lowerText.includes("interpelli") ||
+        lowerText.includes("convocazion") ||
+        lowerText.includes("supplenz") ||
+        lowerText.includes("personale ata") ||
+        lowerText.includes("/ata/") ||
+        lowerText.includes("avvisi ata") ||
+        lowerText.includes("circolar") ||
+        lowerText.includes("comunicazion")
+      ) {
+        priority = 5;
+      } else if (lowerText.includes("trasparenza") || lowerText.includes("amministrazione trasparente")) {
+        priority = 3;
+      }
+
+      if (priority > 0) {
+        discovered.push({ url: resolved, title: title.trim() || resolved, priority });
+      }
+    } catch {
+      // ignore malformed URLs
+    }
+  };
+
+  // 1. Extract links from Markdown: [Title](url)
+  const mdRegex = /\[([^\]]+)\]\((https?:\/\/[^\s\)\'\"]+)\)/g;
+  let match;
+  while ((match = mdRegex.exec(rawContent)) !== null) {
+    addLink(match[2], match[1]);
+  }
+
+  // 2. Extract from known Italian PA platforms URLs in text
+  const platformRegex = /(https?:\/\/(?:www\.)?(?:albipretorionline\.com\/[A-Za-z0-9_-]+|trasparenza-pa\.net\/\?codcli=[A-Za-z0-9_-]+|portaleargo\.it\/albopretorio\S*|axioscloud\.it\S*|spaggiari\.eu\S*))/gi;
+  while ((match = platformRegex.exec(rawContent)) !== null) {
+    addLink(match[1], "Piattaforma Albo / Atti Istituzionali");
+  }
+
+  // 3. Extract from HTML anchors if DOM document is available
+  if (doc) {
+    const anchors = Array.from(doc.querySelectorAll("a"));
+    for (const a of anchors) {
+      const href = a.getAttribute("href") || "";
+      const text = a.textContent || a.getAttribute("title") || "";
+      addLink(href, text);
+    }
+  }
+
+  return discovered.sort((a, b) => b.priority - a.priority);
+}
+
+interface ProxyCandidate {
+  name: string;
+  isJina?: boolean;
+  isLocal?: boolean;
+  isEmergency?: boolean;
+  buildUrl: (u: string) => string;
+}
 
 async function fetchWithProxy(
   url: string,
   asArrayBuffer: boolean = false,
-  onLog?: (msg: string) => void
-): Promise<{ data: any; method: string }> {
+  onLog?: (msg: string) => void,
+  customProxyUrl?: string
+): Promise<{ data: any; method: string; format: "html" | "markdown" | "buffer" }> {
   let lastError = "";
 
-  for (const proxy of CORS_PROXIES) {
+  const candidates: ProxyCandidate[] = [];
+
+  // Custom proxy if specified by user
+  if (customProxyUrl && customProxyUrl.trim()) {
+    const cleanProxy = customProxyUrl.trim();
+    candidates.push({
+      name: "Proxy Personalizzato Utente",
+      buildUrl: (u: string) => cleanProxy.includes("${url}") ? cleanProxy.replace("${url}", encodeURIComponent(u)) : `${cleanProxy}${encodeURIComponent(u)}`
+    });
+  }
+
+  // 1. Primary: Server Proxy (/api/proxy) - has browser impersonation + server-side Jina fallback
+  candidates.push({
+    name: "Server Proxy (/api/proxy)",
+    isLocal: true,
+    buildUrl: (u: string) => `/api/proxy?url=${encodeURIComponent(u)}`
+  });
+
+  // 2. Client-side Native CORS: Jina AI Web Reader (bypasses 403, executes JS, extracts full page text)
+  candidates.push({
+    name: "Jina AI Web Reader (Bypass 403 & CORS)",
+    isJina: true,
+    buildUrl: (u: string) => `https://r.jina.ai/${u}`
+  });
+
+  // 3. Tertiary Emergency Fallback: CorsProxy.io
+  candidates.push({
+    name: "CorsProxy.io (Emergenza)",
+    isEmergency: true,
+    buildUrl: (u: string) => `https://corsproxy.io/?url=${encodeURIComponent(u)}`
+  });
+
+  for (const proxy of candidates) {
     try {
-      onLog?.(`Tentativo di connessione tramite ${proxy.name}...`);
-      const target = proxy.url(url);
+      onLog?.(`Connessione in corso tramite ${proxy.name}...`);
+      const target = proxy.buildUrl(url);
       const controller = new AbortController();
-      const timeoutId = setTimeout(() => controller.abort(), 12000);
+      const timeoutId = setTimeout(() => controller.abort(), proxy.isJina ? 15000 : 12000);
+
+      const reqHeaders: Record<string, string> = {};
+      if (proxy.isJina) {
+        reqHeaders["Accept"] = "text/html,text/plain,*/*";
+        reqHeaders["x-return-format"] = asArrayBuffer ? "html" : "markdown";
+      }
 
       const response = await fetch(target, {
+        headers: reqHeaders,
         signal: controller.signal
       });
       clearTimeout(timeoutId);
@@ -412,72 +559,37 @@ async function fetchWithProxy(
       if (response.ok) {
         if (asArrayBuffer) {
           const buf = await response.arrayBuffer();
-          return { data: buf, method: proxy.name };
+          return { data: buf, method: proxy.name, format: "buffer" };
         }
+
         const text = await response.text();
+
         if (proxy.isLocal && isSelfAppHtml(text)) {
-          onLog?.(`Avviso: ${proxy.name} ha restituito la SPA invece del sito remoto. Passo al proxy alternativo.`);
+          onLog?.(`Avviso: ${proxy.name} ha restituito l'app SPA invece del sito remoto. Passo al provider successivo.`);
           continue;
         }
+
         if (text && text.length > 80) {
+          const format = proxy.isJina ? "markdown" : "html";
           onLog?.(`Connessione riuscita via ${proxy.name} (${text.length} caratteri ricevuti).`);
-          return { data: text, method: proxy.name };
+          return { data: text, method: proxy.name, format };
         }
       } else {
         lastError = `Status ${response.status} (${response.statusText})`;
         onLog?.(`Proxy ${proxy.name} ha risposto con ${lastError}`);
       }
     } catch (e: any) {
-      lastError = e.name === "AbortError" ? "Timeout connessione (12s)" : e.message;
+      lastError = e.name === "AbortError" ? "Timeout connessione (15s)" : e.message;
       onLog?.(`Tentativo fallito con ${proxy.name}: ${lastError}`);
     }
   }
 
-  throw new Error(`Impossibile caricare l'URL tramite i proxy CORS. Ultimo errore: ${lastError}`);
+  throw new Error(`Impossibile connettersi all'URL tramite la suite di proxy. Ultimo errore: ${lastError}`);
 }
 
 function parseHtml(html: string): Document {
   const parser = new DOMParser();
   return parser.parseFromString(html, "text/html");
-}
-
-function findAlboPretorioLink(doc: Document, baseUrl: string): { url: string; title: string } | null {
-  const keywords = [
-    "albo pretorio",
-    "albo online",
-    "albipretorionline",
-    "portaleargo",
-    "trasparenza-pa",
-    "amministrazione trasparente",
-    "pubblicità legale",
-    "pubblicita legale",
-    "bacheca sindacale",
-    "albo sindacale",
-    "circolari",
-    "comunicazioni",
-    "avvisi ata",
-    "supplenze"
-  ];
-  
-  const links = Array.from(doc.querySelectorAll("a"));
-  
-  for (const link of links) {
-    const text = (link.textContent || "").toLowerCase().trim();
-    const href = (link.getAttribute("href") || "").trim();
-    if (!href || href.startsWith("#") || href.startsWith("javascript:")) continue;
-
-    for (const kw of keywords) {
-      if (text.includes(kw) || href.toLowerCase().includes(kw)) {
-        try {
-          const absolute = new URL(href, baseUrl).href;
-          return { url: absolute, title: link.textContent?.trim() || kw };
-        } catch {
-          // ignore invalid url
-        }
-      }
-    }
-  }
-  return null;
 }
 
 async function extractWithOpenRouter(text: string, apiKey: string, systemPrompt?: string) {
@@ -513,8 +625,8 @@ async function executeClientSideSearch(queryStr: string, apiKey: string) {
     body: JSON.stringify({
       model: "google/gemini-2.5-flash",
       messages: [
-        { role: "system", content: "Sei un assistente di ricerca specializzato nel reperire bandi, convocazioni ATA e pensionamenti delle scuole italiane sul web." },
-        { role: "user", content: `Cerca sul web informazioni aggiornate su: ${queryStr}` }
+        { role: "system", content: "Sei un assistente di ricerca specializzato nel reperire bandi, avvisi, convocazioni ATA e pensionamenti delle scuole italiane sul web con precisione e accuratezza nei conteggi." },
+        { role: "user", content: `Cerca sul web informazioni aggiornate e atti ufficiali su: ${queryStr}` }
       ],
       plugins: [{ id: "web" }]
     })
@@ -532,7 +644,7 @@ async function executeClientSideSearch(queryStr: string, apiKey: string) {
   return respData?.choices?.[0]?.message?.content || "Nessun risultato trovato.";
 }
 
-async function scrapeWebsite(targetUrl: string, apiKey: string, systemPrompt?: string) {
+async function scrapeWebsite(targetUrl: string, apiKey: string, systemPrompt?: string, customProxyUrl?: string) {
   const logs: string[] = [];
   const log = (msg: string) => {
     logs.push(msg);
@@ -546,50 +658,90 @@ async function scrapeWebsite(targetUrl: string, apiKey: string, systemPrompt?: s
 
   try {
     // 1. Download homepage
-    const { data: html } = await fetchWithProxy(currentUrl, false, log);
-    const doc = parseHtml(html);
-    const pageText = doc.body?.textContent?.replace(/\s+/g, " ").trim() || "";
-    log(`Homepage analizzata (${pageText.length} caratteri estratti).`);
+    const homeRes = await fetchWithProxy(currentUrl, false, log, customProxyUrl);
+    const rawHome = homeRes.data as string;
+    let homeText = "";
+    let homeDoc: Document | undefined;
 
-    // 2. Look for Albo Pretorio / Trasparenza link
-    const alboMatch = findAlboPretorioLink(doc, currentUrl);
+    if (homeRes.format === "html") {
+      homeDoc = parseHtml(rawHome);
+      homeText = homeDoc.body?.textContent?.replace(/\s+/g, " ").trim() || "";
+    } else {
+      homeText = rawHome.replace(/[#*`_\[\]]/g, " ").replace(/\s+/g, " ").trim();
+    }
+    log(`Homepage analizzata (${homeText.length} caratteri estratti).`);
+
+    // 2. Discover relevant sub-links (Albo Pretorio, Circolari, ATA)
+    const discoveredLinks = findRelevantSchoolLinks(rawHome, currentUrl, homeDoc);
+    const alboLink = discoveredLinks.find(l => l.priority >= 10);
+    const ataLink = discoveredLinks.find(l => l.priority === 5 && l.url !== alboLink?.url);
+
     let alboText = "";
-
-    if (alboMatch) {
-      log(`Trovata sezione specifica: "${alboMatch.title}" (${alboMatch.url})`);
-      navigatedUrl = alboMatch.url;
+    if (alboLink) {
+      log(`Trovata sezione Albo Pretorio / Atti: "${alboLink.title}" (${alboLink.url})`);
+      navigatedUrl = alboLink.url;
       try {
-        const alboRes = await fetchWithProxy(alboMatch.url, false, log);
-        const alboDoc = parseHtml(alboRes.data);
-        alboText = alboDoc.body?.textContent?.replace(/\s+/g, " ").trim() || "";
-        log(`Contenuti Albo/Trasparenza scaricati (${alboText.length} caratteri).`);
-      } catch (e: any) {
-        log(`Avviso caricamento Albo: ${e.message}. Procedo con i contenuti della homepage.`);
+        const alboRes = await fetchWithProxy(alboLink.url, false, log, customProxyUrl);
+        const rawAlbo = alboRes.data as string;
+        if (alboRes.format === "html") {
+          const alboDoc = parseHtml(rawAlbo);
+          alboText = alboDoc.body?.textContent?.replace(/\s+/g, " ").trim() || "";
+        } else {
+          alboText = rawAlbo.replace(/[#*`_\[\]]/g, " ").replace(/\s+/g, " ").trim();
+        }
+        log(`Atti Albo Pretorio scaricati con successo (${alboText.length} caratteri).`);
+      } catch (alboErr: any) {
+        log(`Avviso caricamento Albo: ${alboErr.message}. Procedo con i contenuti della homepage.`);
       }
     } else {
-      log(`Nessuna sezione Albo Pretorio separata trovata nei link del menu principale.`);
+      log(`Nessuna sezione Albo Pretorio esterna separata trovata nei link. Procedo con la scansione della pagina.`);
     }
 
-    fullText = (pageText + " " + alboText).substring(0, 32000);
+    let ataText = "";
+    if (ataLink) {
+      log(`Trovata sezione ATA / Circolari specifica: "${ataLink.title}" (${ataLink.url})`);
+      try {
+        const ataRes = await fetchWithProxy(ataLink.url, false, log, customProxyUrl);
+        const rawAta = ataRes.data as string;
+        if (ataRes.format === "html") {
+          const ataDoc = parseHtml(rawAta);
+          ataText = ataDoc.body?.textContent?.replace(/\s+/g, " ").trim() || "";
+        } else {
+          ataText = rawAta.replace(/[#*`_\[\]]/g, " ").replace(/\s+/g, " ").trim();
+        }
+        log(`Sezione ATA scaricata con successo (${ataText.length} caratteri).`);
+      } catch (ataErr: any) {
+        log(`Avviso caricamento sezione ATA: ${ataErr.message}`);
+      }
+    }
+
+    fullText = `${homeText} \n\n=== ATTI ALBO PRETORIO ===\n${alboText} \n\n=== SEZIONE ATA / CIRCOLARI ===\n${ataText}`.substring(0, 36000);
   } catch (directErr: any) {
     log(`Impossibile leggere il sito direttamente (${directErr.message}).`);
-    log(`Attivazione fallback intelligente: Avvio OpenRouter Web Search...`);
+    log(`Attivazione fallback intelligente: Avvio OpenRouter Web Grounding Search...`);
 
     try {
       const urlObj = new URL(currentUrl);
       const domain = urlObj.hostname.replace(/^www\./, "");
-      const searchQuery = `site:${domain} albo pretorio convocazioni ATA pensionamenti collaboratore scolastico`;
-      log(`Esecuzione query Web Search: "${searchQuery}"`);
+      const searchQuery = `"${domain}" (ATA OR "collaboratore scolastico" OR "assistente amministrativo") (convocazione OR interpello OR supplenza OR graduatoria OR pensionamento OR albo)`;
+      log(`Esecuzione ricerca web mirata: "${searchQuery}"`);
 
-      const searchContent = await executeClientSideSearch(searchQuery, apiKey);
+      const searchContent = await executeClientSideSearch(
+        `Effettua una ricerca web approfondita sull'istituto scolastico con dominio "${domain}".
+Individua con precisione e dettaglio:
+1. Convocazioni, nomine a tempo determinato, interpelli e supplenze per il personale ATA (Collaboratore Scolastico, Assistente Amministrativo, Tecnico, Cuoco, Agrario).
+2. Pensionamenti, collocamenti a riposo o cessazioni dal servizio.
+3. Eventuali delibere, graduatorie d'istituto o contratti pubblicati all'Albo Pretorio o su piattaforme come Argo o Trasparenza.
+Riporta i bandi e gli atti trovati specificando date, ruoli e numeri di posti o atti individuati.`,
+        apiKey
+      );
+
       if (searchContent && searchContent.length > 50) {
         log(`Dati di ricerca web ottenuti con successo (${searchContent.length} caratteri).`);
         fullText = searchContent.substring(0, 32000);
       } else {
-        log(`Tentativo fallback con ricerca estesa sul nome della scuola.`);
-        const fallbackQuery = `${domain} convocazioni ATA 2025 2026 graduatorie supplenze`;
-        const generalContent = await executeClientSideSearch(fallbackQuery, apiKey);
-        fullText = (generalContent || "").substring(0, 32000);
+        log(`Nessun risultato rilevante reperito dalla ricerca web.`);
+        fullText = "";
       }
     } catch (searchErr: any) {
       log(`Errore anche durante la ricerca web di fallback: ${searchErr.message}`);
@@ -620,8 +772,8 @@ async function scrapeWebsite(targetUrl: string, apiKey: string, systemPrompt?: s
   }
 }
 
-const executeClientSideExtract = async (targetUrl: string, apiKey: string) => {
-    const res = await scrapeWebsite(targetUrl, apiKey, EXTRACTION_SYSTEM_PROMPT);
+const executeClientSideExtract = async (targetUrl: string, apiKey: string, customProxy?: string) => {
+    const res = await scrapeWebsite(targetUrl, apiKey, EXTRACTION_SYSTEM_PROMPT, customProxy);
     const defaultData = {
       convocazioni_collaboratore_scolastico: 0,
       convocazioni_assistente_amministrativo: 0,
@@ -668,7 +820,7 @@ const executeClientSideExtract = async (targetUrl: string, apiKey: string) => {
     const formattedUrl = alboUrlInput.trim().startsWith("http") ? alboUrlInput.trim() : `https://${alboUrlInput.trim()}`;
     try {
       if (!openRouterApiKey.trim()) throw new Error("Inserisci API Key");
-      const res = await scrapeWebsite(formattedUrl, openRouterApiKey.trim(), EXTRACTION_SYSTEM_PROMPT);
+      const res = await scrapeWebsite(formattedUrl, openRouterApiKey.trim(), EXTRACTION_SYSTEM_PROMPT, customProxyUrl.trim());
       setAlboScanResult({ success: true, ...res });
     } catch (err: any) {
       setAlboScanError(err.message);
@@ -866,7 +1018,7 @@ const executeClientSideExtract = async (targetUrl: string, apiKey: string) => {
 
         for (const u of currentBatchUrls) {
           try {
-            const clientData = await executeClientSideExtract(u, openRouterApiKey.trim());
+            const clientData = await executeClientSideExtract(u, openRouterApiKey.trim(), customProxyUrl.trim());
             results.push(clientData as any);
           } catch (itemErr: any) {
             results.push({
@@ -1028,7 +1180,7 @@ const executeClientSideExtract = async (targetUrl: string, apiKey: string) => {
         throw new Error("Inserisci la tua OpenRouter API Key nelle Impostazioni per abilitare l'estrazione client-side.");
       }
 
-      const clientData = await executeClientSideExtract(formattedUrl, openRouterApiKey.trim());
+      const clientData = await executeClientSideExtract(formattedUrl, openRouterApiKey.trim(), customProxyUrl.trim());
       setSingleResult(clientData as any);
     } catch (err: any) {
       setSingleError(err.message || "Errore durante l'elaborazione.");
@@ -1232,6 +1384,40 @@ const executeClientSideExtract = async (targetUrl: string, apiKey: string) => {
                   className="w-full bg-slate-950 border border-slate-800 rounded-xl px-4 py-2.5 text-sm text-white focus:outline-none focus:border-indigo-500"
                 />
                 <p className="text-[11px] text-slate-500">Inserisci la chiave OpenRouter per abilitare le chiamate di ricerca e analisi LLM.</p>
+              </div>
+
+              <div className="border-t border-slate-800 pt-4 space-y-3">
+                <div className="flex items-center justify-between">
+                  <h4 className="text-xs font-semibold uppercase tracking-wider text-slate-400 flex items-center gap-1.5">
+                    <Globe className="w-3.5 h-3.5 text-indigo-400" />
+                    <span>Rete & Architettura Anti-403</span>
+                  </h4>
+                  <span className="text-[10px] bg-emerald-500/10 text-emerald-400 border border-emerald-500/20 px-2 py-0.5 rounded-full font-medium flex items-center gap-1">
+                    <ShieldCheck className="w-3 h-3" />
+                    Attivo
+                  </span>
+                </div>
+
+                <div className="bg-slate-950 p-3.5 rounded-xl border border-slate-800 space-y-2 text-xs">
+                  <p className="text-slate-300 font-medium">Catena di recupero automatica:</p>
+                  <ol className="list-decimal list-inside space-y-1 text-slate-400 text-[11px]">
+                    <li><strong className="text-slate-300">Proxy Server (/api/proxy)</strong> con intestazioni realistiche Chrome & failover serverless.</li>
+                    <li><strong className="text-slate-300">Jina AI Reader</strong> con CORS nativo del browser, bypass 403 e rendering JavaScript di portali Albo (Argo, Trasparenza-PA).</li>
+                    <li><strong className="text-slate-300">Web Grounding Search IA</strong> mirato per reperire bandi e convocazioni ufficiali se il sito è offline.</li>
+                  </ol>
+                </div>
+
+                <div className="space-y-1.5">
+                  <label className="text-xs font-medium text-slate-300">Proxy o Scraper URL Personalizzato (Opzionale)</label>
+                  <input
+                    type="text"
+                    value={customProxyUrl}
+                    onChange={(e) => setCustomProxyUrl(e.target.value)}
+                    placeholder="es. https://tuo-proxy.com/?url=${url}"
+                    className="w-full bg-slate-950 border border-slate-800 rounded-xl px-4 py-2.5 text-sm text-white focus:outline-none focus:border-indigo-500"
+                  />
+                  <p className="text-[11px] text-slate-500">Se possiedi un tuo proxy o servizio scraper dedicato, inseriscilo qui. Verrà usato come priorità assoluta.</p>
+                </div>
               </div>
 
               <div className="border-t border-slate-800 pt-4 space-y-3">
