@@ -10,6 +10,7 @@ export default async function handler(req: any, res: any) {
   }
 
   const targetUrl = req.query.url as string;
+  const isRaw = req.query.raw === "1";
   if (!targetUrl) {
     return res.status(400).json({ error: "Parametro 'url' mancante nella query string." });
   }
@@ -17,42 +18,42 @@ export default async function handler(req: any, res: any) {
   try {
     const formattedUrl = targetUrl.startsWith("http") ? targetUrl : `https://${targetUrl}`;
     
-    let text = "";
-    let contentType = "text/html; charset=utf-8";
-
-    // 1. Direct fetch with browser headers
-    let directSuccess = false;
+    let response: Response | undefined;
     try {
-      const response = await fetch(formattedUrl, {
+      response = await fetch(formattedUrl, {
         headers: {
           "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/126.0.0.0 Safari/537.36",
-          "Accept": "text/html,application/xhtml+xml,application/xml;q=0.9,image/avif,image/webp,*/*;q=0.8",
+          "Accept": "text/html,application/xhtml+xml,application/xml;q=0.9,image/avif,image/webp,application/pdf,*/*;q=0.8",
           "Accept-Language": "it-IT,it;q=0.9,en-US;q=0.8,en;q=0.7",
-          "Sec-Ch-Ua": '"Not/A)Brand";v="8", "Chromium";v="126", "Google Chrome";v="126"',
-          "Sec-Ch-Ua-Mobile": "?0",
-          "Sec-Ch-Ua-Platform": '"Windows"',
-          "Sec-Fetch-Dest": "document",
-          "Sec-Fetch-Mode": "navigate",
-          "Sec-Fetch-Site": "none",
-          "Sec-Fetch-User": "?1",
-          "Upgrade-Insecure-Requests": "1",
           "Cache-Control": "no-cache",
           "Pragma": "no-cache"
         },
         redirect: "follow"
       });
-
-      if (response.ok) {
-        const ct = response.headers.get("content-type");
-        if (ct) contentType = ct;
-        text = await response.text();
-        if (text && text.length > 100) {
-          directSuccess = true;
-        }
-      }
     } catch {
-      directSuccess = false;
+      response = undefined;
     }
+
+    const ct = response?.headers?.get("content-type") || "";
+    const isPdf = ct.toLowerCase().includes("application/pdf") || formattedUrl.toLowerCase().endsWith(".pdf") || formattedUrl.toLowerCase().includes(".pdf?");
+
+    if (isRaw || isPdf) {
+      if (response && response.ok) {
+        const arrayBuf = await response.arrayBuffer();
+        res.setHeader("Content-Type", "application/pdf");
+        return res.status(200).send(Buffer.from(arrayBuf));
+      }
+    }
+
+    let text = "";
+    let contentType = "text/html; charset=utf-8";
+
+    if (response && response.ok) {
+      contentType = ct || contentType;
+      text = await response.text();
+    }
+
+    let directSuccess = text && text.length > 100;
 
     // 2. Resilient headless reader fallback (anti-403, anti-bot bypass & JS rendering)
     if (!directSuccess) {

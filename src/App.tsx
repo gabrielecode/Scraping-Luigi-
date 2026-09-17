@@ -489,6 +489,52 @@ function findRelevantSchoolLinks(rawContent: string, baseUrl: string, doc?: Docu
   return discovered.sort((a, b) => b.priority - a.priority);
 }
 
+function findActLinks(rawContent: string, baseUrl: string, doc?: Document): { url: string; title: string; id: string }[] {
+  const acts: { url: string; title: string; id: string; score: number }[] = [];
+  const seen = new Set<string>();
+
+  const keywords = ["convocazione", "nomina", "supplenza", "interpello", "graduatoria", "pensionamento", "collocamento", "cessazione", "ata"];
+
+  const addAct = (rawUrl: string, title: string) => {
+    if (!rawUrl || rawUrl.startsWith("#") || rawUrl.startsWith("javascript:")) return;
+    try {
+      const resolved = new URL(rawUrl, baseUrl).href;
+      if (seen.has(resolved)) return;
+      seen.add(resolved);
+
+      const lower = (title + " " + resolved).toLowerCase();
+      let score = 0;
+      for (const kw of keywords) {
+        if (lower.includes(kw)) score += 2;
+      }
+      if (resolved.match(/\/atti\/\d+/)) score += 5;
+
+      if (score > 0 || resolved.includes("/atti/")) {
+        const idMatch = resolved.match(/\/atti\/(\d+)/);
+        const id = idMatch ? idMatch[1] : resolved;
+        acts.push({ url: resolved, title: title.trim() || resolved, id, score });
+      }
+    } catch {}
+  };
+
+  const mdRegex = /\[([^\]]+)\]\((https?:\/\/[^\s\)\'\"]+)\)/g;
+  let match;
+  while ((match = mdRegex.exec(rawContent)) !== null) {
+    addAct(match[2], match[1]);
+  }
+
+  if (doc) {
+    const anchors = Array.from(doc.querySelectorAll("a"));
+    for (const a of anchors) {
+      const href = a.getAttribute("href") || "";
+      const text = a.textContent || a.getAttribute("title") || "";
+      addAct(href, text);
+    }
+  }
+
+  return acts.sort((a, b) => b.score - a.score).slice(0, 10);
+}
+
 interface ProxyCandidate {
   name: string;
   isJina?: boolean;
@@ -545,15 +591,29 @@ async function fetchWithProxy(
       const timeoutId = setTimeout(() => controller.abort(), proxy.isJina ? 15000 : 12000);
 
       const reqHeaders: Record<string, string> = {};
+      const fetchOptions: RequestInit = {
+        signal: controller.signal
+      };
+
+      let fetchTarget = target;
+
       if (proxy.isJina) {
         reqHeaders["Accept"] = "text/html,text/plain,*/*";
         reqHeaders["x-return-format"] = asArrayBuffer ? "html" : "markdown";
+        reqHeaders["x-timeout"] = "10";
+
+        if (url.includes("#")) {
+          onLog?.(`Rendering hash-route: ${url}`);
+          fetchTarget = "https://r.jina.ai/";
+          fetchOptions.method = "POST";
+          reqHeaders["Content-Type"] = "application/x-www-form-urlencoded";
+          fetchOptions.body = `url=${encodeURIComponent(url)}`;
+        }
       }
 
-      const response = await fetch(target, {
-        headers: reqHeaders,
-        signal: controller.signal
-      });
+      fetchOptions.headers = reqHeaders;
+
+      const response = await fetch(fetchTarget, fetchOptions);
       clearTimeout(timeoutId);
 
       if (response.ok) {
@@ -613,6 +673,84 @@ async function extractWithOpenRouter(text: string, apiKey: string, systemPrompt?
   return await response.json();
 }
 
+async function extractPdfWithOpenRouter(pdfSource: string, promptText: string, apiKey: string, isBase64 = false, customProxyUrl?: string) {
+  try {
+    const response = await fetch("https://openrouter.ai/api/v1/chat/completions", {
+      method: "POST",
+      headers: {
+        "Authorization": `Bearer ${apiKey}`,
+        "Content-Type": "application/json",
+        "HTTP-Referer": window.location.origin,
+        "X-Title": "ScuolaATA Scraper"
+      },
+      body: JSON.stringify({
+        model: "google/gemini-2.5-flash",
+        messages: [
+          {
+            role: "user",
+            content: [
+              { type: "text", text: promptText },
+              { type: "file", file: { filename: "atto.pdf", file_data: pdfSource } }
+            ]
+          }
+        ],
+        plugins: [{ id: "file-parser", pdf: { engine: "native" } }],
+        response_format: { type: "json_object" }
+      })
+    });
+    const data = await response.json();
+    if (!data?.error && data?.choices?.[0]?.message?.content) {
+      return data;
+    }
+  } catch {}
+
+  let base64Data = pdfSource;
+  if (!isBase64) {
+    try {
+      const proxyTarget = customProxyUrl ? customProxyUrl.replace("${url}", encodeURIComponent(pdfSource)) : `/api/proxy?url=${encodeURIComponent(pdfSource)}&raw=1`;
+      const binRes = await fetch(proxyTarget);
+      if (binRes.ok) {
+        const buf = await binRes.arrayBuffer();
+        const u8 = new Uint8Array(buf);
+        let binString = "";
+        const chunkSize = 8192;
+        for (let i = 0; i < u8.length; i += chunkSize) {
+          const chunk = u8.subarray(i, i + chunkSize);
+          binString += String.fromCharCode.apply(null, chunk as unknown as number[]);
+        }
+        base64Data = `data:application/pdf;base64,${btoa(binString)}`;
+      }
+    } catch (e: any) {
+      throw new Error(`Impossibile scaricare o convertire il PDF: ${e.message}`);
+    }
+  }
+
+  const fallbackResponse = await fetch("https://openrouter.ai/api/v1/chat/completions", {
+    method: "POST",
+    headers: {
+      "Authorization": `Bearer ${apiKey}`,
+      "Content-Type": "application/json",
+      "HTTP-Referer": window.location.origin,
+      "X-Title": "ScuolaATA Scraper"
+    },
+    body: JSON.stringify({
+      model: "google/gemini-2.5-flash",
+      messages: [
+        {
+          role: "user",
+          content: [
+            { type: "text", text: promptText },
+            { type: "file", file: { filename: "atto.pdf", file_data: base64Data } }
+          ]
+        }
+      ],
+      plugins: [{ id: "file-parser", pdf: { engine: "native" } }],
+      response_format: { type: "json_object" }
+    })
+  });
+  return await fallbackResponse.json();
+}
+
 async function executeClientSideSearch(queryStr: string, apiKey: string) {
   const response = await fetch("https://openrouter.ai/api/v1/chat/completions", {
     method: "POST",
@@ -651,10 +789,11 @@ async function scrapeWebsite(targetUrl: string, apiKey: string, systemPrompt?: s
   };
 
   let currentUrl = targetUrl.startsWith("http") ? targetUrl : `https://${targetUrl}`;
-  log(`Avvio estrazione per: ${currentUrl}`);
+  log(`Avvio estrazione approfondita per: ${currentUrl}`);
 
   let fullText = "";
   let navigatedUrl = currentUrl;
+  let allTexts: string[] = [];
 
   try {
     // 1. Download homepage
@@ -669,84 +808,104 @@ async function scrapeWebsite(targetUrl: string, apiKey: string, systemPrompt?: s
     } else {
       homeText = rawHome.replace(/[#*`_\[\]]/g, " ").replace(/\s+/g, " ").trim();
     }
+    allTexts.push(`=== HOMEPAGE (${currentUrl}) ===\n${homeText}`);
     log(`Homepage analizzata (${homeText.length} caratteri estratti).`);
 
-    // 2. Discover relevant sub-links (Albo Pretorio, Circolari, ATA)
+    // 2. Discover relevant sub-links (Albo Pretorio, Circolari, ATA, Trasparenza)
     const discoveredLinks = findRelevantSchoolLinks(rawHome, currentUrl, homeDoc);
-    const alboLink = discoveredLinks.find(l => l.priority >= 10);
-    const ataLink = discoveredLinks.find(l => l.priority === 5 && l.url !== alboLink?.url);
+    log(`Trovati ${discoveredLinks.length} link rilevanti (Albo, Circolari, Convocazioni).`);
 
-    let alboText = "";
-    if (alboLink) {
-      log(`Trovata sezione Albo Pretorio / Atti: "${alboLink.title}" (${alboLink.url})`);
-      navigatedUrl = alboLink.url;
+    // Take top 5 highest priority links to crawl deeply
+    const topLinksToFetch = discoveredLinks.slice(0, 5);
+    for (const link of topLinksToFetch) {
+      log(`Scansione approfondita sottolink: "${link.title}" (${link.url})`);
       try {
-        const alboRes = await fetchWithProxy(alboLink.url, false, log, customProxyUrl);
-        const rawAlbo = alboRes.data as string;
-        if (alboRes.format === "html") {
-          const alboDoc = parseHtml(rawAlbo);
-          alboText = alboDoc.body?.textContent?.replace(/\s+/g, " ").trim() || "";
+        navigatedUrl = link.url;
+        const subRes = await fetchWithProxy(link.url, false, log, customProxyUrl);
+        const rawSub = subRes.data as string;
+        let subText = "";
+        let subDoc: Document | undefined;
+        if (subRes.format === "html") {
+          subDoc = parseHtml(rawSub);
+          subText = subDoc.body?.textContent?.replace(/\s+/g, " ").trim() || "";
         } else {
-          alboText = rawAlbo.replace(/[#*`_\[\]]/g, " ").replace(/\s+/g, " ").trim();
+          subText = rawSub.replace(/[#*`_\[\]]/g, " ").replace(/\s+/g, " ").trim();
         }
-        log(`Atti Albo Pretorio scaricati con successo (${alboText.length} caratteri).`);
-      } catch (alboErr: any) {
-        log(`Avviso caricamento Albo: ${alboErr.message}. Procedo con i contenuti della homepage.`);
+        allTexts.push(`=== SOTTOPAGINA (${link.title}) ===\n${subText}`);
+
+        // TASK 2: Extract individual acts (max 8-10 acts) and iterate over them
+        const actLinks = findActLinks(rawSub, link.url, subDoc);
+        if (actLinks.length > 0) {
+          log(`Trovati ${actLinks.length} atti`);
+          for (const act of actLinks) {
+            log(`Apertura dettaglio atto ${act.id}`);
+            try {
+              navigatedUrl = act.url;
+              const detailRes = await fetchWithProxy(act.url, false, log, customProxyUrl);
+              const rawDetail = detailRes.data as string;
+              let detailText = "";
+              if (detailRes.format === "html") {
+                const detailDoc = parseHtml(rawDetail);
+                detailText = detailDoc.body?.textContent?.replace(/\s+/g, " ").trim() || "";
+                const pdfAnchors = Array.from(detailDoc.querySelectorAll("a"));
+                for (const pa of pdfAnchors) {
+                  const ph = pa.getAttribute("href") || "";
+                  if (ph.toLowerCase().endsWith(".pdf") || ph.toLowerCase().includes(".pdf?")) {
+                    const pdfResolved = new URL(ph, act.url).href;
+                    log(`PDF trovato: ${pdfResolved}`);
+                    allTexts.push(`=== PDF ALLEGATO (${pdfResolved}) ===\n[PDF URL: ${pdfResolved}]`);
+
+                    try {
+                      log(`Invio PDF via URL/fallback base64: ${pdfResolved}`);
+                      const pdfResJson = await extractPdfWithOpenRouter(
+                        pdfResolved,
+                        "Estrai con precisione da questo atto/PDF i dati relativi a: convocazioni personale ATA (collaboratore scolastico, assistente amministrativo, tecnico, cuoco, agrario), pensionamenti, graduatorie, profilo professionale, ore e decorrenza. Rispondi in JSON.",
+                        apiKey,
+                        false,
+                        customProxyUrl
+                      );
+                      if (pdfResJson && !pdfResJson.error && pdfResJson?.choices?.[0]?.message?.content) {
+                        const pdfContentStr = pdfResJson.choices[0].message.content;
+                        allTexts.push(`=== ESTRAZIONE PDF (${pdfResolved}) ===\n${pdfContentStr}`);
+                      }
+                    } catch (pdfErr: any) {
+                      log(`Avviso estrazione PDF ${pdfResolved}: ${pdfErr.message}`);
+                    }
+                  }
+                }
+              } else {
+                detailText = rawDetail.replace(/[#*`_\[\]]/g, " ").replace(/\s+/g, " ").trim();
+              }
+              allTexts.push(`=== ATTO ${act.id} (${act.title}) ===\n${detailText}`);
+            } catch (actErr: any) {
+              log(`Avviso caricamento atto ${act.id}: ${actErr.message}`);
+            }
+          }
+        }
+      } catch (subErr: any) {
+        log(`Avviso caricamento ${link.url}: ${subErr.message}`);
       }
-    } else {
-      log(`Nessuna sezione Albo Pretorio esterna separata trovata nei link. Procedo con la scansione della pagina.`);
     }
 
-    let ataText = "";
-    if (ataLink) {
-      log(`Trovata sezione ATA / Circolari specifica: "${ataLink.title}" (${ataLink.url})`);
-      try {
-        const ataRes = await fetchWithProxy(ataLink.url, false, log, customProxyUrl);
-        const rawAta = ataRes.data as string;
-        if (ataRes.format === "html") {
-          const ataDoc = parseHtml(rawAta);
-          ataText = ataDoc.body?.textContent?.replace(/\s+/g, " ").trim() || "";
-        } else {
-          ataText = rawAta.replace(/[#*`_\[\]]/g, " ").replace(/\s+/g, " ").trim();
-        }
-        log(`Sezione ATA scaricata con successo (${ataText.length} caratteri).`);
-      } catch (ataErr: any) {
-        log(`Avviso caricamento sezione ATA: ${ataErr.message}`);
-      }
-    }
-
-    fullText = `${homeText} \n\n=== ATTI ALBO PRETORIO ===\n${alboText} \n\n=== SEZIONE ATA / CIRCOLARI ===\n${ataText}`.substring(0, 36000);
+    fullText = allTexts.join("\n\n").substring(0, 60000);
   } catch (directErr: any) {
     log(`Impossibile leggere il sito direttamente (${directErr.message}).`);
-    log(`Attivazione fallback intelligente: Avvio OpenRouter Web Grounding Search...`);
+  }
 
-    try {
-      const urlObj = new URL(currentUrl);
-      const domain = urlObj.hostname.replace(/^www\./, "");
-      const searchQuery = `"${domain}" (ATA OR "collaboratore scolastico" OR "assistente amministrativo") (convocazione OR interpello OR supplenza OR graduatoria OR pensionamento OR albo)`;
-      log(`Esecuzione ricerca web mirata: "${searchQuery}"`);
-
-      const searchContent = await executeClientSideSearch(
-        `Effettua una ricerca web approfondita sull'istituto scolastico con dominio "${domain}".
-Individua con precisione e dettaglio:
-1. Convocazioni, nomine a tempo determinato, interpelli e supplenze per il personale ATA (Collaboratore Scolastico, Assistente Amministrativo, Tecnico, Cuoco, Agrario).
-2. Pensionamenti, collocamenti a riposo o cessazioni dal servizio.
-3. Eventuali delibere, graduatorie d'istituto o contratti pubblicati all'Albo Pretorio o su piattaforme come Argo o Trasparenza.
-Riporta i bandi e gli atti trovati specificando date, ruoli e numeri di posti o atti individuati.`,
-        apiKey
-      );
-
-      if (searchContent && searchContent.length > 50) {
-        log(`Dati di ricerca web ottenuti con successo (${searchContent.length} caratteri).`);
-        fullText = searchContent.substring(0, 32000);
-      } else {
-        log(`Nessun risultato rilevante reperito dalla ricerca web.`);
-        fullText = "";
-      }
-    } catch (searchErr: any) {
-      log(`Errore anche durante la ricerca web di fallback: ${searchErr.message}`);
-      fullText = "";
+  try {
+    const urlObj = new URL(currentUrl);
+    const domain = urlObj.hostname.replace(/^www\./, "");
+    log(`Avvio ricerca web approfondita (Grounding) per "${domain}"...`);
+    const searchContent = await executeClientSideSearch(
+      `Effettua una ricerca web approfondita e completa sull'istituto scolastico con dominio "${domain}". Individua tutti gli atti recenti, bandi, interpelli, convocazioni per il personale ATA (Collaboratore Scolastico, Assistente Amministrativo, Tecnico, Cuoco, Agrario), graduatorie e pensionamenti.`,
+      apiKey
+    );
+    if (searchContent && searchContent.length > 50) {
+      log(`Dati di ricerca web approfonditi ottenuti (${searchContent.length} caratteri).`);
+      fullText += `\n\n=== WEB GROUNDING SEARCH RESULT ===\n${searchContent}`;
     }
+  } catch (searchErr: any) {
+    log(`Avviso ricerca web grounding: ${searchErr.message}`);
   }
 
   if (!fullText || fullText.trim().length < 30) {
@@ -754,7 +913,7 @@ Riporta i bandi e gli atti trovati specificando date, ruoli e numeri di posti o 
     return { fullText: "", navigatedUrl, logs, content: "{}" };
   }
 
-  log(`Invio di ${fullText.length} caratteri al modello AI (Gemini 2.5 Flash tramite OpenRouter)...`);
+  log(`Invio di ${fullText.length} caratteri complessivi all'AI (Gemini 2.5 Flash) per estrazione approfondita...`);
 
   try {
     const resultJson = await extractWithOpenRouter(fullText, apiKey, systemPrompt);
@@ -764,7 +923,7 @@ Riporta i bandi e gli atti trovati specificando date, ruoli e numeri di posti o 
     }
 
     const content = resultJson?.choices?.[0]?.message?.content || "{}";
-    log(`Analisi completata con successo dall'AI.`);
+    log(`Analisi approfondita completata con successo dall'AI.`);
     return { fullText, navigatedUrl, logs, content };
   } catch (aiErr: any) {
     log(`Errore durante l'elaborazione AI: ${aiErr.message}`);
@@ -842,35 +1001,21 @@ const executeClientSideExtract = async (targetUrl: string, apiKey: string, custo
       }
 
       const arrayBuffer = await selectedPdfFile.arrayBuffer();
-      const uint8Array = new Uint8Array(arrayBuffer);
-      let binary = "";
-      for (let j = 0; j < uint8Array.length; j++) {
-        binary += String.fromCharCode(uint8Array[j]);
+      const u8 = new Uint8Array(arrayBuffer);
+      let binString = "";
+      const chunkSize = 8192;
+      for (let i = 0; i < u8.length; i += chunkSize) {
+        const chunk = u8.subarray(i, i + chunkSize);
+        binString += String.fromCharCode.apply(null, chunk as unknown as number[]);
       }
-      const rawPdfText = binary.replace(/[^\x20-\x7E\xC0-\xFF\n\r]/g, " ");
-      const textSnippet = rawPdfText.substring(0, 15000);
+      const base64Pdf = `data:application/pdf;base64,${btoa(binString)}`;
+      const prompt = `${PDF_EXTRACTION_SYSTEM_PROMPT}\n\nEstrai i dati strutturati da questo documento PDF allegato:`;
 
-      const prompt = `${PDF_EXTRACTION_SYSTEM_PROMPT}\n\nAnalizza il testo estratto dal PDF del contratto di supplenza:\n\n${textSnippet}`;
+      const respData = await extractPdfWithOpenRouter(base64Pdf, prompt, openRouterApiKey.trim(), true, customProxyUrl.trim());
+      if (respData?.error) {
+        throw new Error(respData.error.message || "Errore di parsing PDF con OpenRouter");
+      }
 
-      const response = await fetch("https://openrouter.ai/api/v1/chat/completions", {
-        method: "POST",
-        headers: {
-          "Authorization": `Bearer ${openRouterApiKey.trim()}`,
-          "HTTP-Referer": window.location.origin,
-          "X-Title": "ScuolaATA Scraper",
-          "Content-Type": "application/json"
-        },
-        body: JSON.stringify({
-          model: "google/gemini-2.5-flash",
-          messages: [
-            { role: "system", content: "Sei un assistente JSON rigoroso. Rispondi solo con JSON valido." },
-            { role: "user", content: prompt }
-          ],
-          response_format: { type: "json_object" }
-        })
-      });
-
-      const respData = await response.json();
       const content = respData?.choices?.[0]?.message?.content || "{}";
       const extracted = JSON.parse(content);
 
@@ -1187,6 +1332,48 @@ const executeClientSideExtract = async (targetUrl: string, apiKey: string, custo
     } finally {
       setIsProcessingSingle(false);
     }
+  };
+
+  // Export single result to CSV client-side
+  const exportSingleResultToCsv = () => {
+    if (!singleResult) return;
+    const r = singleResult;
+    const headers = [
+      "URL Originale", "URL Navigato", "Stato",
+      "Conv. Coll. Scolastico", "Conv. Assistente Amm.", "Conv. Docenti", "Conv. Assistente Tecnico", "Conv. Cuoco", "Conv. Assistente Agrario",
+      "Pens. Coll. Scolastico", "Pens. Assistente Amm.", "Pens. Docenti", "Pens. Assistente Tecnico", "Pens. Cuoco", "Pens. Assistente Agrario",
+      "Graduatoria Fascia", "Profilo Professionale", "Classe di Concorso", "Ore Settimanali", "Decorrenza Da", "Decorrenza A"
+    ];
+    const row = [
+      `"${r.url}"`, `"${r.navigatedUrl}"`, `"${r.status}"`,
+      r.data.convocazioni_collaboratore_scolastico ?? 0,
+      r.data.convocazioni_assistente_amministrativo ?? 0,
+      r.data.convocazioni_docenti ?? 0,
+      r.data.convocazioni_assistente_tecnico ?? 0,
+      r.data.convocazioni_cuoco ?? 0,
+      r.data.convocazioni_assistente_agrario ?? 0,
+      r.data.pensionamenti_collaboratore_scolastico ?? 0,
+      r.data.pensionamenti_assistente_amministrativo ?? 0,
+      r.data.pensionamenti_docenti ?? 0,
+      r.data.pensionamenti_assistente_tecnico ?? 0,
+      r.data.pensionamenti_cuoco ?? 0,
+      r.data.pensionamenti_assistente_agrario ?? 0,
+      `"${(r.data.graduatoria_fascia || "").replace(/"/g, '""')}"`,
+      `"${(r.data.profilo_professionale || "").replace(/"/g, '""')}"`,
+      `"${(r.data.classe_di_concorso || "").replace(/"/g, '""')}"`,
+      `"${(r.data.ore_settimanali || "").replace(/"/g, '""')}"`,
+      `"${(r.data.decorrenza_da || "").replace(/"/g, '""')}"`,
+      `"${(r.data.decorrenza_a || "").replace(/"/g, '""')}"`,
+    ];
+    const csvContent = [headers.join(","), row.join(",")].join("\n");
+    const blob = new Blob([csvContent], { type: "text/csv;charset=utf-8;" });
+    const url = URL.createObjectURL(blob);
+    const link = document.createElement("a");
+    link.setAttribute("href", url);
+    link.setAttribute("download", `risultato_singolo_ata_${new Date().toISOString().slice(0, 10)}.csv`);
+    document.body.appendChild(link);
+    link.click();
+    document.body.removeChild(link);
   };
 
   // Export results to CSV client-side
@@ -1814,10 +2001,19 @@ const executeClientSideExtract = async (targetUrl: string, apiKey: string, custo
 
                 {/* Structured Extraction Results */}
                 <div className="bg-slate-900 border border-slate-800 rounded-2xl p-6 shadow-xl space-y-4">
-                  <h3 className="text-lg font-semibold text-white flex items-center gap-2">
-                    <ShieldCheck className="w-5 h-5 text-emerald-400" />
-                    Dati Estratti tramite Gemini AI
-                  </h3>
+                  <div className="flex items-center justify-between">
+                    <h3 className="text-lg font-semibold text-white flex items-center gap-2">
+                      <ShieldCheck className="w-5 h-5 text-emerald-400" />
+                      Dati Estratti tramite Gemini AI
+                    </h3>
+                    <button
+                      onClick={exportSingleResultToCsv}
+                      className="bg-emerald-600 hover:bg-emerald-500 text-white font-medium px-4 py-2 rounded-xl transition-all shadow-lg shadow-emerald-600/20 flex items-center gap-2 text-xs"
+                    >
+                      <Download className="w-4 h-4" />
+                      <span>Scarica CSV Risultato Singolo</span>
+                    </button>
+                  </div>
 
                   <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
                     <div className="bg-slate-950/60 border border-slate-800/80 rounded-xl p-4 space-y-3">
