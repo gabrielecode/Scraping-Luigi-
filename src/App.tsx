@@ -53,6 +53,8 @@ import {
   cleanFieldString,
   formatCsvCodiceMeccanografico,
   resolveValidDocumentLink,
+  isClasseConcorsoPertinent,
+  standardizePlaceholder,
 } from "./services/graduatorieService";
 
 export { GRADUATORIA_EXTRACTION_SYSTEM_PROMPT };
@@ -345,9 +347,9 @@ Leggi attentamente il testo ed estrai con la massima precisione:
    - "tipo_posto": "comune" per posti ordinari/curricolari e ATA; "sostegno" per posti di sostegno / minorati psicofisici / uditivi / vista / cattedre sostegno ADAA/ADEE/ADMM/ADSS.
    - "punteggio": numero float con punto decimale (es. 13.17, 69.50) OPPURE null. 
      ⚠️ REGOLA TASSATIVA: Se il punteggio manca, non è riportato o non è rintracciabile nel testo, restituisci RIGOROSAMENTE null. NON USARE MAI 0 O "0" SE IL PUNTEGGIO MANCA!
-   - "posizione_graduatoria": posizione in graduatoria (es. "313", "342", "87"). Se non presente scrivi "Non riportata".
-   - "fascia": fascia della graduatoria (es. "Prima fascia", "Seconda fascia", "Terza fascia", "Graduatoria d'Istituto", "Interpello"). Se non specificata scrivi "Non specificata".
-   - "ore_settimanali": orario di cattedra/servizio (es. "36 ore", "18 ore", "12 ore"). Se non menzionato scrivi ESATTAMENTE "Non riportate".
+   - "posizione_graduatoria": posizione in graduatoria (es. "313", "342", "87"). Se non presente scrivi "Non disponibile".
+   - "fascia": fascia della graduatoria (es. "Prima fascia", "Seconda fascia", "Terza fascia", "Graduatoria d'Istituto", "Interpello"). Se non specificata scrivi "Non disponibile".
+   - "ore_settimanali": orario di cattedra/servizio (es. "36 ore", "18 ore", "12 ore"). Se non menzionato scrivi ESATTAMENTE "Non disponibile".
    - "decorrenza_contratto": intervallo esatto delle date di contratto nel formato "GG/MM/AAAA - GG/MM/AAAA" (es. "09/09/2026 - 30/06/2027", "17/09/2025 - 21/01/2026").
    - "link_del_documento": URL dell'atto o documento di riferimento (se reperito nel testo, altrimenti stringa vuota).
 
@@ -413,9 +415,9 @@ CAMPI DA ESTRARRE:
 - "tipo_posto": "comune" per posti ordinari/curricolari e ATA; "sostegno" per posti e cattedre di sostegno / minorati psicofisici / uditivi / della vista / ADAA / ADEE / ADMM / ADSS.
 - "punteggio": punteggio numerico float con punto decimale (es. 13.17, 69.50) OPPURE null.
   ⚠️ REGOLA TASSATIVA: Se il punteggio manca o non è esplicitato nel documento, restituisci RIGOROSAMENTE null. MAI RESTITUIRE 0 O "0" SE IL PUNTEGGIO MANCA!
-- "posizione_graduatoria": posizione numerica in graduatoria (es. "313", "342", "87"). Se assente scrivi "Non riportata".
-- "fascia": fascia di graduatoria (es. "Prima fascia", "Seconda fascia", "Terza fascia", "Graduatoria d'Istituto", "Interpello").
-- "ore_settimanali": orario di servizio (es. "36 ore", "18 ore", "12 ore"). Se non indicato scrivi ESATTAMENTE "Non riportate".
+- "posizione_graduatoria": posizione numerica in graduatoria (es. "313", "342", "87"). Se assente scrivi "Non disponibile".
+- "fascia": fascia di graduatoria (es. "Prima fascia", "Seconda fascia", "Terza fascia", "Graduatoria d'Istituto", "Interpello"). Se assente scrivi "Non disponibile".
+- "ore_settimanali": orario di servizio (es. "36 ore", "18 ore", "12 ore"). Se non indicato scrivi ESATTAMENTE "Non disponibile".
 - "decorrenza_contratto": intervallo date contratto nel formato "GG/MM/AAAA - GG/MM/AAAA" (es. "09/09/2026 - 30/06/2027"). Se presenti singole date "da" e "a", componi l'intervallo.
 
 Restituisci ESCLUSIVAMENTE un oggetto JSON valido:
@@ -615,7 +617,7 @@ Non aggiungere testo o commenti prima o dopo il JSON.`;
     return {
       mesi: "",
       giorni: "",
-      formattedPeriod: formattedPeriod || "Non specificata",
+      formattedPeriod: formattedPeriod || "Non disponibile",
     };
   };
 
@@ -1522,14 +1524,14 @@ const executeClientSideExtract = async (
             codice_meccanografico: item.codice_meccanografico || extractedData.codice_meccanografico || "",
             tipologia_personale: tipologia,
             profilo_lavorativo: safeDecodeURIComponent(item.profilo_lavorativo || item.profilo_professionale || (tipologia === "DOCENTE" ? "Docente TD" : "Collaboratore scolastico TD")),
-            classe_concorso_area_lab: cdcArea,
+            classe_concorso_area_lab: standardizePlaceholder(cdcArea, isClasseConcorsoPertinent(tipologia, item.profilo_lavorativo || item.profilo_professionale || "")),
             tipo_posto: tipoPosto,
-            classe_di_concorso: cdcArea,
+            classe_di_concorso: standardizePlaceholder(cdcArea, isClasseConcorsoPertinent(tipologia, item.profilo_lavorativo || item.profilo_professionale || "")),
             punteggio: punt,
-            posizione_graduatoria: item.posizione_graduatoria || "Non riportata",
-            fascia: item.fascia || item.graduatoria_fascia || "Non specificata",
-            ore_settimanali: item.ore_settimanali || "Non riportate",
-            decorrenza_contratto: duration.formattedPeriod,
+            posizione_graduatoria: standardizePlaceholder(item.posizione_graduatoria, true),
+            fascia: standardizePlaceholder(item.fascia || item.graduatoria_fascia, true),
+            ore_settimanali: standardizePlaceholder(item.ore_settimanali, true),
+            decorrenza_contratto: standardizePlaceholder(duration.formattedPeriod, true),
             durata_contratto_mesi: duration.mesi,
             durata_contratto_giorni: duration.giorni,
             link_del_documento: item.link_del_documento || item.pdf_url || res.navigatedUrl || targetUrl,
@@ -1885,14 +1887,14 @@ const executeClientSideExtract = async (
           codice_meccanografico: extracted.codice_meccanografico || "",
           tipologia_personale: pdfTipologia,
           profilo_lavorativo: safeDecodeURIComponent(extracted.profilo_lavorativo || extracted.profilo_professionale || (pdfTipologia === "DOCENTE" ? "Docente TD" : "Collaboratore scolastico TD")),
-          classe_concorso_area_lab: pdfCdcArea,
+          classe_concorso_area_lab: standardizePlaceholder(pdfCdcArea, isClasseConcorsoPertinent(pdfTipologia, extracted.profilo_lavorativo || extracted.profilo_professionale || "")),
           tipo_posto: pdfTipoPosto,
-          classe_di_concorso: pdfCdcArea,
+          classe_di_concorso: standardizePlaceholder(pdfCdcArea, isClasseConcorsoPertinent(pdfTipologia, extracted.profilo_lavorativo || extracted.profilo_professionale || "")),
           punteggio: pdfPunteggio,
-          posizione_graduatoria: extracted.posizione_graduatoria || "Non riportata",
-          fascia: extracted.fascia || extracted.graduatoria_fascia || "Non specificata",
-          ore_settimanali: extracted.ore_settimanali || "Non riportate",
-          decorrenza_contratto: duration.formattedPeriod,
+          posizione_graduatoria: standardizePlaceholder(extracted.posizione_graduatoria, true),
+          fascia: standardizePlaceholder(extracted.fascia || extracted.graduatoria_fascia, true),
+          ore_settimanali: standardizePlaceholder(extracted.ore_settimanali, true),
+          decorrenza_contratto: standardizePlaceholder(duration.formattedPeriod, true),
           durata_contratto_mesi: duration.mesi,
           durata_contratto_giorni: duration.giorni,
           link_del_documento: cleanPdfName,
@@ -2297,9 +2299,21 @@ const executeClientSideExtract = async (
       if (p === null || p === undefined) return "";
       if (typeof p === "number") return p.toFixed(2);
       const str = String(p).trim();
-      if (str === "null" || str === "Non riportato" || str === "Non specificato" || str === "N/D" || str === "-" || str === "") return "";
+      const lower = str.toLowerCase();
+      if (
+        lower === "null" ||
+        lower === "undefined" ||
+        lower === "non riportato" ||
+        lower === "non riportata" ||
+        lower === "non specificato" ||
+        lower === "non specificata" ||
+        lower === "non disponibile" ||
+        lower === "n/d" ||
+        lower === "-" ||
+        lower === ""
+      ) return "";
       const num = parseFloat(str.replace(",", "."));
-      return isNaN(num) ? str : num.toFixed(2);
+      return isNaN(num) ? "" : num.toFixed(2);
     };
 
     const rows: string[] = [];
@@ -2342,14 +2356,15 @@ const executeClientSideExtract = async (
           const schoolCode = formatCsvCodiceMeccanografico(c.codice_meccanografico || defaultSchoolCode, true);
           const tipologia = cleanFieldString(c.tipologia_personale, "ATA");
           const profilo = cleanFieldString(safeDecodeURIComponent(c.profilo_lavorativo || "Collaboratore scolastico TD"), "Collaboratore scolastico TD");
-          const classe = cleanFieldString(c.classe_concorso_area_lab || c.classe_di_concorso, "Non applicabile");
+          const isCdcPert = isClasseConcorsoPertinent(tipologia, profilo);
+          const classe = standardizePlaceholder(c.classe_concorso_area_lab || c.classe_di_concorso, isCdcPert);
           const tipoPosto = cleanFieldString(c.tipo_posto, "comune");
           const punteggio = formatCsvPunteggio(c.punteggio);
           const origine = cleanFieldString(c.origine_punteggio, (punteggio ? "Esplicito" : "Non disponibile"));
-          const posizione = cleanFieldString(c.posizione_graduatoria, "Non riportata");
-          const fascia = cleanFieldString(c.fascia, "Non specificata");
-          const ore = cleanFieldString(c.ore_settimanali, "Non riportate");
-          const decorrenza = duration.formattedPeriod;
+          const posizione = standardizePlaceholder(c.posizione_graduatoria, true);
+          const fascia = standardizePlaceholder(c.fascia || c.graduatoria_fascia, true);
+          const ore = standardizePlaceholder(c.ore_settimanali, true);
+          const decorrenza = standardizePlaceholder(duration.formattedPeriod, true);
           const mesi = duration.mesi;
           const giorni = duration.giorni;
           const noteIncrocio = cleanFieldString(c.note_cross_reference, "");
@@ -2383,14 +2398,15 @@ const executeClientSideExtract = async (
           const schoolCode = formatCsvCodiceMeccanografico(c.codice_meccanografico || data.codice_meccanografico, false);
           const tipologia = cleanFieldString(c.tipologia_personale, "ATA");
           const profilo = cleanFieldString(safeDecodeURIComponent(c.profilo_professionale || c.titolo_bando || "Personale Scolastico"), "Personale Scolastico");
-          const classe = cleanFieldString(c.classe_concorso_area_lab || c.classe_di_concorso, "Non applicabile");
+          const isCdcPert = isClasseConcorsoPertinent(tipologia, profilo);
+          const classe = standardizePlaceholder(c.classe_concorso_area_lab || c.classe_di_concorso, isCdcPert);
           const tipoPosto = cleanFieldString(c.tipo_posto, "comune");
           const punteggio = formatCsvPunteggio(c.punteggio);
           const origine = cleanFieldString(c.origine_punteggio, (punteggio ? "Esplicito" : "Non disponibile"));
-          const posizione = cleanFieldString(c.posizione_graduatoria, "Non riportata");
-          const fascia = cleanFieldString(c.graduatoria_fascia, "Non specificata");
-          const ore = cleanFieldString(c.ore_settimanali, "Non riportate");
-          const decorrenza = duration.formattedPeriod;
+          const posizione = standardizePlaceholder(c.posizione_graduatoria, true);
+          const fascia = standardizePlaceholder(c.graduatoria_fascia || c.fascia, true);
+          const ore = standardizePlaceholder(c.ore_settimanali, true);
+          const decorrenza = standardizePlaceholder(duration.formattedPeriod, true);
           const mesi = duration.mesi;
           const giorni = duration.giorni;
           const noteIncrocio = cleanFieldString(c.note_cross_reference, "");
@@ -2433,14 +2449,15 @@ const executeClientSideExtract = async (
           data.convocazioni_assistente_tecnico > 0 ? "Assistente Tecnico TD" :
           "Personale Scolastico"
         )), "Personale Scolastico");
-        const classe = cleanFieldString(data.classe_concorso_area_lab || data.classe_di_concorso, "Non applicabile");
+        const isCdcPert = isClasseConcorsoPertinent(tipologia, profilo);
+        const classe = standardizePlaceholder(data.classe_concorso_area_lab || data.classe_di_concorso, isCdcPert);
         const tipoPosto = cleanFieldString(data.tipo_posto, "comune");
         const punteggio = formatCsvPunteggio(data.punteggio);
         const origine = cleanFieldString(data.origine_punteggio, (punteggio ? "Esplicito" : "Non disponibile"));
-        const posizione = cleanFieldString(data.posizione_graduatoria, "Non riportata");
-        const fascia = cleanFieldString(data.graduatoria_fascia, "Non specificata");
-        const ore = cleanFieldString(data.ore_settimanali, "Non riportate");
-        const decorrenza = duration.formattedPeriod;
+        const posizione = standardizePlaceholder(data.posizione_graduatoria, true);
+        const fascia = standardizePlaceholder(data.graduatoria_fascia || data.fascia, true);
+        const ore = standardizePlaceholder(data.ore_settimanali, true);
+        const decorrenza = standardizePlaceholder(duration.formattedPeriod, true);
         const mesi = duration.mesi;
         const giorni = duration.giorni;
         const noteIncrocio = cleanFieldString(data.note_cross_reference, "");
@@ -3664,7 +3681,7 @@ const executeClientSideExtract = async (
                         <span className="text-sm font-bold text-white font-mono">
                           {singleResult.data.punteggio !== null && singleResult.data.punteggio !== undefined
                             ? (typeof singleResult.data.punteggio === "number" ? singleResult.data.punteggio.toFixed(2) : singleResult.data.punteggio)
-                            : "Non riportato (null)"}
+                            : "Non disponibile"}
                         </span>
                         {singleResult.data.punteggio === "Da verificare manualmente" && (
                           <span className="px-1.5 py-0.5 rounded text-[10px] font-semibold uppercase tracking-wider bg-amber-500/20 text-amber-300 border border-amber-500/30">
@@ -4168,7 +4185,7 @@ const executeClientSideExtract = async (
                         <span className="text-base font-bold text-white font-mono">
                           {pdfExtractResult.data.punteggio !== null && pdfExtractResult.data.punteggio !== undefined
                             ? (typeof pdfExtractResult.data.punteggio === "number" ? pdfExtractResult.data.punteggio.toFixed(2) : pdfExtractResult.data.punteggio)
-                            : "Non riportato (null)"}
+                            : "Non disponibile"}
                         </span>
                         {pdfExtractResult.data.origine_punteggio && pdfExtractResult.data.punteggio !== null && (
                           <span className={`px-1.5 py-0.5 rounded text-[10px] font-semibold uppercase tracking-wider ${

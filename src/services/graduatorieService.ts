@@ -182,6 +182,94 @@ export function resolveValidDocumentLink(
 }
 
 /**
+ * Determina se la Classe di Concorso / Area di Laboratorio è un campo pertinente
+ * per il profilo e la tipologia di personale indicati.
+ * - Pertinente per DOCENTE e per ATA Assistente Tecnico (laboratori)
+ * - NON pertinente per gli altri profili ATA (CS, AA, Cuoco, Guardarobiere, ecc.)
+ */
+export function isClasseConcorsoPertinent(tipologia: string, profilo: string): boolean {
+  const tip = (tipologia || "").trim().toUpperCase();
+  if (tip === "DOCENTE") return true;
+
+  const prof = (profilo || "").trim().toLowerCase();
+  if (
+    prof.includes("docente") ||
+    prof.includes("insegnante") ||
+    prof.includes("maestr") ||
+    prof.includes("profess") ||
+    prof.includes("cdc") ||
+    prof.includes("sostegno")
+  ) {
+    return true;
+  }
+
+  // Assistente Tecnico ATA con Area di Laboratorio
+  if (
+    prof.includes("assistente tecnico") ||
+    prof.includes("tecnico di laboratorio") ||
+    /\bat\b/i.test(prof)
+  ) {
+    return true;
+  }
+
+  return false;
+}
+
+/**
+ * Standardizza i placeholder delle celle secondo le due uniche categorie ammesse:
+ * - "Non applicabile": se il campo non è pertinente per quel tipo posto/profilo
+ * - "Non disponibile": se il campo è pertinente ma il dato non è stato trovato nella fonte
+ * Rimuove definitivamente "Non riportata", "Non riportate", "Non specificata", "Non specificato", "null", ecc.
+ */
+export function standardizePlaceholder(
+  val: any,
+  isPertinent: boolean,
+  validExplicitFallback?: string
+): string {
+  if (val === null || val === undefined) {
+    return isPertinent ? "Non disponibile" : "Non applicabile";
+  }
+  const s = String(val).trim();
+  const lower = s.toLowerCase();
+
+  // Se è vuoto o un placeholder obsoleto / generico
+  if (
+    !s ||
+    lower === "null" ||
+    lower === "undefined" ||
+    lower === "non riportata" ||
+    lower === "non riportato" ||
+    lower === "non riportate" ||
+    lower === "non specificata" ||
+    lower === "non specificato" ||
+    lower === "non specificate" ||
+    lower === "n/d" ||
+    lower === "nd" ||
+    lower === "-" ||
+    lower === "assente" ||
+    lower === "mancante"
+  ) {
+    if (!isPertinent) {
+      return "Non applicabile";
+    }
+    return validExplicitFallback !== undefined ? validExplicitFallback : "Non disponibile";
+  }
+
+  // Se era già esplicitamente "non applicabile"
+  if (lower === "non applicabile") {
+    return isPertinent ? (validExplicitFallback !== undefined ? validExplicitFallback : "Non disponibile") : "Non applicabile";
+  }
+
+  // Se era già esplicitamente "non disponibile"
+  if (lower === "non disponibile") {
+    return isPertinent ? "Non disponibile" : "Non applicabile";
+  }
+
+  // Altrimenti è un valore effettivo valido
+  return s;
+}
+
+/**
  * Normalizza il profilo lavorativo ATA o la CDC docente in una chiave canonica di confronto.
  * Esempio:
  *  "Collaboratore scolastico" -> "CS"
