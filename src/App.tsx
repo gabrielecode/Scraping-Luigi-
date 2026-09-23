@@ -48,6 +48,11 @@ import {
   isValidCodiceMeccanografico,
   extractCodiceMeccanograficoFromText,
   normalizeCodiceMeccanografico,
+  safeDecodeURIComponent,
+  escapeCsvField,
+  cleanFieldString,
+  formatCsvCodiceMeccanografico,
+  resolveValidDocumentLink,
 } from "./services/graduatorieService";
 
 export { GRADUATORIA_EXTRACTION_SYSTEM_PROMPT };
@@ -1362,18 +1367,32 @@ const executeClientSideExtract = async (
       extractedData = { ...defaultData, ...parsed };
 
       if (inputNominativo && inputNominativo.trim() && !extractedData.nominativo) {
-        extractedData.nominativo = inputNominativo.trim();
+        extractedData.nominativo = safeDecodeURIComponent(inputNominativo.trim());
+      } else if (extractedData.nominativo) {
+        extractedData.nominativo = safeDecodeURIComponent(extractedData.nominativo);
       }
 
-      // Infer school name / code if missing
+      // Infer school name / code if missing (decodifica testi da URL-encoding)
       if (!extractedData.nome_istituto) {
         try {
           const u = new URL(res.navigatedUrl || targetUrl);
-          const cleanHost = u.hostname.replace(/^www\./, "");
-          extractedData.nome_istituto = cleanHost.toUpperCase();
+          const pathSegments = u.pathname.split("/").filter(Boolean);
+          const candidateSegment = pathSegments.slice().reverse().find(s => 
+            !/^(index|default|home|page|albo|trasparenza|atti|documenti|bacheca|login|it|en|categoria|category|rubrica|notizie)$/i.test(s) &&
+            !/^\d+$/.test(s) &&
+            s.length > 2
+          );
+          if (candidateSegment) {
+            extractedData.nome_istituto = safeDecodeURIComponent(candidateSegment).replace(/[-_]/g, " ").trim();
+          } else {
+            const cleanHost = u.hostname.replace(/^www\./, "");
+            extractedData.nome_istituto = safeDecodeURIComponent(cleanHost).toUpperCase();
+          }
         } catch {
-          extractedData.nome_istituto = targetUrl;
+          extractedData.nome_istituto = safeDecodeURIComponent(targetUrl);
         }
+      } else {
+        extractedData.nome_istituto = safeDecodeURIComponent(extractedData.nome_istituto);
       }
 
       // -------------------------------------------------------------
@@ -1431,16 +1450,20 @@ const executeClientSideExtract = async (
         if (candidate && isValidCodiceMeccanografico(candidate)) {
           extractedData.codice_meccanografico = normalizeCodiceMeccanografico(candidate);
           res.logs.push(`🏫 Codice meccanografico individuato: ${extractedData.codice_meccanografico}`);
+        } else {
+          // La ricerca è stata fatta ma non trovata
+          extractedData.codice_meccanografico = "Non disponibile";
         }
       }
 
-      // Propaga il codice meccanografico a tutte le nomine del contratto
-      if (extractedData.codice_meccanografico && Array.isArray(extractedData.nomine_contratti)) {
+      // Propaga il codice meccanografico e nome istituto a tutte le nomine del contratto
+      if (Array.isArray(extractedData.nomine_contratti)) {
         extractedData.nomine_contratti = extractedData.nomine_contratti.map((item: any) => ({
           ...item,
+          nome_istituto: safeDecodeURIComponent(item.nome_istituto || extractedData.nome_istituto || ""),
           codice_meccanografico: (item.codice_meccanografico && isValidCodiceMeccanografico(item.codice_meccanografico))
             ? normalizeCodiceMeccanografico(item.codice_meccanografico)
-            : extractedData.codice_meccanografico
+            : (isValidCodiceMeccanografico(extractedData.codice_meccanografico) ? normalizeCodiceMeccanografico(extractedData.codice_meccanografico) : (extractedData.codice_meccanografico || "Non disponibile"))
         }));
       }
 
@@ -1494,11 +1517,11 @@ const executeClientSideExtract = async (
 
           const baseItem = {
             ...item,
-            nominativo: item.nominativo || extractedData.nominativo || "",
-            nome_istituto: item.nome_istituto || extractedData.nome_istituto || "",
+            nominativo: safeDecodeURIComponent(item.nominativo || extractedData.nominativo || ""),
+            nome_istituto: safeDecodeURIComponent(item.nome_istituto || extractedData.nome_istituto || ""),
             codice_meccanografico: item.codice_meccanografico || extractedData.codice_meccanografico || "",
             tipologia_personale: tipologia,
-            profilo_lavorativo: item.profilo_lavorativo || item.profilo_professionale || (tipologia === "DOCENTE" ? "Docente TD" : "Collaboratore scolastico TD"),
+            profilo_lavorativo: safeDecodeURIComponent(item.profilo_lavorativo || item.profilo_professionale || (tipologia === "DOCENTE" ? "Docente TD" : "Collaboratore scolastico TD")),
             classe_concorso_area_lab: cdcArea,
             tipo_posto: tipoPosto,
             classe_di_concorso: cdcArea,
@@ -1833,7 +1856,9 @@ const executeClientSideExtract = async (
       if (!isValidCodiceMeccanografico(extracted.codice_meccanografico)) {
         const found = extractCodiceMeccanograficoFromText(content, selectedPdfFile.name);
         if (found) {
-          extracted.codice_meccanografico = found;
+          extracted.codice_meccanografico = normalizeCodiceMeccanografico(found);
+        } else {
+          extracted.codice_meccanografico = "Non disponibile";
         }
       } else {
         extracted.codice_meccanografico = normalizeCodiceMeccanografico(extracted.codice_meccanografico);
@@ -1850,12 +1875,16 @@ const executeClientSideExtract = async (
       const pdfTipoPosto = inferTipoPosto(extracted);
       const pdfPunteggio = normalizePunteggio(extracted.punteggio);
 
+      const rawPdfName = selectedPdfFile.name;
+      const cleanPdfName = safeDecodeURIComponent(rawPdfName);
+      const cleanSchoolName = safeDecodeURIComponent(extracted.nome_istituto || "Istituto Scolastico");
+
       const crossPdf = crossReferenceNomina(
         {
-          nome_istituto: extracted.nome_istituto || "Istituto Scolastico",
+          nome_istituto: cleanSchoolName,
           codice_meccanografico: extracted.codice_meccanografico || "",
           tipologia_personale: pdfTipologia,
-          profilo_lavorativo: extracted.profilo_lavorativo || extracted.profilo_professionale || (pdfTipologia === "DOCENTE" ? "Docente TD" : "Collaboratore scolastico TD"),
+          profilo_lavorativo: safeDecodeURIComponent(extracted.profilo_lavorativo || extracted.profilo_professionale || (pdfTipologia === "DOCENTE" ? "Docente TD" : "Collaboratore scolastico TD")),
           classe_concorso_area_lab: pdfCdcArea,
           tipo_posto: pdfTipoPosto,
           classe_di_concorso: pdfCdcArea,
@@ -1866,21 +1895,21 @@ const executeClientSideExtract = async (
           decorrenza_contratto: duration.formattedPeriod,
           durata_contratto_mesi: duration.mesi,
           durata_contratto_giorni: duration.giorni,
-          link_del_documento: selectedPdfFile.name,
+          link_del_documento: cleanPdfName,
         } as any,
         graduatorie,
         {
           codice_meccanografico: extracted.codice_meccanografico,
-          nome_istituto: extracted.nome_istituto,
+          nome_istituto: cleanSchoolName,
         }
       );
 
       setPdfExtractResult({
         success: true,
-        filename: selectedPdfFile.name,
+        filename: cleanPdfName,
         size: selectedPdfFile.size,
         data: {
-          nome_istituto: crossPdf.nome_istituto || "Istituto Scolastico",
+          nome_istituto: safeDecodeURIComponent(crossPdf.nome_istituto || "Istituto Scolastico"),
           codice_meccanografico: crossPdf.codice_meccanografico || "",
           tipologia_personale: pdfTipologia,
           profilo_lavorativo: crossPdf.profilo_lavorativo,
@@ -1896,7 +1925,7 @@ const executeClientSideExtract = async (
           decorrenza_contratto: duration.formattedPeriod,
           durata_contratto_mesi: duration.mesi,
           durata_contratto_giorni: duration.giorni,
-          link_del_documento: selectedPdfFile.name,
+          link_del_documento: cleanPdfName,
           // Compatibilità pregressa
           graduatoria_fascia: crossPdf.fascia,
           profilo_professionale: crossPdf.profilo_lavorativo,
@@ -1988,29 +2017,36 @@ const executeClientSideExtract = async (
     for (let i = startIdx; i < lines.length; i++) {
       const line = lines[i];
       if (!line) continue;
-      const parts = line.split(/[;,]/).map(p => p.trim().replace(/^["']|["']$/g, ""));
+      const parts = line.split(/[;,]/).map(p => {
+        let clean = p.trim();
+        while (clean.length >= 2 && clean.startsWith('"') && clean.endsWith('"')) {
+          clean = clean.slice(1, -1).trim();
+        }
+        return clean.replace(/""/g, '"');
+      });
 
       let foundUrl = "";
       let foundNom: string | undefined = undefined;
 
       if (hasHeader) {
         if (parts[urlCol]) foundUrl = parts[urlCol];
-        if (nomCol !== -1 && parts[nomCol]) foundNom = parts[nomCol];
+        if (nomCol !== -1 && parts[nomCol]) foundNom = safeDecodeURIComponent(parts[nomCol]);
       } else {
         // Cerca colonna con URL
         for (let pIdx = 0; pIdx < parts.length; pIdx++) {
           const val = parts[pIdx];
-          if (
+          const isLikelyUrl = !val.includes(" ") && (
             val.startsWith("http://") ||
             val.startsWith("https://") ||
             val.includes(".edu.it") ||
             val.includes(".gov.it") ||
             val.includes("www.") ||
-            val.includes(".it")
-          ) {
+            /\.[a-z]{2,}(\/|$|\?)/i.test(val)
+          );
+          if (isLikelyUrl) {
             foundUrl = val;
             const otherCol = parts.find((o, idx) => idx !== pIdx && o.length > 1 && !o.startsWith("http"));
-            if (otherCol) foundNom = otherCol;
+            if (otherCol) foundNom = safeDecodeURIComponent(otherCol);
             break;
           }
         }
@@ -2020,7 +2056,14 @@ const executeClientSideExtract = async (
         if (!foundUrl.startsWith("http://") && !foundUrl.startsWith("https://")) {
           foundUrl = `https://${foundUrl}`;
         }
-        results.push({ url: foundUrl, nominativo: foundNom ? foundNom.trim() : undefined });
+        try {
+          const u = new URL(foundUrl);
+          if (u.hostname.includes(".") || u.hostname === "localhost") {
+            results.push({ url: foundUrl, nominativo: foundNom ? foundNom.trim() : undefined });
+          }
+        } catch {
+          // Scarta se non è un URL valido
+        }
       }
     }
 
@@ -2265,55 +2308,70 @@ const executeClientSideExtract = async (
       const data = r.data || ({} as any);
 
       // School Name: from data or URL
-      let defaultSchoolName = data.nome_istituto || "";
+      let defaultSchoolName = data.nome_istituto ? safeDecodeURIComponent(data.nome_istituto) : "";
       if (!defaultSchoolName) {
         try {
           const u = new URL(r.navigatedUrl || r.url);
-          defaultSchoolName = u.hostname.replace(/^www\./, "").toUpperCase();
+          const pathSegments = u.pathname.split("/").filter(Boolean);
+          const candidateSegment = pathSegments.slice().reverse().find(s => 
+            !/^(index|default|home|page|albo|trasparenza|atti|documenti|bacheca|login|it|en|categoria|category|rubrica|notizie)$/i.test(s) &&
+            !/^\d+$/.test(s) &&
+            s.length > 2
+          );
+          if (candidateSegment) {
+            defaultSchoolName = safeDecodeURIComponent(candidateSegment).replace(/[-_]/g, " ").trim();
+          } else {
+            defaultSchoolName = safeDecodeURIComponent(u.hostname.replace(/^www\./, "")).toUpperCase();
+          }
         } catch {
-          defaultSchoolName = r.url || "Istituto Scolastico";
+          defaultSchoolName = safeDecodeURIComponent(r.url || "Istituto Scolastico");
         }
       }
-      const defaultSchoolCode = data.codice_meccanografico || "";
+      defaultSchoolName = safeDecodeURIComponent(defaultSchoolName);
+      
+      // Verifica se la ricerca del codice meccanografico è stata effettuata
+      const isAlboOnly = Array.isArray(data.albo_contratti) && data.albo_contratti.length > 0 && (!data.nomine_contratti || data.nomine_contratti.length === 0);
+      const wasExtractionSearched = !isAlboOnly && r.status !== "error" && Boolean(r.data);
+      const defaultSchoolCode = formatCsvCodiceMeccanografico(data.codice_meccanografico, wasExtractionSearched);
 
       // 1. If nomine_contratti is present and has elements, create one row per nomination
       if (Array.isArray(data.nomine_contratti) && data.nomine_contratti.length > 0) {
         for (const c of data.nomine_contratti) {
           const duration = calculateContractDuration(c.decorrenza_contratto || "");
-          const schoolName = c.nome_istituto || defaultSchoolName;
-          const schoolCode = c.codice_meccanografico || defaultSchoolCode;
-          const tipologia = c.tipologia_personale || "ATA";
-          const profilo = c.profilo_lavorativo || "Collaboratore scolastico TD";
-          const classe = c.classe_concorso_area_lab || c.classe_di_concorso || "Non applicabile";
-          const tipoPosto = c.tipo_posto || "comune";
+          const schoolName = cleanFieldString(safeDecodeURIComponent(c.nome_istituto || defaultSchoolName), "Istituto Scolastico");
+          const schoolCode = formatCsvCodiceMeccanografico(c.codice_meccanografico || defaultSchoolCode, true);
+          const tipologia = cleanFieldString(c.tipologia_personale, "ATA");
+          const profilo = cleanFieldString(safeDecodeURIComponent(c.profilo_lavorativo || "Collaboratore scolastico TD"), "Collaboratore scolastico TD");
+          const classe = cleanFieldString(c.classe_concorso_area_lab || c.classe_di_concorso, "Non applicabile");
+          const tipoPosto = cleanFieldString(c.tipo_posto, "comune");
           const punteggio = formatCsvPunteggio(c.punteggio);
-          const origine = c.origine_punteggio || (punteggio ? "Esplicito" : "Non disponibile");
-          const posizione = c.posizione_graduatoria || "Non riportata";
-          const fascia = c.fascia || "Non specificata";
-          const ore = c.ore_settimanali || "Non riportate";
+          const origine = cleanFieldString(c.origine_punteggio, (punteggio ? "Esplicito" : "Non disponibile"));
+          const posizione = cleanFieldString(c.posizione_graduatoria, "Non riportata");
+          const fascia = cleanFieldString(c.fascia, "Non specificata");
+          const ore = cleanFieldString(c.ore_settimanali, "Non riportate");
           const decorrenza = duration.formattedPeriod;
           const mesi = duration.mesi;
           const giorni = duration.giorni;
-          const noteIncrocio = c.note_cross_reference || "";
-          const link = c.link_del_documento || r.navigatedUrl || r.url;
+          const noteIncrocio = cleanFieldString(c.note_cross_reference, "");
+          const link = resolveValidDocumentLink(c.link_del_documento, r.navigatedUrl || r.url);
 
           rows.push([
-            `"${schoolName.replace(/"/g, '""')}"`,
-            `"${schoolCode.replace(/"/g, '""')}"`,
-            `"${tipologia.replace(/"/g, '""')}"`,
-            `"${profilo.replace(/"/g, '""')}"`,
-            `"${classe.replace(/"/g, '""')}"`,
-            `"${tipoPosto.replace(/"/g, '""')}"`,
-            `"${punteggio.replace(/"/g, '""')}"`,
-            `"${origine.replace(/"/g, '""')}"`,
-            `"${posizione.replace(/"/g, '""')}"`,
-            `"${fascia.replace(/"/g, '""')}"`,
-            `"${ore.replace(/"/g, '""')}"`,
-            `"${decorrenza.replace(/"/g, '""')}"`,
-            `"${mesi}"`,
-            `"${giorni}"`,
-            `"${noteIncrocio.replace(/"/g, '""')}"`,
-            `"${link.replace(/"/g, '""')}"`,
+            escapeCsvField(schoolName),
+            escapeCsvField(schoolCode),
+            escapeCsvField(tipologia),
+            escapeCsvField(profilo),
+            escapeCsvField(classe),
+            escapeCsvField(tipoPosto),
+            escapeCsvField(punteggio),
+            escapeCsvField(origine),
+            escapeCsvField(posizione),
+            escapeCsvField(fascia),
+            escapeCsvField(ore),
+            escapeCsvField(decorrenza),
+            escapeCsvField(mesi),
+            escapeCsvField(giorni),
+            escapeCsvField(noteIncrocio),
+            escapeCsvField(link),
           ].join(","));
         }
       } 
@@ -2321,40 +2379,40 @@ const executeClientSideExtract = async (
       else if (Array.isArray(data.albo_contratti) && data.albo_contratti.length > 0) {
         for (const c of data.albo_contratti) {
           const duration = calculateContractDuration("", c.decorrenza_da, c.decorrenza_a);
-          const schoolName = defaultSchoolName;
-          const schoolCode = defaultSchoolCode;
-          const tipologia = c.tipologia_personale || "ATA";
-          const profilo = c.profilo_professionale || c.titolo_bando || "Personale Scolastico";
-          const classe = c.classe_concorso_area_lab || c.classe_di_concorso || "Non applicabile";
-          const tipoPosto = c.tipo_posto || "comune";
+          const schoolName = cleanFieldString(safeDecodeURIComponent(defaultSchoolName), "Istituto Scolastico");
+          const schoolCode = formatCsvCodiceMeccanografico(c.codice_meccanografico || data.codice_meccanografico, false);
+          const tipologia = cleanFieldString(c.tipologia_personale, "ATA");
+          const profilo = cleanFieldString(safeDecodeURIComponent(c.profilo_professionale || c.titolo_bando || "Personale Scolastico"), "Personale Scolastico");
+          const classe = cleanFieldString(c.classe_concorso_area_lab || c.classe_di_concorso, "Non applicabile");
+          const tipoPosto = cleanFieldString(c.tipo_posto, "comune");
           const punteggio = formatCsvPunteggio(c.punteggio);
-          const origine = c.origine_punteggio || (punteggio ? "Esplicito" : "Non disponibile");
-          const posizione = c.posizione_graduatoria || "Non riportata";
-          const fascia = c.graduatoria_fascia || "Non specificata";
-          const ore = c.ore_settimanali || "Non riportate";
+          const origine = cleanFieldString(c.origine_punteggio, (punteggio ? "Esplicito" : "Non disponibile"));
+          const posizione = cleanFieldString(c.posizione_graduatoria, "Non riportata");
+          const fascia = cleanFieldString(c.graduatoria_fascia, "Non specificata");
+          const ore = cleanFieldString(c.ore_settimanali, "Non riportate");
           const decorrenza = duration.formattedPeriod;
           const mesi = duration.mesi;
           const giorni = duration.giorni;
-          const noteIncrocio = c.note_cross_reference || "";
-          const link = c.pdf_url || r.navigatedUrl || r.url;
+          const noteIncrocio = cleanFieldString(c.note_cross_reference, "");
+          const link = resolveValidDocumentLink(c.pdf_url, r.navigatedUrl || r.url);
 
           rows.push([
-            `"${schoolName.replace(/"/g, '""')}"`,
-            `"${schoolCode.replace(/"/g, '""')}"`,
-            `"${tipologia.replace(/"/g, '""')}"`,
-            `"${profilo.replace(/"/g, '""')}"`,
-            `"${classe.replace(/"/g, '""')}"`,
-            `"${tipoPosto.replace(/"/g, '""')}"`,
-            `"${punteggio.replace(/"/g, '""')}"`,
-            `"${origine.replace(/"/g, '""')}"`,
-            `"${posizione.replace(/"/g, '""')}"`,
-            `"${fascia.replace(/"/g, '""')}"`,
-            `"${ore.replace(/"/g, '""')}"`,
-            `"${decorrenza.replace(/"/g, '""')}"`,
-            `"${mesi}"`,
-            `"${giorni}"`,
-            `"${noteIncrocio.replace(/"/g, '""')}"`,
-            `"${link.replace(/"/g, '""')}"`,
+            escapeCsvField(schoolName),
+            escapeCsvField(schoolCode),
+            escapeCsvField(tipologia),
+            escapeCsvField(profilo),
+            escapeCsvField(classe),
+            escapeCsvField(tipoPosto),
+            escapeCsvField(punteggio),
+            escapeCsvField(origine),
+            escapeCsvField(posizione),
+            escapeCsvField(fascia),
+            escapeCsvField(ore),
+            escapeCsvField(decorrenza),
+            escapeCsvField(mesi),
+            escapeCsvField(giorni),
+            escapeCsvField(noteIncrocio),
+            escapeCsvField(link),
           ].join(","));
         }
       }
@@ -2365,51 +2423,51 @@ const executeClientSideExtract = async (
           data.decorrenza_da,
           data.decorrenza_a
         );
-        const schoolName = defaultSchoolName;
-        const schoolCode = defaultSchoolCode;
-        const tipologia = data.tipologia_personale || "ATA";
-        const profilo = data.profilo_lavorativo || data.profilo_professionale || (
+        const schoolName = cleanFieldString(safeDecodeURIComponent(defaultSchoolName), "Istituto Scolastico");
+        const schoolCode = formatCsvCodiceMeccanografico(defaultSchoolCode, wasExtractionSearched);
+        const tipologia = cleanFieldString(data.tipologia_personale, "ATA");
+        const profilo = cleanFieldString(safeDecodeURIComponent(data.profilo_lavorativo || data.profilo_professionale || (
           data.convocazioni_collaboratore_scolastico > 0 ? "Collaboratore Scolastico TD" :
           data.convocazioni_assistente_amministrativo > 0 ? "Assistente Amministrativo TD" :
           data.convocazioni_docenti > 0 ? "Docente TD" :
           data.convocazioni_assistente_tecnico > 0 ? "Assistente Tecnico TD" :
           "Personale Scolastico"
-        );
-        const classe = data.classe_concorso_area_lab || data.classe_di_concorso || "Non applicabile";
-        const tipoPosto = data.tipo_posto || "comune";
+        )), "Personale Scolastico");
+        const classe = cleanFieldString(data.classe_concorso_area_lab || data.classe_di_concorso, "Non applicabile");
+        const tipoPosto = cleanFieldString(data.tipo_posto, "comune");
         const punteggio = formatCsvPunteggio(data.punteggio);
-        const origine = data.origine_punteggio || (punteggio ? "Esplicito" : "Non disponibile");
-        const posizione = data.posizione_graduatoria || "Non riportata";
-        const fascia = data.graduatoria_fascia || "Non specificata";
-        const ore = data.ore_settimanali || "Non riportate";
+        const origine = cleanFieldString(data.origine_punteggio, (punteggio ? "Esplicito" : "Non disponibile"));
+        const posizione = cleanFieldString(data.posizione_graduatoria, "Non riportata");
+        const fascia = cleanFieldString(data.graduatoria_fascia, "Non specificata");
+        const ore = cleanFieldString(data.ore_settimanali, "Non riportate");
         const decorrenza = duration.formattedPeriod;
         const mesi = duration.mesi;
         const giorni = duration.giorni;
-        const noteIncrocio = data.note_cross_reference || "";
-        const link = data.link_del_documento || r.navigatedUrl || r.url;
+        const noteIncrocio = cleanFieldString(data.note_cross_reference, "");
+        const link = resolveValidDocumentLink(data.link_del_documento, r.navigatedUrl || r.url);
 
         rows.push([
-          `"${schoolName.replace(/"/g, '""')}"`,
-          `"${schoolCode.replace(/"/g, '""')}"`,
-          `"${tipologia.replace(/"/g, '""')}"`,
-          `"${profilo.replace(/"/g, '""')}"`,
-          `"${classe.replace(/"/g, '""')}"`,
-          `"${tipoPosto.replace(/"/g, '""')}"`,
-          `"${punteggio.replace(/"/g, '""')}"`,
-          `"${origine.replace(/"/g, '""')}"`,
-          `"${posizione.replace(/"/g, '""')}"`,
-          `"${fascia.replace(/"/g, '""')}"`,
-          `"${ore.replace(/"/g, '""')}"`,
-          `"${decorrenza.replace(/"/g, '""')}"`,
-          `"${mesi}"`,
-          `"${giorni}"`,
-          `"${noteIncrocio.replace(/"/g, '""')}"`,
-          `"${link.replace(/"/g, '""')}"`,
+          escapeCsvField(schoolName),
+          escapeCsvField(schoolCode),
+          escapeCsvField(tipologia),
+          escapeCsvField(profilo),
+          escapeCsvField(classe),
+          escapeCsvField(tipoPosto),
+          escapeCsvField(punteggio),
+          escapeCsvField(origine),
+          escapeCsvField(posizione),
+          escapeCsvField(fascia),
+          escapeCsvField(ore),
+          escapeCsvField(decorrenza),
+          escapeCsvField(mesi),
+          escapeCsvField(giorni),
+          escapeCsvField(noteIncrocio),
+          escapeCsvField(link),
         ].join(","));
       }
     }
 
-    return [headers.join(","), ...rows].join("\n");
+    return [headers.map(escapeCsvField).join(","), ...rows].join("\n");
   };
 
   // Export results to GitHub securely and directly from client-side
@@ -3303,13 +3361,13 @@ const executeClientSideExtract = async (
                                     <ExternalLink className="w-3 h-3 shrink-0 text-slate-500" />
                                   </a>
                                   <div className="flex items-center gap-1.5 text-[11px] flex-wrap">
-                                    {r.data.codice_meccanografico ? (
+                                    {isValidCodiceMeccanografico(r.data.codice_meccanografico) ? (
                                       <span className="px-1.5 py-0.5 bg-indigo-500/20 text-indigo-300 font-mono font-semibold rounded border border-indigo-500/30 text-[10px] tracking-wide" title="Codice Meccanografico Ministeriale">
-                                        {r.data.codice_meccanografico}
+                                        {normalizeCodiceMeccanografico(r.data.codice_meccanografico)}
                                       </span>
                                     ) : (
-                                      <span className="px-1.5 py-0.5 bg-slate-800 text-slate-500 font-mono rounded text-[10px]" title="Codice Meccanografico non rilevato">
-                                        C.M. assente
+                                      <span className="px-1.5 py-0.5 bg-slate-800 text-slate-500 font-mono rounded text-[10px]" title="Codice Meccanografico">
+                                        {r.data.codice_meccanografico === "Non disponibile" ? "Non disponibile" : "C.M. assente"}
                                       </span>
                                     )}
                                     {r.data.nome_istituto && (
@@ -3524,12 +3582,14 @@ const executeClientSideExtract = async (
                     <div className="flex items-center gap-3 flex-wrap">
                       <div className="bg-slate-900 border border-slate-700/80 px-3.5 py-2 rounded-xl flex flex-col items-start">
                         <span className="text-[10px] uppercase font-bold text-slate-400">Codice Meccanografico (C.M.)</span>
-                        {singleResult.data.codice_meccanografico ? (
+                        {isValidCodiceMeccanografico(singleResult.data.codice_meccanografico) ? (
                           <span className="text-sm font-mono font-bold text-indigo-300">
-                            {singleResult.data.codice_meccanografico}
+                            {normalizeCodiceMeccanografico(singleResult.data.codice_meccanografico)}
                           </span>
                         ) : (
-                          <span className="text-xs text-slate-500 font-mono">Non individuato</span>
+                          <span className="text-xs text-slate-400 font-mono">
+                            {singleResult.data.codice_meccanografico === "Non disponibile" ? "Non disponibile" : "Non individuato"}
+                          </span>
                         )}
                       </div>
                       {singleResult.data.nominativo && (

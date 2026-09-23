@@ -3,6 +3,185 @@ import { GraduatoriaIstituto, GraduatoriaIstitutoEntry, NominaContrattoItem, Alb
 const STORAGE_KEY = "scuola_graduatorie_istituto";
 
 /**
+ * Decodifica in modo sicuro una stringa con codifica URL (%20, %22, ecc.),
+ * gestendo doppie codifiche e stringhe malformate senza generare eccezioni.
+ * Esempio: "PALMA%20I.C.%202" -> "PALMA I.C. 2"
+ */
+export function safeDecodeURIComponent(val?: string | null): string {
+  if (!val) return "";
+  let str = String(val);
+  for (let i = 0; i < 2; i++) {
+    if (!str.includes("%")) break;
+    try {
+      const decoded = decodeURIComponent(str.replace(/\+/g, " "));
+      if (decoded === str) break;
+      str = decoded;
+    } catch {
+      try {
+        const partialDecoded = str.replace(/%([0-9A-Fa-f]{2})/g, (_, hex) => {
+          try {
+            return decodeURIComponent(`%${hex}`);
+          } catch {
+            return `%${hex}`;
+          }
+        });
+        if (partialDecoded === str) break;
+        str = partialDecoded;
+      } catch {
+        break;
+      }
+    }
+  }
+  return str;
+}
+
+/**
+ * Esegue l'escaping RFC 4180 di un campo per CSV in modo pulito e sicuro:
+ * - Se il valore contiene virgolette già moltiplicate (es. """" o """ o "") derivanti
+ *   da cicli multipli di serializzazione/parsing, le normalizza a singole virgolette.
+ * - Converte virgolette con barre d'escape (tipo \") a virgolette standard.
+ * - Rimuove virgolette esterne di contenimento se presenti come residuo di wrapping.
+ * - Raddoppia ogni virgoletta interna esattamente una volta: " -> ""
+ * - Racchiude infine il valore tra virgolette esterne: "valore"
+ * 
+ * Esempio:
+ *  `Istituto "A.Amici"` -> `"Istituto ""A.Amici"""`
+ *  `"Istituto ""A.Amici"""` -> `"Istituto ""A.Amici"""` (nessun raddoppio moltiplicativo)
+ */
+export function escapeCsvField(val: any): string {
+  if (val === null || val === undefined) return '""';
+  let str = String(val).trim();
+  if (!str) return '""';
+
+  // Protezione globale da "null" o "undefined" letterali
+  const lower = str.toLowerCase();
+  if (lower === "null" || lower === "undefined") {
+    return '""';
+  }
+
+  // Rimuovi barre di escape tipo \" o \\"
+  str = str.replace(/\\"/g, '"');
+
+  // Se l'intero valore è racchiuso tra virgolette esterne residue da un precedente export CSV
+  while (str.length >= 2 && str.startsWith('"') && str.endsWith('"')) {
+    if (str === '""') return '""';
+    str = str.slice(1, -1).trim();
+  }
+
+  // Normalizza sequenze consecutive di virgolette multiple a singola virgoletta
+  str = str.replace(/"+/g, '"');
+
+  // Applica l'escaping canonico RFC 4180: ogni virgoletta raddoppiata una sola volta
+  const escaped = str.replace(/"/g, '""');
+
+  return `"${escaped}"`;
+}
+
+/**
+ * Pulisce qualsiasi valore da stringhe letterali "null", "undefined", "none", ecc.
+ */
+export function cleanFieldString(val: any, fallback: string = ""): string {
+  if (val === null || val === undefined) return fallback;
+  const s = String(val).trim();
+  const lower = s.toLowerCase();
+  if (lower === "null" || lower === "undefined" || lower === "none" || lower === "[object object]") {
+    return fallback;
+  }
+  return s;
+}
+
+/**
+ * Formatta il Codice Meccanografico per l'output:
+ * - Se valido -> restituito normalizzato in maiuscolo
+ * - Se non valido o mancante ("null", undefined, vuoto):
+ *    - se la ricerca è stata fatta ma non trovata -> "Non disponibile"
+ *    - se il dato non è mai stato cercato -> "" (campo vuoto)
+ */
+export function formatCsvCodiceMeccanografico(val: any, wasSearched: boolean): string {
+  const cleaned = cleanFieldString(val, "");
+  if (!cleaned) {
+    return wasSearched ? "Non disponibile" : "";
+  }
+  if (cleaned.toLowerCase() === "non disponibile") {
+    return "Non disponibile";
+  }
+  if (isValidCodiceMeccanografico(cleaned)) {
+    return normalizeCodiceMeccanografico(cleaned);
+  }
+  return wasSearched ? "Non disponibile" : "";
+}
+
+/**
+ * Risolve e valida il link del documento o della fonte:
+ * - Se rawLink è un URL assoluto valido (http/https senza spazi o caratteri spuri): lo restituisce.
+ * - Se rawLink è un percorso relativo (/albo/doc.pdf) ed è disponibile visitedUrl: lo risolve rispetto alla base.
+ * - Se rawLink non è valido (es. "https://" + nome scuola, stringhe con spazi, protocolli fittizi, vuoto, null):
+ *   usa come fallback l'URL della homepage del sito della scuola (es. https://www.scuola.edu.it)
+ *   da cui è partita la scansione.
+ * - Garantisce che il campo contenga SEMPRE un URL valido e cliccabile.
+ */
+export function resolveValidDocumentLink(
+  rawLink: string | null | undefined,
+  visitedUrl: string | null | undefined
+): string {
+  // Calcola la homepage di fallback dal sito visitato da cui è partita la scansione
+  let fallbackHomepage = "";
+  if (visitedUrl && typeof visitedUrl === "string") {
+    const cleanVisited = visitedUrl.trim();
+    try {
+      const u = new URL(cleanVisited.startsWith("http") ? cleanVisited : `https://${cleanVisited}`);
+      fallbackHomepage = u.origin;
+    } catch {
+      fallbackHomepage = cleanVisited.startsWith("http") ? cleanVisited : "";
+    }
+  }
+
+  const cleanRaw = cleanFieldString(rawLink, "");
+
+  // Se rawLink è assente o stringa vuota o solo protocollo
+  if (!cleanRaw || cleanRaw === "https://" || cleanRaw === "http://" || cleanRaw === "https" || cleanRaw === "http") {
+    return fallbackHomepage || (visitedUrl ? visitedUrl.trim() : "");
+  }
+
+  // Risoluzione URL relativi
+  if (cleanRaw.startsWith("/") && fallbackHomepage) {
+    try {
+      return new URL(cleanRaw, fallbackHomepage).href;
+    } catch {
+      return fallbackHomepage;
+    }
+  }
+
+  try {
+    const urlCandidate = cleanRaw.startsWith("http") ? cleanRaw : `https://${cleanRaw}`;
+    
+    // Controlla che l'autorità non contenga spazi o caratteri palesemente testuali (es. "https://IC MARIANI TOMAI")
+    const authorityMatch = urlCandidate.match(/^https?:\/\/([^/?#]+)/i);
+    if (!authorityMatch) {
+      return fallbackHomepage || "";
+    }
+    const hostPart = authorityMatch[1];
+    if (hostPart.includes(" ") || hostPart.includes('"') || hostPart.includes("(") || hostPart.includes(")")) {
+      return fallbackHomepage || "";
+    }
+
+    const urlObj = new URL(urlCandidate);
+    if (urlObj.protocol !== "http:" && urlObj.protocol !== "https:") {
+      return fallbackHomepage || "";
+    }
+
+    const host = urlObj.hostname;
+    if (!host || host.includes(" ") || (!host.includes(".") && host !== "localhost")) {
+      return fallbackHomepage || "";
+    }
+
+    return urlObj.href;
+  } catch {
+    return fallbackHomepage || "";
+  }
+}
+
+/**
  * Normalizza il profilo lavorativo ATA o la CDC docente in una chiave canonica di confronto.
  * Esempio:
  *  "Collaboratore scolastico" -> "CS"
@@ -474,7 +653,7 @@ export function parseGraduatoriaText(
   return {
     id: "grad_" + Date.now() + "_" + Math.random().toString(36).substring(2, 7),
     codice_meccanografico: metadata.codice_meccanografico?.trim().toUpperCase(),
-    nome_istituto: metadata.nome_istituto?.trim(),
+    nome_istituto: metadata.nome_istituto ? safeDecodeURIComponent(metadata.nome_istituto.trim()) : undefined,
     tipologia_personale: metadata.tipologia_personale,
     profilo_o_cdc: normalizeProfiloOrCdc(metadata.profilo_o_cdc),
     fascia: normalizeFascia(metadata.fascia),
@@ -578,7 +757,9 @@ export interface GraduatoriaCandidateLink {
  * Verifica se un testo o URL fa riferimento a graduatorie, albo pretorio o amministrazione trasparente
  */
 export function isGraduatoriaLink(text: string, href: string): { matches: boolean; keyword: string; priority: number } {
-  const combined = `${text || ""} ${href || ""}`.toLowerCase();
+  const cleanText = safeDecodeURIComponent(text || "");
+  const cleanHref = safeDecodeURIComponent(href || "");
+  const combined = `${cleanText} ${cleanHref}`.toLowerCase();
 
   // 1. graduatoria / graduatorie (priorità massima)
   if (/\bgraduatorie?\b/i.test(combined) || combined.includes("graduatoria") || combined.includes("graduatorie")) {
@@ -671,7 +852,7 @@ export function findGraduatoriaCandidateLinks(
         seen.add(resolved);
         candidates.push({
           url: resolved,
-          title: (title || resolved).trim(),
+          title: safeDecodeURIComponent((title || resolved).trim()),
           keyword: match.keyword,
           priority: match.priority,
         });
@@ -827,7 +1008,7 @@ export async function searchGraduatoriaPages(
 
       exploredPages.push({
         url: current.url,
-        title: current.title,
+        title: safeDecodeURIComponent(current.title),
         keywordMatched: current.keyword,
         content: textContent,
         format: res.format,
