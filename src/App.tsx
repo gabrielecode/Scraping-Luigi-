@@ -35,7 +35,7 @@ import {
   X,
   AlertTriangle
 } from "lucide-react";
-import { ExtractionResult, ExtractionData, BatchHistoryItem } from "./types";
+import { ExtractionResult, ExtractionData, BatchHistoryItem, NominaContrattoItem } from "./types";
 
 export default function App() {
   const [activeTab, setActiveTab] = useState<"batch" | "single" | "albo" | "search" | "history" | "guide">("batch");
@@ -284,22 +284,28 @@ export default function App() {
   const [isSearching, setIsSearching] = useState(false);
   const [searchError, setSearchError] = useState("");
 
-  const EXTRACTION_SYSTEM_PROMPT = `Sei un assistente specializzato nell'analisi di documenti scolastici, delibere, circolari e atti dell'Albo Pretorio per le scuole italiane.
-Leggi attentamente il testo ed estrai il numero complessivo di atti, avvisi, bandi, interpelli, nomine e pensionamenti individuati per ciascun profilo del personale scolastico.
+  const EXTRACTION_SYSTEM_PROMPT = `Sei un assistente specializzato nell'analisi di documenti scolastici, delibere, circolari, atti dell'Albo Pretorio e contratti/nomine di supplenza per le scuole italiane.
+Leggi attentamente il testo ed estrai con la massima precisione:
+1. "nome_istituto": denominazione ufficiale dell'istituto scolastico (es. "IC Ripa Teatina–Miglianico", "IIS Schiaparelli", "Liceo Cavour"), se deducibile.
+2. "codice_meccanografico": codice meccanografico della scuola (es. "CHIC81000A", "MIPC01000C", ecc.), se presente o deducibile.
+3. CONTEGGIO GENERALE:
+   - "convocazioni_collaboratore_scolastico", "convocazioni_assistente_amministrativo", "convocazioni_docenti", "convocazioni_assistente_tecnico", "convocazioni_cuoco", "convocazioni_assistente_agrario" (numero)
+   - "pensionamenti_collaboratore_scolastico", "pensionamenti_assistente_amministrativo", "pensionamenti_docenti", "pensionamenti_assistente_tecnico", "pensionamenti_cuoco", "pensionamenti_assistente_agrario" (numero)
+4. "nomine_contratti": ELENCO COMPLETO di TUTTE le singole nomine / contratti di supplenza / atti di assegnazione posti individuati nel documento (una voce per ciascuna nomina/assegnazione).
+   Per ciascuna nomina/contratto specifica i campi:
+   - "profilo_lavorativo": profilo completo e tipologia (es. "Collaboratore scolastico TD — fino al 30 giugno", "Collaboratore scolastico TD — annuale al 31 agosto", "Docente secondaria I grado — posto comune TD — supplenza temporanea Storico 2025/26", ecc.).
+   - "classe_di_concorso": codice della classe di concorso se docente (es. "AM12", "A-22", "A-11"); se personale ATA o non applicabile scrivi ESATTAMENTE "Non applicabile".
+   - "punteggio": punteggio della graduatoria/nomina formattato all'italiana (es. "13,17", "12,57", "69,50"). Se non presente scrivi "Non riportato".
+   - "posizione_graduatoria": posizione in graduatoria (es. "313", "342", "87"). Se non presente scrivi "Non riportata".
+   - "fascia": fascia della graduatoria (es. "Terza fascia", "Seconda fascia", "Prima fascia", "Graduatoria d'Istituto"). Se non specificata scrivi "Non specificata".
+   - "ore_settimanali": orario di cattedra/servizio (es. "36 ore", "18 ore"). Se non menzionato scrivi ESATTAMENTE "Non riportate".
+   - "decorrenza_contratto": intervallo esatto delle date di contratto nel formato "GG/MM/AAAA - GG/MM/AAAA" (es. "09/09/2026 - 30/06/2027", "17/09/2025 - 21/01/2026").
+   - "link_del_documento": URL dell'atto o documento di riferimento (se reperito nel testo, altrimenti stringa vuota).
 
-REGOLE DI CONTEGGIO:
-1. CONVOCAZIONI: Includi convocazioni, interpelli, avvisi di selezione per supplenze brevi o annuali, nomine a tempo determinato, contratti e avvisi per la presa di servizio. Se un avviso indica più posti (es. "Interpello per 2 Collaboratori Scolastici"), somma il numero di posti/nomine; se è un bando singolo senza specifica numerica, conta 1.
-2. PENSIONAMENTI: Includi cessazioni dal servizio, collocamenti a riposo, pensionamenti (ordinari, quota 100/102/103, opzione donna), dispense dal servizio per limiti di età.
-3. Se sono presenti dettagli specifici di un contratto o nomina, compila i seguenti campi facoltativi (altrimenti lascia stringa vuota ""):
-   - "graduatoria_fascia": fascia graduatoria se specificata (es. "I Fascia", "II Fascia", "III Fascia", "Graduatoria d'Istituto").
-   - "profilo_professionale": profilo ATA o docente (es. "Collaboratore Scolastico", "Assistente Amministrativo", ecc.).
-   - "classe_di_concorso": eventuale codice classe di concorso (es. "A012", "B016").
-   - "ore_settimanali": orario settimanale (es. "36 ore", "18 ore", "12 ore").
-   - "decorrenza_da": data inizio contratto in formato GG/MM/AA (es. "01/09/25").
-   - "decorrenza_a": data fine contratto in formato GG/MM/AA (es. "30/06/26" o "31/08/26").
-
-Restituisci ESCLUSIVAMENTE un oggetto JSON valido con la seguente struttura:
+Restituisci ESCLUSIVAMENTE un oggetto JSON valido:
 {
+  "nome_istituto": stringa,
+  "codice_meccanografico": stringa,
   "convocazioni_collaboratore_scolastico": numero,
   "convocazioni_assistente_amministrativo": numero,
   "convocazioni_docenti": numero,
@@ -312,6 +318,18 @@ Restituisci ESCLUSIVAMENTE un oggetto JSON valido con la seguente struttura:
   "pensionamenti_assistente_tecnico": numero,
   "pensionamenti_cuoco": numero,
   "pensionamenti_assistente_agrario": numero,
+  "nomine_contratti": [
+    {
+      "profilo_lavorativo": stringa,
+      "classe_di_concorso": stringa,
+      "punteggio": stringa,
+      "posizione_graduatoria": stringa,
+      "fascia": stringa,
+      "ore_settimanali": stringa,
+      "decorrenza_contratto": stringa,
+      "link_del_documento": stringa
+    }
+  ],
   "graduatoria_fascia": stringa,
   "profilo_professionale": stringa,
   "classe_di_concorso": stringa,
@@ -319,31 +337,42 @@ Restituisci ESCLUSIVAMENTE un oggetto JSON valido con la seguente struttura:
   "decorrenza_da": stringa,
   "decorrenza_a": stringa
 }
-Se un profilo o informazione non viene menzionata nel testo, assegna 0 (o "" per i campi di testo). Non aggiungere testo o commenti fuori dal JSON.`;
+Se non trovi nomine specifiche, assegna a "nomine_contratti" un array vuoto []. Non aggiungere commenti o testo fuori dal JSON.`;
 
-  const PDF_EXTRACTION_SYSTEM_PROMPT = `Sei un assistente specializzato nell'analisi di contratti scolastici di supplenza e atti dell'Albo Pretorio per il personale scolastico (ATA e Docenti) delle scuole italiane.
-Analizza il documento PDF del contratto di supplenza ed estrai con la massima precisione le informazioni contrattuali.
+  const PDF_EXTRACTION_SYSTEM_PROMPT = `Sei un assistente specializzato nell'analisi di contratti scolastici di supplenza, delibere di nomina e atti dell'Albo Pretorio per il personale ATA e Docenti delle scuole italiane.
+Analizza il documento PDF del contratto di supplenza ed estrai con la massima precisione le informazioni richieste.
 
 ⚠️ VINCOLO FONDAMENTALE DI PRIVACY (NON NEGOZIABILE):
 - NON estrarre MAI nomi, cognomi, codici fiscali, indirizzi, numeri di telefono o dati anagrafici individuali. Ometti categoricamente qualsiasi dato personale identificativo del lavoratore o del dirigente.
 
 CAMPI DA ESTRARRE:
-- "graduatoria_fascia": fascia graduatoria (es. "I Fascia", "II Fascia", "III Fascia", oppure "Non specificata").
-- "punteggio": punteggio numerico di convocazione/graduatoria come nel documento (es "13,17"), "" se assente.
-- "posizione_graduatoria": posizione numerica in graduatoria (es "313"), "" se assente.
+- "nome_istituto": denominazione della scuola (es. "IC Ripa Teatina–Miglianico").
+- "codice_meccanografico": codice meccanografico della scuola se presente (es. "CHIC81000A").
+- "profilo_lavorativo": profilo completo e tipologia (es. "Collaboratore scolastico TD — fino al 30 giugno", "Docente secondaria I grado — posto comune TD — supplenza temporanea Storico 2025/26", ecc.).
+- "classe_di_concorso": codice della classe di concorso se docente (es. "AM12", "A-22"); se personale ATA o non applicabile scrivi ESATTAMENTE "Non applicabile".
+- "punteggio": punteggio numerico di graduatoria/convocazione con virgola (es. "13,17", "12,57", "69,50"). Se non presente scrivi "Non riportato".
+- "posizione_graduatoria": posizione numerica in graduatoria (es. "313", "342", "87"). Se assente scrivi "Non riportata".
+- "fascia": fascia di graduatoria (es. "Terza fascia", "Seconda fascia", "Prima fascia").
+- "ore_settimanali": orario di servizio (es. "36 ore", "18 ore"). Se non indicato scrivi ESATTAMENTE "Non riportate".
+- "decorrenza_contratto": intervallo date contratto nel formato "GG/MM/AAAA - GG/MM/AAAA" (es. "09/09/2026 - 30/06/2027"). Se presenti singole date "da" e "a", componi l'intervallo.
 
-Restituisci ESCLUSIVAMENTE un oggetto JSON valido con la seguente struttura:
+Restituisci ESCLUSIVAMENTE un oggetto JSON valido:
 {
-  "graduatoria_fascia": stringa (es. "I Fascia", "II Fascia", "III Fascia", oppure "Non specificata"),
+  "nome_istituto": stringa,
+  "codice_meccanografico": stringa,
+  "profilo_lavorativo": stringa,
+  "classe_di_concorso": stringa,
   "punteggio": stringa,
   "posizione_graduatoria": stringa,
-  "profilo_professionale": stringa (es. "Collaboratore Scolastico", "Assistente Amministrativo", "Assistente Tecnico", "Docente", ecc.),
-  "classe_di_concorso": stringa (es. "A012", "A022", "AA25", oppure "" se non applicabile o non presente),
-  "ore_settimanali": stringa (es. "36 ore", "18 ore", "12 ore", ecc.),
-  "decorrenza_da": stringa (Formato obbligatorio: GG/MM/AA, es. "01/09/25" o "15/01/26"),
-  "decorrenza_a": stringa (Formato obbligatorio: GG/MM/AA, es. "30/06/26" o "31/08/26")
+  "fascia": stringa,
+  "ore_settimanali": stringa,
+  "decorrenza_contratto": stringa,
+  "graduatoria_fascia": stringa,
+  "profilo_professionale": stringa,
+  "decorrenza_da": stringa,
+  "decorrenza_a": stringa
 }
-Se un campo non è deducibile dal testo del documento, assegna come valore una stringa vuota "". Non aggiungere testo prima o dopo il JSON.`;
+Non aggiungere testo o commenti prima o dopo il JSON.`;
 
   const matchesNoticeFilters = (rawTitle: string): { included: boolean; reason: string } => {
     const norm = (rawTitle || "").toLowerCase().replace(/[\s_-]+/g, " ").trim();
@@ -455,6 +484,13 @@ Se un campo non è deducibile dal testo del documento, assegna come valore una s
     return null;
   };
 
+  const formatDateToGG_MM_AAAA = (d: Date): string => {
+    const day = String(d.getDate()).padStart(2, "0");
+    const month = String(d.getMonth() + 1).padStart(2, "0");
+    const year = String(d.getFullYear());
+    return `${day}/${month}/${year}`;
+  };
+
   const formatDateToGG_MM_AA = (d: Date): string => {
     const day = String(d.getDate()).padStart(2, "0");
     const month = String(d.getMonth() + 1).padStart(2, "0");
@@ -469,6 +505,54 @@ Se un campo non è deducibile dal testo del documento, assegna come valore una s
       return formatDateToGG_MM_AA(parsed);
     }
     return dateStr.trim();
+  };
+
+  const calculateContractDuration = (
+    decorrenzaInput: string,
+    fallbackStart?: string,
+    fallbackEnd?: string
+  ): { mesi: string; giorni: string; formattedPeriod: string } => {
+    let startDate: Date | null = null;
+    let endDate: Date | null = null;
+
+    if (decorrenzaInput && decorrenzaInput.includes("-")) {
+      const parts = decorrenzaInput.split("-");
+      if (parts.length >= 2) {
+        startDate = parseItalianDate(parts[0]);
+        endDate = parseItalianDate(parts[1]);
+      }
+    }
+
+    if (!startDate && fallbackStart) {
+      startDate = parseItalianDate(fallbackStart);
+    }
+    if (!endDate && fallbackEnd) {
+      endDate = parseItalianDate(fallbackEnd);
+    }
+
+    let formattedPeriod = decorrenzaInput ? decorrenzaInput.trim() : "";
+    if (startDate && endDate) {
+      formattedPeriod = `${formatDateToGG_MM_AAAA(startDate)} - ${formatDateToGG_MM_AAAA(endDate)}`;
+      const timeDiff = endDate.getTime() - startDate.getTime();
+      if (timeDiff >= 0) {
+        // Including both end and start day in Italian administrative contract counting: (+1 day)
+        const totalDays = Math.round(timeDiff / (1000 * 60 * 60 * 24)) + 1;
+        const totalMonths = (totalDays / 30.4375).toFixed(1);
+        return {
+          mesi: totalMonths,
+          giorni: String(totalDays),
+          formattedPeriod,
+        };
+      }
+    } else if (startDate && !endDate) {
+      formattedPeriod = `${formatDateToGG_MM_AAAA(startDate)} - fine esigenze`;
+    }
+
+    return {
+      mesi: "",
+      giorni: "",
+      formattedPeriod: formattedPeriod || "Non specificata",
+    };
   };
 
 function isSelfAppHtml(html: string): boolean {
@@ -1006,6 +1090,8 @@ async function scrapeWebsite(targetUrl: string, apiKey: string, systemPrompt?: s
 const executeClientSideExtract = async (targetUrl: string, apiKey: string, customProxy?: string) => {
     const res = await scrapeWebsite(targetUrl, apiKey, EXTRACTION_SYSTEM_PROMPT, customProxy);
     const defaultData = {
+      nome_istituto: "",
+      codice_meccanografico: "",
       convocazioni_collaboratore_scolastico: 0,
       convocazioni_assistente_amministrativo: 0,
       convocazioni_docenti: 0,
@@ -1024,12 +1110,60 @@ const executeClientSideExtract = async (targetUrl: string, apiKey: string, custo
       ore_settimanali: "",
       decorrenza_da: "",
       decorrenza_a: "",
+      decorrenza_contratto: "",
+      durata_contratto_mesi: "",
+      durata_contratto_giorni: "",
+      link_del_documento: "",
+      nomine_contratti: [] as NominaContrattoItem[],
       albo_contratti: []
     };
     let extractedData = { ...defaultData };
     try {
       const parsed = JSON.parse(res.content);
       extractedData = { ...defaultData, ...parsed };
+
+      // Infer school name / code if missing
+      if (!extractedData.nome_istituto) {
+        try {
+          const u = new URL(res.navigatedUrl || targetUrl);
+          const cleanHost = u.hostname.replace(/^www\./, "");
+          extractedData.nome_istituto = cleanHost.toUpperCase();
+        } catch {
+          extractedData.nome_istituto = targetUrl;
+        }
+      }
+
+      // Calculate duration for top-level if present
+      const topDuration = calculateContractDuration(
+        extractedData.decorrenza_contratto || "",
+        extractedData.decorrenza_da,
+        extractedData.decorrenza_a
+      );
+      extractedData.decorrenza_contratto = topDuration.formattedPeriod;
+      extractedData.durata_contratto_mesi = topDuration.mesi;
+      extractedData.durata_contratto_giorni = topDuration.giorni;
+
+      // Calculate duration for each contract in nomine_contratti
+      if (Array.isArray(extractedData.nomine_contratti)) {
+        extractedData.nomine_contratti = extractedData.nomine_contratti.map((item: any) => {
+          const duration = calculateContractDuration(item.decorrenza_contratto || "");
+          return {
+            ...item,
+            nome_istituto: item.nome_istituto || extractedData.nome_istituto || "",
+            codice_meccanografico: item.codice_meccanografico || extractedData.codice_meccanografico || "",
+            profilo_lavorativo: item.profilo_lavorativo || item.profilo_professionale || "Collaboratore scolastico TD",
+            classe_di_concorso: item.classe_di_concorso || "Non applicabile",
+            punteggio: item.punteggio || "Non riportato",
+            posizione_graduatoria: item.posizione_graduatoria || "Non riportata",
+            fascia: item.fascia || item.graduatoria_fascia || "Non specificata",
+            ore_settimanali: item.ore_settimanali || "Non riportate",
+            decorrenza_contratto: duration.formattedPeriod,
+            durata_contratto_mesi: duration.mesi,
+            durata_contratto_giorni: duration.giorni,
+            link_del_documento: item.link_del_documento || item.pdf_url || res.navigatedUrl || targetUrl,
+          };
+        });
+      }
     } catch {
       // fallback
     }
@@ -1095,17 +1229,32 @@ const executeClientSideExtract = async (targetUrl: string, apiKey: string, custo
       const content = respData?.choices?.[0]?.message?.content || "{}";
       const extracted = JSON.parse(content);
 
+      const duration = calculateContractDuration(
+        extracted.decorrenza_contratto || "",
+        extracted.decorrenza_da,
+        extracted.decorrenza_a
+      );
+
       setPdfExtractResult({
         success: true,
         filename: selectedPdfFile.name,
         size: selectedPdfFile.size,
         data: {
-          graduatoria_fascia: extracted.graduatoria_fascia || "Non specificata",
-          punteggio: extracted.punteggio || "N/D",
-          posizione_graduatoria: extracted.posizione_graduatoria || "N/D",
-          profilo_professionale: extracted.profilo_professionale || "Personale ATA / Docente",
-          classe_di_concorso: extracted.classe_di_concorso || "",
-          ore_settimanali: extracted.ore_settimanali || "",
+          nome_istituto: extracted.nome_istituto || "Istituto Scolastico",
+          codice_meccanografico: extracted.codice_meccanografico || "",
+          profilo_lavorativo: extracted.profilo_lavorativo || extracted.profilo_professionale || "Collaboratore scolastico TD",
+          classe_di_concorso: extracted.classe_di_concorso || "Non applicabile",
+          punteggio: extracted.punteggio || "Non riportato",
+          posizione_graduatoria: extracted.posizione_graduatoria || "Non riportata",
+          fascia: extracted.fascia || extracted.graduatoria_fascia || "Non specificata",
+          ore_settimanali: extracted.ore_settimanali || "Non riportate",
+          decorrenza_contratto: duration.formattedPeriod,
+          durata_contratto_mesi: duration.mesi,
+          durata_contratto_giorni: duration.giorni,
+          link_del_documento: selectedPdfFile.name,
+          // Compatibilità pregressa
+          graduatoria_fascia: extracted.fascia || extracted.graduatoria_fascia || "Non specificata",
+          profilo_professionale: extracted.profilo_lavorativo || extracted.profilo_professionale || "Personale ATA / Docente",
           decorrenza_da: normalizeDateOutput(extracted.decorrenza_da || ""),
           decorrenza_a: normalizeDateOutput(extracted.decorrenza_a || ""),
         }
@@ -1294,6 +1443,152 @@ const executeClientSideExtract = async (targetUrl: string, apiKey: string, custo
     }
   };
 
+  // Unified helper to convert any results to 11-column CSV format
+  const generateUnifiedCsvContent = (items: ExtractionResult[]): string => {
+    const headers = [
+      "Nome Istituto",
+      "Codice Meccanografico",
+      "Profilo",
+      "Classe di Concorso",
+      "Punteggio",
+      "Posizione",
+      "Fascia",
+      "Ore",
+      "Decorrenza",
+      "Durata Mesi",
+      "Durata Giorni",
+      "Link",
+    ];
+
+    const rows: string[] = [];
+
+    for (const r of items) {
+      const data = r.data || ({} as any);
+
+      // School Name: from data or URL
+      let defaultSchoolName = data.nome_istituto || "";
+      if (!defaultSchoolName) {
+        try {
+          const u = new URL(r.navigatedUrl || r.url);
+          defaultSchoolName = u.hostname.replace(/^www\./, "").toUpperCase();
+        } catch {
+          defaultSchoolName = r.url || "Istituto Scolastico";
+        }
+      }
+      const defaultSchoolCode = data.codice_meccanografico || "";
+
+      // 1. If nomine_contratti is present and has elements, create one row per nomination
+      if (Array.isArray(data.nomine_contratti) && data.nomine_contratti.length > 0) {
+        for (const c of data.nomine_contratti) {
+          const duration = calculateContractDuration(c.decorrenza_contratto || "");
+          const schoolName = c.nome_istituto || defaultSchoolName;
+          const schoolCode = c.codice_meccanografico || defaultSchoolCode;
+          const profilo = c.profilo_lavorativo || "Collaboratore scolastico TD";
+          const classe = c.classe_di_concorso || "Non applicabile";
+          const punteggio = c.punteggio || "Non riportato";
+          const posizione = c.posizione_graduatoria || "Non riportata";
+          const fascia = c.fascia || "Non specificata";
+          const ore = c.ore_settimanali || "Non riportate";
+          const decorrenza = duration.formattedPeriod;
+          const mesi = duration.mesi;
+          const giorni = duration.giorni;
+          const link = c.link_del_documento || r.navigatedUrl || r.url;
+
+          rows.push([
+            `"${schoolName.replace(/"/g, '""')}"`,
+            `"${schoolCode.replace(/"/g, '""')}"`,
+            `"${profilo.replace(/"/g, '""')}"`,
+            `"${classe.replace(/"/g, '""')}"`,
+            `"${punteggio.replace(/"/g, '""')}"`,
+            `"${posizione.replace(/"/g, '""')}"`,
+            `"${fascia.replace(/"/g, '""')}"`,
+            `"${ore.replace(/"/g, '""')}"`,
+            `"${decorrenza.replace(/"/g, '""')}"`,
+            `"${mesi}"`,
+            `"${giorni}"`,
+            `"${link.replace(/"/g, '""')}"`,
+          ].join(","));
+        }
+      } 
+      // 2. If albo_contratti has items, expand each contract to one row
+      else if (Array.isArray(data.albo_contratti) && data.albo_contratti.length > 0) {
+        for (const c of data.albo_contratti) {
+          const duration = calculateContractDuration("", c.decorrenza_da, c.decorrenza_a);
+          const schoolName = defaultSchoolName;
+          const schoolCode = defaultSchoolCode;
+          const profilo = c.profilo_professionale || c.titolo_bando || "Personale Scolastico";
+          const classe = c.classe_di_concorso || "Non applicabile";
+          const punteggio = c.punteggio || "Non riportato";
+          const posizione = c.posizione_graduatoria || "Non riportata";
+          const fascia = c.graduatoria_fascia || "Non specificata";
+          const ore = c.ore_settimanali || "Non riportate";
+          const decorrenza = duration.formattedPeriod;
+          const mesi = duration.mesi;
+          const giorni = duration.giorni;
+          const link = c.pdf_url || r.navigatedUrl || r.url;
+
+          rows.push([
+            `"${schoolName.replace(/"/g, '""')}"`,
+            `"${schoolCode.replace(/"/g, '""')}"`,
+            `"${profilo.replace(/"/g, '""')}"`,
+            `"${classe.replace(/"/g, '""')}"`,
+            `"${punteggio.replace(/"/g, '""')}"`,
+            `"${posizione.replace(/"/g, '""')}"`,
+            `"${fascia.replace(/"/g, '""')}"`,
+            `"${ore.replace(/"/g, '""')}"`,
+            `"${decorrenza.replace(/"/g, '""')}"`,
+            `"${mesi}"`,
+            `"${giorni}"`,
+            `"${link.replace(/"/g, '""')}"`,
+          ].join(","));
+        }
+      }
+      // 3. Fallback: single contract row with top-level data
+      else {
+        const duration = calculateContractDuration(
+          data.decorrenza_contratto || "",
+          data.decorrenza_da,
+          data.decorrenza_a
+        );
+        const schoolName = defaultSchoolName;
+        const schoolCode = defaultSchoolCode;
+        const profilo = data.profilo_professionale || (
+          data.convocazioni_collaboratore_scolastico > 0 ? "Collaboratore Scolastico TD" :
+          data.convocazioni_assistente_amministrativo > 0 ? "Assistente Amministrativo TD" :
+          data.convocazioni_docenti > 0 ? "Docente TD" :
+          data.convocazioni_assistente_tecnico > 0 ? "Assistente Tecnico TD" :
+          "Personale Scolastico"
+        );
+        const classe = data.classe_di_concorso || "Non applicabile";
+        const punteggio = data.punteggio || "Non riportato";
+        const posizione = data.posizione_graduatoria || "Non riportata";
+        const fascia = data.graduatoria_fascia || "Non specificata";
+        const ore = data.ore_settimanali || "Non riportate";
+        const decorrenza = duration.formattedPeriod;
+        const mesi = duration.mesi;
+        const giorni = duration.giorni;
+        const link = data.link_del_documento || r.navigatedUrl || r.url;
+
+        rows.push([
+          `"${schoolName.replace(/"/g, '""')}"`,
+          `"${schoolCode.replace(/"/g, '""')}"`,
+          `"${profilo.replace(/"/g, '""')}"`,
+          `"${classe.replace(/"/g, '""')}"`,
+          `"${punteggio.replace(/"/g, '""')}"`,
+          `"${posizione.replace(/"/g, '""')}"`,
+          `"${fascia.replace(/"/g, '""')}"`,
+          `"${ore.replace(/"/g, '""')}"`,
+          `"${decorrenza.replace(/"/g, '""')}"`,
+          `"${mesi}"`,
+          `"${giorni}"`,
+          `"${link.replace(/"/g, '""')}"`,
+        ].join(","));
+      }
+    }
+
+    return [headers.join(","), ...rows].join("\n");
+  };
+
   // Export results to GitHub securely and directly from client-side
   const exportToGitHub = async () => {
     if (batchResults.length === 0) return;
@@ -1306,34 +1601,7 @@ const executeClientSideExtract = async (targetUrl: string, apiKey: string, custo
     setGithubExportStatus("Esportazione su GitHub in corso...");
     setGithubExportUrl("");
 
-    const headers = [
-      "URL Originale", "URL Navigato", "Stato",
-      "Conv. Coll. Scolastico", "Conv. Assistente Amm.", "Conv. Docenti", "Conv. Assistente Tecnico", "Conv. Cuoco", "Conv. Assistente Agrario",
-      "Pens. Coll. Scolastico", "Pens. Assistente Amm.", "Pens. Docenti", "Pens. Assistente Tecnico", "Pens. Cuoco", "Pens. Assistente Agrario",
-      "Graduatoria Fascia", "Profilo Professionale", "Classe di Concorso", "Ore Settimanali", "Decorrenza Da", "Decorrenza A"
-    ];
-    const rows = batchResults.map(r => [
-      `"${r.url}"`, `"${r.navigatedUrl}"`, `"${r.status}"`,
-      r.data.convocazioni_collaboratore_scolastico ?? 0,
-      r.data.convocazioni_assistente_amministrativo ?? 0,
-      r.data.convocazioni_docenti ?? 0,
-      r.data.convocazioni_assistente_tecnico ?? 0,
-      r.data.convocazioni_cuoco ?? 0,
-      r.data.convocazioni_assistente_agrario ?? 0,
-      r.data.pensionamenti_collaboratore_scolastico ?? 0,
-      r.data.pensionamenti_assistente_amministrativo ?? 0,
-      r.data.pensionamenti_docenti ?? 0,
-      r.data.pensionamenti_assistente_tecnico ?? 0,
-      r.data.pensionamenti_cuoco ?? 0,
-      r.data.pensionamenti_assistente_agrario ?? 0,
-      `"${(r.data.graduatoria_fascia || "").replace(/"/g, '""')}"`,
-      `"${(r.data.profilo_professionale || "").replace(/"/g, '""')}"`,
-      `"${(r.data.classe_di_concorso || "").replace(/"/g, '""')}"`,
-      `"${(r.data.ore_settimanali || "").replace(/"/g, '""')}"`,
-      `"${(r.data.decorrenza_da || "").replace(/"/g, '""')}"`,
-      `"${(r.data.decorrenza_a || "").replace(/"/g, '""')}"`,
-    ]);
-    const csvContent = [headers.join(","), ...rows.map(e => e.join(","))].join("\n");
+    const csvContent = generateUnifiedCsvContent(batchResults);
     const filePath = `risultati-scuole-ata-${new Date().toISOString().slice(0, 10)}.csv`;
 
     try {
@@ -1422,40 +1690,12 @@ const executeClientSideExtract = async (targetUrl: string, apiKey: string, custo
   // Export single result to CSV client-side
   const exportSingleResultToCsv = () => {
     if (!singleResult) return;
-    const r = singleResult;
-    const headers = [
-      "URL Originale", "URL Navigato", "Stato",
-      "Conv. Coll. Scolastico", "Conv. Assistente Amm.", "Conv. Docenti", "Conv. Assistente Tecnico", "Conv. Cuoco", "Conv. Assistente Agrario",
-      "Pens. Coll. Scolastico", "Pens. Assistente Amm.", "Pens. Docenti", "Pens. Assistente Tecnico", "Pens. Cuoco", "Pens. Assistente Agrario",
-      "Graduatoria Fascia", "Profilo Professionale", "Classe di Concorso", "Ore Settimanali", "Decorrenza Da", "Decorrenza A"
-    ];
-    const row = [
-      `"${r.url}"`, `"${r.navigatedUrl}"`, `"${r.status}"`,
-      r.data.convocazioni_collaboratore_scolastico ?? 0,
-      r.data.convocazioni_assistente_amministrativo ?? 0,
-      r.data.convocazioni_docenti ?? 0,
-      r.data.convocazioni_assistente_tecnico ?? 0,
-      r.data.convocazioni_cuoco ?? 0,
-      r.data.convocazioni_assistente_agrario ?? 0,
-      r.data.pensionamenti_collaboratore_scolastico ?? 0,
-      r.data.pensionamenti_assistente_amministrativo ?? 0,
-      r.data.pensionamenti_docenti ?? 0,
-      r.data.pensionamenti_assistente_tecnico ?? 0,
-      r.data.pensionamenti_cuoco ?? 0,
-      r.data.pensionamenti_assistente_agrario ?? 0,
-      `"${(r.data.graduatoria_fascia || "").replace(/"/g, '""')}"`,
-      `"${(r.data.profilo_professionale || "").replace(/"/g, '""')}"`,
-      `"${(r.data.classe_di_concorso || "").replace(/"/g, '""')}"`,
-      `"${(r.data.ore_settimanali || "").replace(/"/g, '""')}"`,
-      `"${(r.data.decorrenza_da || "").replace(/"/g, '""')}"`,
-      `"${(r.data.decorrenza_a || "").replace(/"/g, '""')}"`,
-    ];
-    const csvContent = [headers.join(","), row.join(",")].join("\n");
+    const csvContent = generateUnifiedCsvContent([singleResult]);
     const blob = new Blob([csvContent], { type: "text/csv;charset=utf-8;" });
     const url = URL.createObjectURL(blob);
     const link = document.createElement("a");
     link.setAttribute("href", url);
-    link.setAttribute("download", `risultato_singolo_ata_${new Date().toISOString().slice(0, 10)}.csv`);
+    link.setAttribute("download", `nomine_contratti_singolo_${new Date().toISOString().slice(0, 10)}.csv`);
     document.body.appendChild(link);
     link.click();
     document.body.removeChild(link);
@@ -1464,61 +1704,12 @@ const executeClientSideExtract = async (targetUrl: string, apiKey: string, custo
   // Export results to CSV client-side
   const exportResultsToCsv = () => {
     if (batchResults.length === 0) return;
-
-    const headers = [
-      "URL Originale",
-      "URL Navigato",
-      "Stato",
-      "Conv. Coll. Scolastico",
-      "Conv. Assistente Amm.",
-      "Conv. Docenti",
-      "Conv. Assistente Tecnico",
-      "Conv. Cuoco",
-      "Conv. Assistente Agrario",
-      "Pens. Coll. Scolastico",
-      "Pens. Assistente Amm.",
-      "Pens. Docenti",
-      "Pens. Assistente Tecnico",
-      "Pens. Cuoco",
-      "Pens. Assistente Agrario",
-      "Graduatoria Fascia",
-      "Profilo Professionale",
-      "Classe di Concorso",
-      "Ore Settimanali",
-      "Decorrenza Da",
-      "Decorrenza A"
-    ];
-
-    const rows = batchResults.map(r => [
-      `"${r.url}"`,
-      `"${r.navigatedUrl}"`,
-      `"${r.status}"`,
-      r.data.convocazioni_collaboratore_scolastico ?? 0,
-      r.data.convocazioni_assistente_amministrativo ?? 0,
-      r.data.convocazioni_docenti ?? 0,
-      r.data.convocazioni_assistente_tecnico ?? 0,
-      r.data.convocazioni_cuoco ?? 0,
-      r.data.convocazioni_assistente_agrario ?? 0,
-      r.data.pensionamenti_collaboratore_scolastico ?? 0,
-      r.data.pensionamenti_assistente_amministrativo ?? 0,
-      r.data.pensionamenti_docenti ?? 0,
-      r.data.pensionamenti_assistente_tecnico ?? 0,
-      r.data.pensionamenti_cuoco ?? 0,
-      r.data.pensionamenti_assistente_agrario ?? 0,
-      `"${(r.data.graduatoria_fascia || "").replace(/"/g, '""')}"`,
-      `"${(r.data.profilo_professionale || "").replace(/"/g, '""')}"`,
-      `"${(r.data.classe_di_concorso || "").replace(/"/g, '""')}"`,
-      `"${(r.data.ore_settimanali || "").replace(/"/g, '""')}"`,
-      `"${(r.data.decorrenza_da || "").replace(/"/g, '""')}"`,
-      `"${(r.data.decorrenza_a || "").replace(/"/g, '""')}"`,
-    ]);
-
-    const csvContent = [headers.join(","), ...rows.map(e => e.join(","))].join("\n");
+    const csvContent = generateUnifiedCsvContent(batchResults);
     const blob = new Blob([csvContent], { type: "text/csv;charset=utf-8;" });
     const url = URL.createObjectURL(blob);
     const link = document.createElement("a");
     link.setAttribute("href", url);
-    link.setAttribute("download", `risultati_estrazione_ata_${new Date().toISOString().slice(0, 10)}.csv`);
+    link.setAttribute("download", `nomine_contratti_ata_${new Date().toISOString().slice(0, 10)}.csv`);
     document.body.appendChild(link);
     link.click();
     document.body.removeChild(link);
@@ -2154,17 +2345,18 @@ const executeClientSideExtract = async (targetUrl: string, apiKey: string, custo
                   <div className="flex flex-wrap items-center gap-3">
                     <button
                       onClick={exportResultsToCsv}
-                      className="bg-emerald-600 hover:bg-emerald-500 text-white font-medium px-4 py-2.5 rounded-xl transition-all shadow-lg shadow-emerald-600/20 flex items-center gap-2 text-sm"
+                      className="bg-emerald-600 hover:bg-emerald-500 text-white font-medium px-4 py-2.5 rounded-xl transition-all shadow-lg shadow-emerald-600/20 flex items-center gap-2 text-sm cursor-pointer"
+                      title="Esporta tutte le nomine nel formato CSV a 11 colonne con calcolo automatico della durata"
                     >
                       <Download className="w-4 h-4" />
-                      <span>Esporta CSV</span>
+                      <span>Esporta CSV Nomine (11 Colonne)</span>
                     </button>
                     <button
                       onClick={exportToGitHub}
-                      className="bg-slate-800 hover:bg-slate-700 text-slate-200 border border-slate-700 hover:border-slate-600 font-medium px-4 py-2.5 rounded-xl transition-all flex items-center gap-2 text-sm"
+                      className="bg-slate-800 hover:bg-slate-700 text-slate-200 border border-slate-700 hover:border-slate-600 font-medium px-4 py-2.5 rounded-xl transition-all flex items-center gap-2 text-sm cursor-pointer"
                     >
                       <Github className="w-4 h-4 text-slate-300" />
-                      <span>Salva su GitHub</span>
+                      <span>Salva CSV su GitHub</span>
                     </button>
                   </div>
                 </div>
@@ -2589,6 +2781,59 @@ const executeClientSideExtract = async (targetUrl: string, apiKey: string, custo
 
               {alboScanResult && (
                 <div className="space-y-4 animate-fadeIn">
+                  <div className="flex flex-col sm:flex-row items-start sm:items-center justify-between gap-3">
+                    <h3 className="text-sm font-semibold uppercase tracking-wider text-slate-300">
+                      Riepilogo Scansione Albo Pretorio
+                    </h3>
+                    <button
+                      type="button"
+                      onClick={() => {
+                        const fakeResult: ExtractionResult = {
+                          status: "success",
+                          url: alboScanResult.alboUrl || alboUrlInput,
+                          navigatedUrl: alboScanResult.alboUrl || alboUrlInput,
+                          logs: alboScanResult.logs || [],
+                          data: {
+                            nome_istituto: "",
+                            codice_meccanografico: "",
+                            convocazioni_collaboratore_scolastico: alboScanResult.contratti?.length || 0,
+                            convocazioni_assistente_amministrativo: 0,
+                            convocazioni_docenti: 0,
+                            convocazioni_assistente_tecnico: 0,
+                            convocazioni_cuoco: 0,
+                            convocazioni_assistente_agrario: 0,
+                            pensionamenti_collaboratore_scolastico: 0,
+                            pensionamenti_assistente_amministrativo: 0,
+                            pensionamenti_docenti: 0,
+                            pensionamenti_assistente_tecnico: 0,
+                            pensionamenti_cuoco: 0,
+                            pensionamenti_assistente_agrario: 0,
+                            graduatoria_fascia: alboScanResult.graduatoria_fascia || "",
+                            profilo_professionale: alboScanResult.profilo_professionale || "",
+                            classe_di_concorso: "",
+                            ore_settimanali: "",
+                            decorrenza_da: "",
+                            decorrenza_a: "",
+                            albo_contratti: alboScanResult.contratti || []
+                          }
+                        };
+                        const csvContent = generateUnifiedCsvContent([fakeResult]);
+                        const blob = new Blob([csvContent], { type: "text/csv;charset=utf-8;" });
+                        const url = URL.createObjectURL(blob);
+                        const link = document.createElement("a");
+                        link.setAttribute("href", url);
+                        link.setAttribute("download", `nomine_albo_pretorio_${new Date().toISOString().slice(0, 10)}.csv`);
+                        document.body.appendChild(link);
+                        link.click();
+                        document.body.removeChild(link);
+                      }}
+                      className="bg-emerald-600 hover:bg-emerald-500 text-white font-medium px-3.5 py-1.5 rounded-xl transition-all shadow-md shadow-emerald-600/20 flex items-center gap-1.5 text-xs cursor-pointer"
+                    >
+                      <Download className="w-3.5 h-3.5" />
+                      <span>Esporta Nomine Albo in CSV (11 Colonne)</span>
+                    </button>
+                  </div>
+
                   {/* Summary Grid */}
                   <div className="grid grid-cols-2 sm:grid-cols-4 gap-3">
                     <div className="bg-slate-950/60 border border-slate-800 rounded-xl p-3">
@@ -2731,14 +2976,69 @@ const executeClientSideExtract = async (targetUrl: string, apiKey: string, custo
 
               {pdfExtractResult && (
                 <div className="space-y-4 animate-fadeIn">
-                  <div className="flex items-center justify-between bg-slate-950/80 border border-slate-800 rounded-xl p-4">
+                  <div className="flex flex-col sm:flex-row items-start sm:items-center justify-between bg-slate-950/80 border border-slate-800 rounded-xl p-4 gap-3">
                     <div>
                       <span className="text-xs text-slate-400 block">File Elaborato:</span>
                       <span className="text-sm font-semibold text-white">{pdfExtractResult.filename}</span>
                     </div>
-                    <span className="text-xs bg-emerald-500/10 text-emerald-400 border border-emerald-500/20 px-3 py-1 rounded-full font-medium flex items-center gap-1">
-                      <CheckCircle2 className="w-3.5 h-3.5" /> Memoria Pulita (unlink eseguito)
-                    </span>
+                    <div className="flex items-center gap-3">
+                      <button
+                        type="button"
+                        onClick={() => {
+                          const fakeResult: ExtractionResult = {
+                            status: "success",
+                            url: pdfExtractResult.filename,
+                            navigatedUrl: pdfExtractResult.filename,
+                            logs: [],
+                            data: {
+                              nome_istituto: pdfExtractResult.data.nome_istituto || "Istituto Scolastico",
+                              codice_meccanografico: pdfExtractResult.data.codice_meccanografico || "",
+                              convocazioni_collaboratore_scolastico: 1,
+                              convocazioni_assistente_amministrativo: 0,
+                              convocazioni_docenti: 0,
+                              convocazioni_assistente_tecnico: 0,
+                              convocazioni_cuoco: 0,
+                              convocazioni_assistente_agrario: 0,
+                              pensionamenti_collaboratore_scolastico: 0,
+                              pensionamenti_assistente_amministrativo: 0,
+                              pensionamenti_docenti: 0,
+                              pensionamenti_assistente_tecnico: 0,
+                              pensionamenti_cuoco: 0,
+                              pensionamenti_assistente_agrario: 0,
+                              graduatoria_fascia: pdfExtractResult.data.fascia || pdfExtractResult.data.graduatoria_fascia || "",
+                              profilo_professionale: pdfExtractResult.data.profilo_lavorativo || pdfExtractResult.data.profilo_professionale || "",
+                              classe_di_concorso: pdfExtractResult.data.classe_di_concorso || "",
+                              ore_settimanali: pdfExtractResult.data.ore_settimanali || "",
+                              punteggio: pdfExtractResult.data.punteggio || "",
+                              posizione_graduatoria: pdfExtractResult.data.posizione_graduatoria || "",
+                              decorrenza_da: pdfExtractResult.data.decorrenza_da || "",
+                              decorrenza_a: pdfExtractResult.data.decorrenza_a || "",
+                              decorrenza_contratto: pdfExtractResult.data.decorrenza_contratto || "",
+                              durata_contratto_mesi: pdfExtractResult.data.durata_contratto_mesi || "",
+                              durata_contratto_giorni: pdfExtractResult.data.durata_contratto_giorni || "",
+                              link_del_documento: pdfExtractResult.filename,
+                              albo_contratti: []
+                            }
+                          };
+                          const csvContent = generateUnifiedCsvContent([fakeResult]);
+                          const blob = new Blob([csvContent], { type: "text/csv;charset=utf-8;" });
+                          const url = URL.createObjectURL(blob);
+                          const link = document.createElement("a");
+                          link.setAttribute("href", url);
+                          link.setAttribute("download", `contratto_${pdfExtractResult.filename.replace(/\.pdf$/i, "")}_${new Date().toISOString().slice(0, 10)}.csv`);
+                          document.body.appendChild(link);
+                          link.click();
+                          document.body.removeChild(link);
+                        }}
+                        className="bg-emerald-600 hover:bg-emerald-500 text-white font-medium px-3.5 py-1.5 rounded-lg transition-all shadow-md shadow-emerald-600/20 flex items-center gap-1.5 text-xs cursor-pointer"
+                      >
+                        <Download className="w-3.5 h-3.5" />
+                        <span>Scarica CSV (11 Colonne)</span>
+                      </button>
+                      <span className="text-xs bg-emerald-500/10 text-emerald-400 border border-emerald-500/20 px-3 py-1 rounded-full font-medium flex items-center gap-1">
+                        <CheckCircle2 className="w-3.5 h-3.5" /> Memoria Pulita
+                      </span>
+                    </div>
                   </div>
 
                   <div className="grid grid-cols-2 sm:grid-cols-3 gap-3">
@@ -2921,6 +3221,24 @@ const executeClientSideExtract = async (targetUrl: string, apiKey: string, custo
                     </div>
 
                     <div className="flex items-center gap-2.5 shrink-0">
+                      <button
+                        onClick={() => {
+                          const csvContent = generateUnifiedCsvContent(item.results);
+                          const blob = new Blob([csvContent], { type: "text/csv;charset=utf-8;" });
+                          const url = URL.createObjectURL(blob);
+                          const link = document.createElement("a");
+                          link.setAttribute("href", url);
+                          link.setAttribute("download", `storico_${item.filename.replace(/\.csv$/i, "")}_${new Date().toISOString().slice(0, 10)}.csv`);
+                          document.body.appendChild(link);
+                          link.click();
+                          document.body.removeChild(link);
+                        }}
+                        className="bg-emerald-600 hover:bg-emerald-500 text-white font-medium px-3.5 py-2 rounded-xl text-xs transition-all flex items-center gap-1.5 shadow-md shadow-emerald-600/20"
+                        title="Esporta in CSV (11 colonne)"
+                      >
+                        <Download className="w-3.5 h-3.5" />
+                        <span>Esporta CSV</span>
+                      </button>
                       <button
                         onClick={() => loadHistoryItem(item)}
                         className="bg-indigo-600 hover:bg-indigo-500 text-white font-medium px-4 py-2 rounded-xl text-xs transition-all flex items-center gap-1.5 shadow-md shadow-indigo-600/20"

@@ -1,3 +1,19 @@
+export interface NominaContrattoItem {
+  id?: string;
+  nome_istituto: string;
+  codice_meccanografico: string;
+  profilo_lavorativo: string;
+  classe_di_concorso: string;
+  punteggio: string;
+  posizione_graduatoria: string;
+  fascia: string;
+  ore_settimanali: string;
+  decorrenza_contratto: string;
+  durata_contratto_mesi: string;
+  durata_contratto_giorni: string;
+  link_del_documento: string;
+}
+
 export interface AlboPretorioContract {
   id?: string;
   titolo_bando: string;
@@ -15,6 +31,10 @@ export interface AlboPretorioContract {
 }
 
 export interface ExtractionData {
+  nome_istituto?: string;
+  codice_meccanografico?: string;
+  nomine_contratti?: NominaContrattoItem[];
+
   convocazioni_collaboratore_scolastico: number;
   convocazioni_assistente_amministrativo: number;
   convocazioni_docenti: number;
@@ -28,13 +48,19 @@ export interface ExtractionData {
   pensionamenti_cuoco: number;
   pensionamenti_assistente_agrario: number;
 
-  // Nuova Estensione: Albo Pretorio & Estrazione PDF (retrocompatibile)
+  // Retrocompatibilità & campi singoli
   graduatoria_fascia?: string;
+  punteggio?: string;
+  posizione_graduatoria?: string;
   profilo_professionale?: string;
   classe_di_concorso?: string;
   ore_settimanali?: string;
   decorrenza_da?: string;
   decorrenza_a?: string;
+  decorrenza_contratto?: string;
+  durata_contratto_mesi?: string;
+  durata_contratto_giorni?: string;
+  link_del_documento?: string;
   albo_contratti?: AlboPretorioContract[];
 }
 
