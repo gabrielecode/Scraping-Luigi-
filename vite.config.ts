@@ -29,6 +29,9 @@ function apiProxyPlugin(): Plugin {
             return;
           }
 
+          const isRaw = urlObj.searchParams.get('raw') === '1';
+          const isPdfUrl = targetUrl.toLowerCase().endsWith('.pdf') || targetUrl.toLowerCase().includes('.pdf?');
+
           let text = "";
           let contentType = "text/html; charset=utf-8";
           let directSuccess = false;
@@ -37,7 +40,7 @@ function apiProxyPlugin(): Plugin {
             const response = await fetch(targetUrl, {
               headers: {
                 'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/126.0.0.0 Safari/537.36',
-                'Accept': 'text/html,application/xhtml+xml,application/xml;q=0.9,image/avif,image/webp,*/*;q=0.8',
+                'Accept': 'text/html,application/xhtml+xml,application/xml;q=0.9,image/avif,image/webp,application/pdf,*/*;q=0.8',
                 'Accept-Language': 'it-IT,it;q=0.9,en-US;q=0.8,en;q=0.7',
                 'Cache-Control': 'no-cache',
                 'Pragma': 'no-cache'
@@ -46,8 +49,18 @@ function apiProxyPlugin(): Plugin {
             });
 
             if (response.ok) {
-              const ct = response.headers.get('content-type');
+              const ct = response.headers.get('content-type') || '';
               if (ct) contentType = ct;
+              const isPdf = ct.toLowerCase().includes('application/pdf') || isPdfUrl || isRaw;
+
+              if (isPdf) {
+                const arrayBuf = await response.arrayBuffer();
+                res.statusCode = 200;
+                res.setHeader('Content-Type', 'application/pdf');
+                res.end(Buffer.from(arrayBuf));
+                return;
+              }
+
               text = await response.text();
               if (text && text.length > 100) {
                 directSuccess = true;

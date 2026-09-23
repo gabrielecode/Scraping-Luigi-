@@ -62,19 +62,216 @@ export function escapeCsvField(val: any): string {
   // Rimuovi barre di escape tipo \" o \\"
   str = str.replace(/\\"/g, '"');
 
-  // Se l'intero valore è racchiuso tra virgolette esterne residue da un precedente export CSV
-  while (str.length >= 2 && str.startsWith('"') && str.endsWith('"')) {
-    if (str === '""') return '""';
-    str = str.slice(1, -1).trim();
-  }
+  // Rimuovi tutte le virgolette esterne residue multiple
+  str = str.replace(/^"+|"+$/g, '').trim();
 
-  // Normalizza sequenze consecutive di virgolette multiple a singola virgoletta
+  // Se dopo la pulizia la stringa è vuota
+  if (!str) return '""';
+
+  // Normalizza eventuali sequenze consecutive di virgolette interne a singola virgoletta
   str = str.replace(/"+/g, '"');
 
-  // Applica l'escaping canonico RFC 4180: ogni virgoletta raddoppiata una sola volta
+  // Applica l'escaping canonico RFC 4180: ogni virgoletta interna raddoppiata una sola volta
   const escaped = str.replace(/"/g, '""');
 
   return `"${escaped}"`;
+}
+
+/**
+ * Normalizza il punteggio garantendo float valido con 2 decimali, oppure null
+ */
+export function normalizePunteggio(val: any): number | null {
+  if (val === null || val === undefined) return null;
+  if (typeof val === "number") {
+    return isNaN(val) ? null : Number(val.toFixed(2));
+  }
+  if (typeof val === "string") {
+    const s = val.trim().toLowerCase();
+    if (
+      !s ||
+      s === "null" ||
+      s === "none" ||
+      s === "non riportato" ||
+      s === "non specificato" ||
+      s === "non presente" ||
+      s === "non disponibile" ||
+      s === "n/d" ||
+      s === "-" ||
+      s === "nd" ||
+      s === "assente" ||
+      s === "mancante"
+    ) {
+      return null;
+    }
+    const clean = s.replace(",", ".").replace(/[^\d.-]/g, "");
+    if (!clean) return null;
+    const num = parseFloat(clean);
+    return isNaN(num) ? null : Number(num.toFixed(2));
+  }
+  return null;
+}
+
+/**
+ * Cerca un candidato per posizione o nominativo in una graduatoria specifica
+ */
+export function lookupPunteggioGraduatoria(
+  graduatorie: GraduatoriaIstituto[],
+  criteri: {
+    codice_meccanografico?: string;
+    nome_istituto?: string;
+    tipologia_personale?: "ATA" | "DOCENTE";
+    profilo_o_cdc?: string;
+    fascia?: string;
+    posizione?: number;
+    nominativo?: string;
+  }
+): { punteggio: number; entry?: GraduatoriaIstitutoEntry; graduatoriaMatched?: GraduatoriaIstituto } | null {
+  const normCodice = normalizeCodiceMeccanografico(criteri.codice_meccanografico);
+  const normProfilo = normalizeProfiloOrCdc(criteri.profilo_o_cdc || "");
+  const normFascia = normalizeFascia(criteri.fascia || "");
+
+  // Filtriamo le graduatorie candidate
+  const candidateGrad = graduatorie.filter(g => {
+    // Se c'è codice meccanografico e coincide, priorità
+    if (normCodice && g.codice_meccanografico) {
+      if (normalizeCodiceMeccanografico(g.codice_meccanografico) !== normCodice) {
+        return false;
+      }
+    }
+
+    // Tipologia personale
+    if (criteri.tipologia_personale && g.tipologia_personale !== criteri.tipologia_personale) {
+      return false;
+    }
+
+    // Profilo o CDC
+    const gProfilo = normalizeProfiloOrCdc(g.profilo_o_cdc);
+    if (normProfilo && gProfilo && !gProfilo.includes(normProfilo) && !normProfilo.includes(gProfilo)) {
+      return false;
+    }
+
+    // Fascia
+    if (normFascia) {
+      const gFascia = normalizeFascia(g.fascia);
+      if (gFascia && gFascia !== normFascia) {
+        return false;
+      }
+    }
+
+    return true;
+  });
+
+  // 1. Cerca per posizione se specificata
+  if (criteri.posizione && criteri.posizione > 0) {
+    for (const g of candidateGrad) {
+      const entry = g.graduatoria.find(e => e.posizione === criteri.posizione);
+      if (entry && typeof entry.punteggio === "number" && !isNaN(entry.punteggio)) {
+        return {
+          punteggio: Number(entry.punteggio.toFixed(2)),
+          entry,
+          graduatoriaMatched: g,
+        };
+      }
+    }
+  }
+
+  // 2. Cerca per nominativo se specificato
+  if (criteri.nominativo && criteri.nominativo.trim().length >= 3) {
+    for (const g of candidateGrad) {
+      const entry = g.graduatoria.find(e => e.cognome_nome && isNameMatch(criteri.nominativo!, e.cognome_nome));
+      if (entry && typeof entry.punteggio === "number" && !isNaN(entry.punteggio)) {
+        return {
+          punteggio: Number(entry.punteggio.toFixed(2)),
+          entry,
+          graduatoriaMatched: g,
+        };
+      }
+    }
+  }
+
+  return null;
+}
+
+/**
+ * Incrocia automaticamente una singola nomina/contratto con le graduatorie disponibili.
+ * Se la nomina ha già un punteggio esplicito (diverso da null), lo preserva con origine "Esplicito".
+ * Se la nomina ha punteggio null, tenta il lookup tramite posizione o nominativo.
+ */
+export function crossReferenceNomina<T extends NominaContrattoItem | AlboPretorioContract>(
+  item: T,
+  graduatorie: GraduatoriaIstituto[],
+  scuolaContext?: { codice_meccanografico?: string; nome_istituto?: string }
+): T & { punteggio: number | null; origine_punteggio: OriginePunteggio; note_cross_reference?: string } {
+  // Se ha già un punteggio esplicito valido
+  if (item.punteggio !== null && item.punteggio !== undefined && !isNaN(Number(item.punteggio))) {
+    return {
+      ...item,
+      punteggio: Number(Number(item.punteggio).toFixed(2)),
+      origine_punteggio: "Esplicito",
+      note_cross_reference: "Punteggio estratto direttamente dal testo del documento/contratto.",
+    };
+  }
+
+  const codMec = (item as any).codice_meccanografico || scuolaContext?.codice_meccanografico;
+  const nomeScuola = (item as any).nome_istituto || scuolaContext?.nome_istituto;
+  const tipologia = (item as any).tipologia_personale || "ATA";
+  const profilo = (item as any).profilo_lavorativo || (item as any).profilo_professionale || (item as any).classe_concorso_area_lab || (item as any).classe_di_concorso || "";
+  const fascia = (item as any).fascia || (item as any).graduatoria_fascia || "";
+  const posNum = parsePosizioneNumber(item.posizione_graduatoria);
+  const nominativo = (item as any).nominativo;
+
+  // Tentativo di incrocio tramite posizione o nominativo
+  if (posNum || (nominativo && nominativo.trim().length >= 3)) {
+    const match = lookupPunteggioGraduatoria(graduatorie, {
+      codice_meccanografico: codMec,
+      nome_istituto: nomeScuola,
+      tipologia_personale: tipologia,
+      profilo_o_cdc: profilo,
+      fascia,
+      posizione: posNum || undefined,
+      nominativo: nominativo || undefined,
+    });
+
+    if (match) {
+      const nomeGrad = match.graduatoriaMatched?.nome_istituto || match.graduatoriaMatched?.codice_meccanografico || "Graduatoria d'Istituto";
+      const matchedPos = match.entry?.posizione || posNum || "N/D";
+      return {
+        ...item,
+        codice_meccanografico: (item as any).codice_meccanografico || match.graduatoriaMatched?.codice_meccanografico || "",
+        posizione_graduatoria: (item as any).posizione_graduatoria && (item as any).posizione_graduatoria !== "Non disponibile" ? (item as any).posizione_graduatoria : String(matchedPos),
+        punteggio: match.punteggio,
+        origine_punteggio: "Incrociato",
+        note_cross_reference: `Punteggio incrociato con ${nomeGrad} (${match.graduatoriaMatched?.profilo_o_cdc}, Fascia ${match.graduatoriaMatched?.fascia}): pos. ${matchedPos} = ${match.punteggio.toFixed(2)} pt${match.entry?.cognome_nome ? ` [${match.entry.cognome_nome}]` : ""}`,
+      } as any;
+    }
+  }
+
+  // Verifica se si tratta di un interpello o bando aperto in corso
+  const combinedDesc = `${profilo} ${fascia} ${(item as any).note || ""} ${(item as any).tipo_posto || ""}`.toLowerCase();
+  if (combinedDesc.includes("interpell") || combinedDesc.includes("bando") || combinedDesc.includes("selezione")) {
+    return {
+      ...item,
+      punteggio: null,
+      origine_punteggio: "Non disponibile",
+      note_cross_reference: "Bando/Interpello di selezione: nessun candidato ancora nominato nell'atto.",
+    };
+  }
+
+  if (posNum) {
+    return {
+      ...item,
+      punteggio: null,
+      origine_punteggio: "Non disponibile",
+      note_cross_reference: `Posizione ${posNum} presente, ma nessuna graduatoria caricata corrisponde a [${profilo} - Fascia ${fascia || "N/D"}].`,
+    };
+  }
+
+  return {
+    ...item,
+    punteggio: null,
+    origine_punteggio: "Non disponibile",
+    note_cross_reference: "Punteggio non presente nel documento e posizione non specificata.",
+  };
 }
 
 /**
@@ -521,147 +718,7 @@ export function saveStoredGraduatorie(list: GraduatoriaIstituto[]): void {
   }
 }
 
-/**
- * Cerca un candidato per posizione in una graduatoria specifica
- */
-export function lookupPunteggioGraduatoria(
-  graduatorie: GraduatoriaIstituto[],
-  criteri: {
-    codice_meccanografico?: string;
-    nome_istituto?: string;
-    tipologia_personale?: "ATA" | "DOCENTE";
-    profilo_o_cdc?: string;
-    fascia?: string;
-    posizione: number;
-  }
-): { punteggio: number; entry?: GraduatoriaIstitutoEntry; graduatoriaMatched?: GraduatoriaIstituto } | null {
-  const normCodice = normalizeCodiceMeccanografico(criteri.codice_meccanografico);
-  const normProfilo = normalizeProfiloOrCdc(criteri.profilo_o_cdc || "");
-  const normFascia = normalizeFascia(criteri.fascia || "");
 
-  // Filtriamo le graduatorie candidate
-  const candidateGrad = graduatorie.filter(g => {
-    // Se c'è codice meccanografico e coincide, priorità
-    if (normCodice && g.codice_meccanografico) {
-      if (normalizeCodiceMeccanografico(g.codice_meccanografico) !== normCodice) {
-        return false;
-      }
-    }
-
-    // Tipologia personale
-    if (criteri.tipologia_personale && g.tipologia_personale !== criteri.tipologia_personale) {
-      return false;
-    }
-
-    // Profilo o CDC
-    const gProfilo = normalizeProfiloOrCdc(g.profilo_o_cdc);
-    if (normProfilo && gProfilo && !gProfilo.includes(normProfilo) && !normProfilo.includes(gProfilo)) {
-      return false;
-    }
-
-    // Fascia
-    if (normFascia) {
-      const gFascia = normalizeFascia(g.fascia);
-      if (gFascia && gFascia !== normFascia) {
-        return false;
-      }
-    }
-
-    return true;
-  });
-
-  for (const g of candidateGrad) {
-    const entry = g.graduatoria.find(e => e.posizione === criteri.posizione);
-    if (entry && typeof entry.punteggio === "number" && !isNaN(entry.punteggio)) {
-      return {
-        punteggio: Number(entry.punteggio.toFixed(2)),
-        entry,
-        graduatoriaMatched: g,
-      };
-    }
-  }
-
-  // Fallback se non abbiamo filtrato per codice (cerca se c'è corrispondenza generica sul profilo e fascia)
-  if (!normCodice) {
-    for (const g of candidateGrad) {
-      const entry = g.graduatoria.find(e => e.posizione === criteri.posizione);
-      if (entry && typeof entry.punteggio === "number" && !isNaN(entry.punteggio)) {
-        return {
-          punteggio: Number(entry.punteggio.toFixed(2)),
-          entry,
-          graduatoriaMatched: g,
-        };
-      }
-    }
-  }
-
-  return null;
-}
-
-/**
- * Incrocia automaticamente una singola nomina/contratto con le graduatorie disponibili.
- * Se la nomina ha già un punteggio esplicito (diverso da null), lo preserva con origine "Esplicito".
- * Se la nomina ha punteggio null ma ha una posizione in graduatoria valida, tenta il lookup.
- */
-export function crossReferenceNomina<T extends NominaContrattoItem | AlboPretorioContract>(
-  item: T,
-  graduatorie: GraduatoriaIstituto[],
-  scuolaContext?: { codice_meccanografico?: string; nome_istituto?: string }
-): T & { punteggio: number | null; origine_punteggio: OriginePunteggio; note_cross_reference?: string } {
-  // Se ha già un punteggio esplicito valido
-  if (item.punteggio !== null && item.punteggio !== undefined && !isNaN(Number(item.punteggio))) {
-    return {
-      ...item,
-      punteggio: Number(Number(item.punteggio).toFixed(2)),
-      origine_punteggio: "Esplicito",
-      note_cross_reference: "Punteggio estratto direttamente dal testo del documento/contratto.",
-    };
-  }
-
-  // Se manca il punteggio, verifichiamo se possiamo risalire tramite posizione
-  const posNum = parsePosizioneNumber(item.posizione_graduatoria);
-  if (!posNum) {
-    return {
-      ...item,
-      punteggio: null,
-      origine_punteggio: "Non disponibile",
-      note_cross_reference: "Punteggio non presente nel documento e posizione non specificata.",
-    };
-  }
-
-  const codMec = (item as any).codice_meccanografico || scuolaContext?.codice_meccanografico;
-  const nomeScuola = (item as any).nome_istituto || scuolaContext?.nome_istituto;
-  const tipologia = (item as any).tipologia_personale || "ATA";
-  const profilo = (item as any).profilo_lavorativo || (item as any).profilo_professionale || (item as any).classe_concorso_area_lab || (item as any).classe_di_concorso || "";
-  const fascia = (item as any).fascia || (item as any).graduatoria_fascia || "";
-
-  const match = lookupPunteggioGraduatoria(graduatorie, {
-    codice_meccanografico: codMec,
-    nome_istituto: nomeScuola,
-    tipologia_personale: tipologia,
-    profilo_o_cdc: profilo,
-    fascia,
-    posizione: posNum,
-  });
-
-  if (match) {
-    const nomeGrad = match.graduatoriaMatched?.nome_istituto || match.graduatoriaMatched?.codice_meccanografico || "Graduatoria d'Istituto";
-    return {
-      ...item,
-      codice_meccanografico: (item as any).codice_meccanografico || match.graduatoriaMatched?.codice_meccanografico || "",
-      punteggio: match.punteggio,
-      origine_punteggio: "Incrociato",
-      note_cross_reference: `Punteggio incrociato con ${nomeGrad} (${match.graduatoriaMatched?.profilo_o_cdc}, Fascia ${match.graduatoriaMatched?.fascia}): pos. ${posNum} = ${match.punteggio.toFixed(2)} pt${match.entry?.cognome_nome ? ` [${match.entry.cognome_nome}]` : ""}`,
-    } as any;
-  }
-
-  return {
-    ...item,
-    punteggio: null,
-    origine_punteggio: "Non disponibile",
-    note_cross_reference: `Posizione ${posNum} presente, ma nessuna graduatoria caricata corrisponde a [${profilo} - Fascia ${fascia || "N/D"}].`,
-  };
-}
 
 /**
  * Parser per importare graduatorie da testo o CSV/TSV

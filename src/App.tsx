@@ -56,6 +56,11 @@ import {
   isClasseConcorsoPertinent,
   standardizePlaceholder,
 } from "./services/graduatorieService";
+import {
+  extractTextFromPdfBuffer,
+  extractPdfsFromHtml,
+  extractPunteggioHeuristic,
+} from "./services/pdfService";
 
 export { GRADUATORIA_EXTRACTION_SYSTEM_PROMPT };
 
@@ -339,18 +344,25 @@ Leggi attentamente il testo ed estrai con la massima precisione:
 3. CONTEGGIO GENERALE:
    - "convocazioni_collaboratore_scolastico", "convocazioni_assistente_amministrativo", "convocazioni_docenti", "convocazioni_assistente_tecnico", "convocazioni_cuoco", "convocazioni_assistente_agrario" (numero)
    - "pensionamenti_collaboratore_scolastico", "pensionamenti_assistente_amministrativo", "pensionamenti_docenti", "pensionamenti_assistente_tecnico", "pensionamenti_cuoco", "pensionamenti_assistente_agrario" (numero)
-4. "nomine_contratti": ELENCO COMPLETO di TUTTE le singole nomine / contratti di supplenza / atti di assegnazione posti / convocazioni individuati nel documento (una voce per ciascuna nomina/assegnazione).
+4. "nomine_contratti": ELENCO COMPLETO di TUTTE le singole nomine / contratti di supplenza / atti di assegnazione posti / convocazioni individuati nel documento (una voce per ciascuna nomina/assegnazione o convocazione di profilo).
    Per ciascuna voce specifica i seguenti campi:
+   - "nominativo": nome e cognome del candidato o lavoratore nominato/individuato (es. "MARIO ROSSI"), se indicato. Se si tratta di un avviso o bando aperto senza nominativi di singoli candidati, lascia stringa vuota "".
    - "tipologia_personale": "ATA" per profili ATA (Collaboratore scolastico, Assistente Amministrativo, Assistente Tecnico, Cuoco, Guardarobiere, Operatore Scolastico, ecc.) oppure "DOCENTE" per insegnanti (Scuola Infanzia, Primaria, Secondaria I grado, Secondaria II grado, ITP, ecc.).
    - "profilo_lavorativo": profilo completo e tipologia (es. "Collaboratore scolastico TD", "Assistente Tecnico AR02 - Elettronica", "Docente secondaria II grado A-22 - Lettere", "Docente Primaria posto comune", "Docente Sostegno secondaria I grado ADMM").
    - "classe_concorso_area_lab": per il personale DOCENTE indica la Classe di Concorso CDC ufficiale (es. "A-12", "A-22", "A-28", "A-48", "ADMM", "ADSS", "ADAA", "ADEE", "AAAA", "EEEE"); per Assistente Tecnico ATA indica l'Area di Laboratorio (es. "AR01", "AR02", "AR08", "AR20"); per gli altri profili ATA dove non applicabile scrivi "Non applicabile".
    - "tipo_posto": "comune" per posti ordinari/curricolari e ATA; "sostegno" per posti di sostegno / minorati psicofisici / uditivi / vista / cattedre sostegno ADAA/ADEE/ADMM/ADSS.
-   - "punteggio": numero float con punto decimale (es. 13.17, 69.50) OPPURE null. 
-     ⚠️ REGOLA TASSATIVA: Se il punteggio manca, non è riportato o non è rintracciabile nel testo, restituisci RIGOROSAMENTE null. NON USARE MAI 0 O "0" SE IL PUNTEGGIO MANCA!
-   - "posizione_graduatoria": posizione in graduatoria (es. "313", "342", "87"). Se non presente scrivi "Non disponibile".
-   - "fascia": fascia della graduatoria (es. "Prima fascia", "Seconda fascia", "Terza fascia", "Graduatoria d'Istituto", "Interpello"). Se non specificata scrivi "Non disponibile".
-   - "ore_settimanali": orario di cattedra/servizio (es. "36 ore", "18 ore", "12 ore"). Se non menzionato scrivi ESATTAMENTE "Non disponibile".
-   - "decorrenza_contratto": intervallo esatto delle date di contratto nel formato "GG/MM/AAAA - GG/MM/AAAA" (es. "09/09/2026 - 30/06/2027", "17/09/2025 - 21/01/2026").
+   - "punteggio": NUMERO FLOAT DECIMALE (es. 13.17, 19.80, 54.5, 112.0) OPPURE null.
+     ⚠️ ISTRUZIONI CRITICHE SULL'ESTRAZIONE DEI PUNTEGGI:
+     - Estrai con la massima attenzione qualsiasi punteggio attribuito o associato al candidato, al posto o alla convocazione.
+     - Il punteggio compare sotto varie diciture: "punteggio", "punti", "pt.", "p.ti", "p.", "punteggio complessivo", "punteggio totale", "totale punti", "valutazione", "punti titoli/servizio", "somma punti", "con punti ...", "in virtù del punteggio di ...".
+     - Nelle convocazioni o avvisi con scaglioni o soglie di punteggio (es. "per i candidati fino a punteggio 12", "fino a punti 11"), estrai come punteggio il valore numerico della soglia indicata (es. 12.0 o 11.0).
+     - Nelle graduatorie, bollettini o elenchi con tabelle (es. colonna PUNTI, PT, PUNTEGGIO, VALUTAZIONE), estrai per ogni candidato o riga il rispettivo punteggio.
+     - Converti sempre le virgole in punto decimale (es. "13,17" -> 13.17, "69,50" -> 69.5).
+     - Restituisci null SOLO se nel testo/allegati non è presente assolutamente alcuna cifra o soglia di punteggio o valutazione.
+   - "posizione_graduatoria": posizione numerica in graduatoria (es. "1", "15", "313"). Cercala accanto a "posizione", "pos.", "posto", "n.", "collocato al n.". Se assente lascia stringa vuota o "Non disponibile".
+   - "fascia": fascia della graduatoria (es. "Prima fascia", "Seconda fascia", "Terza fascia", "Graduatoria d'Istituto", "Graduatoria permanente 24 mesi", "Interpello"). Se non specificata scrivi "Non disponibile".
+   - "ore_settimanali": orario di cattedra/servizio (es. "36 ore", "18 ore", "12 ore", "7 ore"). Se non menzionato scrivi ESATTAMENTE "Non disponibile".
+   - "decorrenza_contratto": intervallo esatto delle date di contratto nel formato "GG/MM/AAAA - GG/MM/AAAA" (es. "09/09/2026 - 30/06/2027", "23/09/2026 - 30/06/2027", "03/09/2026 - fine esigenze").
    - "link_del_documento": URL dell'atto o documento di riferimento (se reperito nel testo, altrimenti stringa vuota).
 
 Restituisci ESCLUSIVAMENTE un oggetto JSON valido:
@@ -371,6 +383,7 @@ Restituisci ESCLUSIVAMENTE un oggetto JSON valido:
   "pensionamenti_assistente_agrario": numero,
   "nomine_contratti": [
     {
+      "nominativo": stringa,
       "tipologia_personale": "ATA" | "DOCENTE",
       "profilo_lavorativo": stringa,
       "classe_concorso_area_lab": stringa,
@@ -383,6 +396,7 @@ Restituisci ESCLUSIVAMENTE un oggetto JSON valido:
       "link_del_documento": stringa
     }
   ],
+  "nominativo": stringa,
   "tipologia_personale": "ATA" | "DOCENTE",
   "profilo_professionale": stringa,
   "classe_concorso_area_lab": stringa,
@@ -396,11 +410,8 @@ Restituisci ESCLUSIVAMENTE un oggetto JSON valido:
 }
 Se non trovi nomine specifiche, assegna a "nomine_contratti" un array vuoto []. Non aggiungere commenti o testo fuori dal JSON.`;
 
-  const PDF_EXTRACTION_SYSTEM_PROMPT = `Sei un assistente specializzato nell'analisi di contratti scolastici di supplenza, delibere di nomina, avvisi di convocazione e interpelli per il personale ATA e DOCENTI delle scuole italiane.
-Analizza il documento PDF del contratto o delibera ed estrai con la massima precisione le informazioni richieste.
-
-⚠️ VINCOLO FONDAMENTALE DI PRIVACY (NON NEGOZIABILE):
-- NON estrarre MAI nomi, cognomi, codici fiscali, indirizzi, numeri di telefono o dati anagrafici individuali. Ometti categoricamente qualsiasi dato personale identificativo del lavoratore o del dirigente.
+  const PDF_EXTRACTION_SYSTEM_PROMPT = `Sei un assistente specializzato nell'analisi di contratti scolastici di supplenza, delibere di nomina, graduatorie, bollettini delle assegnazioni, avvisi di convocazione e interpelli per il personale ATA e DOCENTI delle scuole italiane.
+Analizza il documento PDF con la massima accuratezza ed estrai tutti i dati richiesti.
 
 CAMPI DA ESTRARRE:
 - "nome_istituto": denominazione della scuola (es. "IC Ripa Teatina–Miglianico").
@@ -409,21 +420,30 @@ CAMPI DA ESTRARRE:
   - Formato: 10 caratteri alfanumerici (2 lettere provincia + 2 lettere tipo scuola + 5 cifre + 1 lettera controllo).
   - Cerca nell'intestazione/carta intestata, accanto a "C.M.", "Cod. Mecc.", "Codice Scuola", "C.F.", nel piè di pagina o timbro.
   - Cerca anche nelle caselle di posta: es. "chic81000a@istruzione.it" o "@pec.istruzione.it" -> codice: "CHIC81000A".
+- "nominativo": nome e cognome del candidato o lavoratore individuato/nominato (es. "MARIO ROSSI"), se presente. Se l'atto è un bando aperto senza nominativi individuali, lascia stringa vuota "".
 - "tipologia_personale": "ATA" oppure "DOCENTE".
-- "profilo_lavorativo": profilo completo e tipologia (es. "Collaboratore scolastico TD — fino al 30 giugno", "Assistente Tecnico Area Laboratorio AR02", "Docente secondaria II grado posto comune TD", "Docente sostegno secondaria I grado ADMM").
+- "profilo_lavorativo": profilo completo e tipologia (es. "Collaboratore scolastico TD", "Assistente Tecnico Area Laboratorio AR02", "Docente secondaria II grado posto comune TD", "Docente sostegno secondaria I grado ADMM").
 - "classe_concorso_area_lab": per il personale DOCENTE il codice della Classe di Concorso CDC (es. "A-12", "A-22", "A-28", "ADMM", "ADSS", "EEEE", "AAAA"); per Assistente Tecnico ATA il codice Area di Laboratorio (es. "AR01", "AR02", "AR08", "AR20"); per gli altri profili ATA dove non applicabile scrivi "Non applicabile".
 - "tipo_posto": "comune" per posti ordinari/curricolari e ATA; "sostegno" per posti e cattedre di sostegno / minorati psicofisici / uditivi / della vista / ADAA / ADEE / ADMM / ADSS.
-- "punteggio": punteggio numerico float con punto decimale (es. 13.17, 69.50) OPPURE null.
-  ⚠️ REGOLA TASSATIVA: Se il punteggio manca o non è esplicitato nel documento, restituisci RIGOROSAMENTE null. MAI RESTITUIRE 0 O "0" SE IL PUNTEGGIO MANCA!
-- "posizione_graduatoria": posizione numerica in graduatoria (es. "313", "342", "87"). Se assente scrivi "Non disponibile".
-- "fascia": fascia di graduatoria (es. "Prima fascia", "Seconda fascia", "Terza fascia", "Graduatoria d'Istituto", "Interpello"). Se assente scrivi "Non disponibile".
-- "ore_settimanali": orario di servizio (es. "36 ore", "18 ore", "12 ore"). Se non indicato scrivi ESATTAMENTE "Non disponibile".
-- "decorrenza_contratto": intervallo date contratto nel formato "GG/MM/AAAA - GG/MM/AAAA" (es. "09/09/2026 - 30/06/2027"). Se presenti singole date "da" e "a", componi l'intervallo.
+- "punteggio": punteggio numerico float con punto decimale (es. 13.17, 19.80, 54.5, 112.0) OPPURE null.
+  ⚠️ ISTRUZIONI CRITICHE SULL'ESTRAZIONE DEI PUNTEGGI:
+  - Cerca con la massima attenzione qualsiasi punteggio attribuito o associato al candidato, al posto o alla convocazione.
+  - Cercalo sotto diciture come: "punteggio", "punti", "pt.", "p.ti", "p.", "punteggio complessivo", "punteggio totale", "totale punti", "valutazione", "punti titoli/servizio", "con punti ...", "in virtù del punteggio di ...".
+  - Nelle convocazioni o avvisi con scaglioni/soglie di punteggio (es. "fino a punteggio 12", "fino a punti 11"), estrai come punteggio il valore della soglia indicata (es. 12.0 o 11.0).
+  - Nelle graduatorie o elenchi con tabella a colonne (es. colonna PUNTI, PT, PUNTEGGIO, VALUTAZIONE), estrai il punteggio corrispondente dalla colonna dei punti/punteggio.
+  - Converti sempre le virgole in punto decimale (es. "13,17" -> 13.17, "69,50" -> 69.5).
+  - Restituisci null SOLO se nel documento non compare assolutamente alcuna cifra o soglia di punteggio.
+- "posizione_graduatoria": posizione numerica in graduatoria (es. "1", "15", "313"). Cercala accanto a "posizione", "pos.", "posto", "n.". Se assente scrivi "Non disponibile".
+- "fascia": fascia di graduatoria (es. "Prima fascia", "Seconda fascia", "Terza fascia", "Graduatoria d'Istituto", "Graduatoria permanente 24 mesi", "Interpello"). Se assente scrivi "Non disponibile".
+- "ore_settimanali": orario di servizio (es. "36 ore", "18 ore", "12 ore", "7 ore"). Se non indicato scrivi ESATTAMENTE "Non disponibile".
+- "decorrenza_contratto": intervallo date contratto nel formato "GG/MM/AAAA - GG/MM/AAAA" (es. "09/09/2026 - 30/06/2027", "23/09/2026 - 30/06/2027"). Se presenti singole date "da" e "a", componi l'intervallo.
+- "nomine_contratti": se il PDF contiene più nomine, assegnazioni o convocazioni distinte (es. tabella o elenco di candidati/posti), includile tutte in questo array rispettando la struttura sopra.
 
 Restituisci ESCLUSIVAMENTE un oggetto JSON valido:
 {
   "nome_istituto": stringa,
   "codice_meccanografico": stringa,
+  "nominativo": stringa,
   "tipologia_personale": "ATA" | "DOCENTE",
   "profilo_lavorativo": stringa,
   "classe_concorso_area_lab": stringa,
@@ -436,7 +456,22 @@ Restituisci ESCLUSIVAMENTE un oggetto JSON valido:
   "graduatoria_fascia": stringa,
   "profilo_professionale": stringa,
   "decorrenza_da": stringa,
-  "decorrenza_a": stringa
+  "decorrenza_a": stringa,
+  "nomine_contratti": [
+    {
+      "nominativo": stringa,
+      "tipologia_personale": "ATA" | "DOCENTE",
+      "profilo_lavorativo": stringa,
+      "classe_concorso_area_lab": stringa,
+      "tipo_posto": "comune" | "sostegno",
+      "punteggio": numero | null,
+      "posizione_graduatoria": stringa,
+      "fascia": stringa,
+      "ore_settimanali": stringa,
+      "decorrenza_contratto": stringa,
+      "link_del_documento": stringa
+    }
+  ]
 }
 Non aggiungere testo o commenti prima o dopo il JSON.`;
 
@@ -1056,6 +1091,25 @@ async function extractPdfWithOpenRouter(
   customProxyUrl?: string,
   failedProxiesByDomain?: Map<string, Set<string>>
 ) {
+  // 1. Priorità assoluta: scarica il buffer binario ed estrai il testo localmente con pdfjs
+  // Questo elimina ogni problema di compatibilità del plugin OpenRouter ed estrae tabelle e punteggi al 100%
+  if (!isBase64) {
+    try {
+      const res = await fetchWithProxy(pdfSource, true, undefined, customProxyUrl, failedProxiesByDomain);
+      if (res?.data) {
+        const buf = res.data as ArrayBuffer;
+        const { text: localPdfText } = await extractTextFromPdfBuffer(buf);
+        if (localPdfText && localPdfText.trim().length > 30) {
+          const textRes = await extractWithOpenRouter(localPdfText, apiKey, promptText);
+          if (textRes && !textRes.error && textRes.choices?.[0]?.message?.content) {
+            return textRes;
+          }
+        }
+      }
+    } catch {}
+  }
+
+  // 2. Fallback tentativo con plugin nativo file-parser
   try {
     const response = await fetch("https://openrouter.ai/api/v1/chat/completions", {
       method: "POST",
@@ -1181,99 +1235,157 @@ async function scrapeWebsite(
   let allTexts: string[] = [];
 
   try {
-    // 1. Download homepage
-    const homeRes = await fetchWithProxy(currentUrl, false, log, customProxyUrl, failedProxiesByDomain);
-    const rawHome = homeRes.data as string;
-    let homeText = "";
-    let homeDoc: Document | undefined;
+    // 1. Verifica se l'URL target è un file PDF diretto
+    const isDirectPdf =
+      currentUrl.toLowerCase().endsWith(".pdf") ||
+      currentUrl.toLowerCase().includes(".pdf?") ||
+      (currentUrl.toLowerCase().includes("/uploads/") && currentUrl.toLowerCase().includes(".pdf")) ||
+      (currentUrl.toLowerCase().includes("/system/files/") && currentUrl.toLowerCase().includes(".pdf"));
 
-    if (homeRes.format === "html") {
-      homeDoc = parseHtml(rawHome);
-      homeText = homeDoc.body?.textContent?.replace(/\s+/g, " ").trim() || "";
-    } else {
-      homeText = rawHome.replace(/[#*`_\[\]]/g, " ").replace(/\s+/g, " ").trim();
-    }
-    allTexts.push(`=== HOMEPAGE (${currentUrl}) ===\n${homeText}`);
-    log(`Homepage analizzata (${homeText.length} caratteri estratti).`);
-
-    // 2. Discover relevant sub-links (Albo Pretorio, Circolari, ATA, Trasparenza)
-    const discoveredLinks = findRelevantSchoolLinks(rawHome, currentUrl, homeDoc);
-    log(`Trovati ${discoveredLinks.length} link rilevanti (Albo, Circolari, Convocazioni).`);
-
-    // Take top 5 highest priority links to crawl deeply
-    const topLinksToFetch = discoveredLinks.slice(0, 5);
-    for (const link of topLinksToFetch) {
-      log(`Scansione approfondita sottolink: "${link.title}" (${link.url})`);
+    if (isDirectPdf) {
+      log(`L'URL specificato è un documento PDF diretto: ${currentUrl}`);
       try {
-        navigatedUrl = link.url;
-        const subRes = await fetchWithProxy(link.url, false, log, customProxyUrl, failedProxiesByDomain);
-        const rawSub = subRes.data as string;
-        let subText = "";
-        let subDoc: Document | undefined;
-        if (subRes.format === "html") {
-          subDoc = parseHtml(rawSub);
-          subText = subDoc.body?.textContent?.replace(/\s+/g, " ").trim() || "";
-        } else {
-          subText = rawSub.replace(/[#*`_\[\]]/g, " ").replace(/\s+/g, " ").trim();
+        const pdfBufRes = await fetchWithProxy(currentUrl, true, log, customProxyUrl, failedProxiesByDomain);
+        if (pdfBufRes?.data) {
+          const { text: pdfText } = await extractTextFromPdfBuffer(pdfBufRes.data as ArrayBuffer);
+          log(`Estratti ${pdfText.length} caratteri dal PDF diretto.`);
+          allTexts.push(`=== DOCUMENTO PDF DIRETTO (${currentUrl}) ===\n${pdfText}`);
         }
-        allTexts.push(`=== SOTTOPAGINA (${link.title}) ===\n${subText}`);
+      } catch (pdfDirErr: any) {
+        log(`Errore estrazione PDF diretto: ${pdfDirErr.message}`);
+      }
+    } else {
+      // 1. Download homepage / pagina principale
+      const homeRes = await fetchWithProxy(currentUrl, false, log, customProxyUrl, failedProxiesByDomain);
+      const rawHome = homeRes.data as string;
+      let homeText = "";
+      let homeDoc: Document | undefined;
 
-        // TASK 2: Extract individual acts (max 8-10 acts) and iterate over them
-        const actLinks = findActLinks(rawSub, link.url, subDoc);
-        if (actLinks.length > 0) {
-          log(`Trovati ${actLinks.length} atti`);
-          for (const act of actLinks) {
-            log(`Apertura dettaglio atto ${act.id}`);
+      if (homeRes.format === "html") {
+        homeDoc = parseHtml(rawHome);
+        homeText = homeDoc.body?.textContent?.replace(/\s+/g, " ").trim() || "";
+
+        // Estrai e analizza gli allegati PDF presenti direttamente nella pagina principale
+        const mainPagePdfs = extractPdfsFromHtml(rawHome, currentUrl);
+        if (mainPagePdfs.length > 0) {
+          log(`Trovati ${mainPagePdfs.length} documenti/allegati PDF nella pagina principale.`);
+          const topMainPdfs = mainPagePdfs.slice(0, 4);
+          for (const pdfItem of topMainPdfs) {
+            log(`Analisi allegato PDF: "${pdfItem.title}" (${pdfItem.url})`);
             try {
-              navigatedUrl = act.url;
-              const detailRes = await fetchWithProxy(act.url, false, log, customProxyUrl, failedProxiesByDomain);
-              const rawDetail = detailRes.data as string;
-              let detailText = "";
-              if (detailRes.format === "html") {
-                const detailDoc = parseHtml(rawDetail);
-                detailText = detailDoc.body?.textContent?.replace(/\s+/g, " ").trim() || "";
-                const pdfAnchors = Array.from(detailDoc.querySelectorAll("a"));
-                for (const pa of pdfAnchors) {
-                  const ph = pa.getAttribute("href") || "";
-                  if (ph.toLowerCase().endsWith(".pdf") || ph.toLowerCase().includes(".pdf?")) {
-                    const pdfResolved = new URL(ph, act.url).href;
-                    log(`PDF trovato: ${pdfResolved}`);
-                    allTexts.push(`=== PDF ALLEGATO (${pdfResolved}) ===\n[PDF URL: ${pdfResolved}]`);
-
-                    try {
-                      log(`Invio PDF via URL/fallback base64: ${pdfResolved}`);
-                      const pdfResJson = await extractPdfWithOpenRouter(
-                        pdfResolved,
-                        "Estrai con precisione da questo atto/PDF i dati relativi a: codice_meccanografico univoco della scuola (es. CHIC81000A, MIIS00100B, cerca nell'intestazione o email @istruzione.it), convocazioni, contratti e interpelli per personale ATA (collaboratore scolastico, assistente amministrativo, tecnico con relativa area laboratorio es. AR01, AR02, AR08, cuoco, agrario) e DOCENTI (infanzia, primaria, secondaria, cattedre comuni e sostegno con relativa classe di concorso CDC es. A-12, A-22, A-28, ADMM, ADSS), graduatorie, tipologia_personale, classe_concorso_area_lab, tipo_posto, ore e decorrenza. Se il punteggio manca, restituisci RIGOROSAMENTE null (MAI 0). Rispondi in JSON.",
-                        apiKey,
-                        false,
-                        customProxyUrl,
-                        failedProxiesByDomain
-                      );
-                      if (pdfResJson && !pdfResJson.error && pdfResJson?.choices?.[0]?.message?.content) {
-                        const pdfContentStr = pdfResJson.choices[0].message.content;
-                        allTexts.push(`=== ESTRAZIONE PDF (${pdfResolved}) ===\n${pdfContentStr}`);
-                      }
-                    } catch (pdfErr: any) {
-                      log(`Avviso estrazione PDF ${pdfResolved}: ${pdfErr.message}`);
-                    }
-                  }
+              const pBufRes = await fetchWithProxy(pdfItem.url, true, log, customProxyUrl, failedProxiesByDomain);
+              if (pBufRes?.data) {
+                const { text: pText } = await extractTextFromPdfBuffer(pBufRes.data as ArrayBuffer);
+                if (pText && pText.trim().length > 30) {
+                  log(`Estratti ${pText.length} caratteri da allegato PDF "${pdfItem.title}"`);
+                  allTexts.push(`=== DOCUMENTO/GRADUATORIA ALLEGATA "${pdfItem.title}" (${pdfItem.url}) ===\n${pText}`);
                 }
-              } else {
-                detailText = rawDetail.replace(/[#*`_\[\]]/g, " ").replace(/\s+/g, " ").trim();
               }
-              allTexts.push(`=== ATTO ${act.id} (${act.title}) ===\n${detailText}`);
-            } catch (actErr: any) {
-              log(`Avviso caricamento atto ${act.id}: ${actErr.message}`);
+            } catch (pErr: any) {
+              log(`Avviso lettura allegato PDF ${pdfItem.title}: ${pErr.message}`);
             }
           }
         }
-      } catch (subErr: any) {
-        log(`Avviso caricamento ${link.url}: ${subErr.message}`);
+      } else {
+        homeText = rawHome.replace(/[#*`_\[\]]/g, " ").replace(/\s+/g, " ").trim();
+      }
+      allTexts.push(`=== HOMEPAGE (${currentUrl}) ===\n${homeText}`);
+      log(`Homepage analizzata (${homeText.length} caratteri estratti).`);
+
+      // 2. Discover relevant sub-links (Albo Pretorio, Circolari, ATA, Trasparenza)
+      const discoveredLinks = findRelevantSchoolLinks(rawHome, currentUrl, homeDoc);
+      log(`Trovati ${discoveredLinks.length} link rilevanti (Albo, Circolari, Convocazioni).`);
+
+      // Take top 5 highest priority links to crawl deeply
+      const topLinksToFetch = discoveredLinks.slice(0, 5);
+      for (const link of topLinksToFetch) {
+        log(`Scansione approfondita sottolink: "${link.title}" (${link.url})`);
+        try {
+          navigatedUrl = link.url;
+          const subRes = await fetchWithProxy(link.url, false, log, customProxyUrl, failedProxiesByDomain);
+          const rawSub = subRes.data as string;
+          let subText = "";
+          let subDoc: Document | undefined;
+          if (subRes.format === "html") {
+            subDoc = parseHtml(rawSub);
+            subText = subDoc.body?.textContent?.replace(/\s+/g, " ").trim() || "";
+          } else {
+            subText = rawSub.replace(/[#*`_\[\]]/g, " ").replace(/\s+/g, " ").trim();
+          }
+          allTexts.push(`=== SOTTOPAGINA (${link.title}) ===\n${subText}`);
+
+          // TASK 2: Extract individual acts (max 8-10 acts) and iterate over them
+          const actLinks = findActLinks(rawSub, link.url, subDoc);
+          if (actLinks.length > 0) {
+            log(`Trovati ${actLinks.length} atti`);
+            for (const act of actLinks) {
+              log(`Apertura dettaglio atto ${act.id}`);
+              try {
+                navigatedUrl = act.url;
+                const detailRes = await fetchWithProxy(act.url, false, log, customProxyUrl, failedProxiesByDomain);
+                const rawDetail = detailRes.data as string;
+                let detailText = "";
+                if (detailRes.format === "html") {
+                  const detailDoc = parseHtml(rawDetail);
+                  detailText = detailDoc.body?.textContent?.replace(/\s+/g, " ").trim() || "";
+                  const pdfAnchors = Array.from(detailDoc.querySelectorAll("a"));
+                  for (const pa of pdfAnchors) {
+                    const ph = pa.getAttribute("href") || "";
+                    if (ph.toLowerCase().endsWith(".pdf") || ph.toLowerCase().includes(".pdf?")) {
+                      const pdfResolved = new URL(ph, act.url).href;
+                      log(`PDF trovato: ${pdfResolved}`);
+
+                      // Estrai il testo completo del PDF dell'atto
+                      try {
+                        const actPdfBuf = await fetchWithProxy(pdfResolved, true, log, customProxyUrl, failedProxiesByDomain);
+                        if (actPdfBuf?.data) {
+                          const { text: actPdfText } = await extractTextFromPdfBuffer(actPdfBuf.data as ArrayBuffer);
+                          if (actPdfText && actPdfText.trim().length > 30) {
+                            log(`Estratti ${actPdfText.length} caratteri dal PDF dell'atto ${act.id}`);
+                            allTexts.push(`=== ATTO ${act.id} TESTO PDF ALLEGATO (${pdfResolved}) ===\n${actPdfText}`);
+                          }
+                        }
+                      } catch (actPdfErr: any) {
+                        log(`Avviso lettura buffer PDF atto ${act.id}: ${actPdfErr.message}`);
+                      }
+
+                      allTexts.push(`=== PDF ALLEGATO (${pdfResolved}) ===\n[PDF URL: ${pdfResolved}]`);
+
+                      try {
+                        log(`Invio PDF via URL/fallback: ${pdfResolved}`);
+                        const pdfResJson = await extractPdfWithOpenRouter(
+                          pdfResolved,
+                          "Estrai con precisione da questo atto/PDF i dati relativi a: codice_meccanografico univoco della scuola (es. CHIC81000A, MIIS00100B, cerca nell'intestazione o email @istruzione.it), convocazioni, contratti e interpelli per personale ATA (collaboratore scolastico, assistente amministrativo, tecnico con relativa area laboratorio es. AR01, AR02, AR08, cuoco, agrario) e DOCENTI (infanzia, primaria, secondaria, cattedre comuni e sostegno con relativa classe di concorso CDC es. A-12, A-22, A-28, ADMM, ADSS), graduatorie, punteggi (es. punti 13,17, pt. 45, soglia fino a punteggio 12), tipologia_personale, classe_concorso_area_lab, tipo_posto, ore e decorrenza. Se il punteggio manca, restituisci RIGOROSAMENTE null (MAI 0). Rispondi in JSON.",
+                          apiKey,
+                          false,
+                          customProxyUrl,
+                          failedProxiesByDomain
+                        );
+                        if (pdfResJson && !pdfResJson.error && pdfResJson?.choices?.[0]?.message?.content) {
+                          const pdfContentStr = pdfResJson.choices[0].message.content;
+                          allTexts.push(`=== ESTRAZIONE PDF (${pdfResolved}) ===\n${pdfContentStr}`);
+                        }
+                      } catch (pdfErr: any) {
+                        log(`Avviso estrazione PDF ${pdfResolved}: ${pdfErr.message}`);
+                      }
+                    }
+                  }
+                } else {
+                  detailText = rawDetail.replace(/[#*`_\[\]]/g, " ").replace(/\s+/g, " ").trim();
+                }
+                allTexts.push(`=== ATTO ${act.id} (${act.title}) ===\n${detailText}`);
+              } catch (actErr: any) {
+                log(`Avviso caricamento atto ${act.id}: ${actErr.message}`);
+              }
+            }
+          }
+        } catch (subErr: any) {
+          log(`Avviso caricamento ${link.url}: ${subErr.message}`);
+        }
       }
     }
 
-    fullText = allTexts.join("\n\n").substring(0, 60000);
+    fullText = allTexts.join("\n\n").substring(0, 150000);
   } catch (directErr: any) {
     log(`Impossibile leggere il sito direttamente (${directErr.message}).`);
   }
@@ -1486,6 +1598,21 @@ const executeClientSideExtract = async (
       extractedData.classe_di_concorso = extractedData.classe_concorso_area_lab;
       extractedData.punteggio = normalizePunteggio(extractedData.punteggio);
 
+      // Se il punteggio di primo livello manca, tenta l'estrazione euristica/regex dal testo completo scaricato
+      if (extractedData.punteggio === null && res.fullText) {
+        const heuristicScore = extractPunteggioHeuristic(res.fullText, {
+          profilo: extractedData.profilo_lavorativo || extractedData.profilo_professionale,
+          cdc: extractedData.classe_concorso_area_lab,
+          nominativo: extractedData.nominativo,
+        });
+        if (heuristicScore.punteggio !== null) {
+          extractedData.punteggio = heuristicScore.punteggio;
+          extractedData.origine_punteggio = "Esplicito";
+          extractedData.note_cross_reference = `Punteggio rilevato nel testo: "${heuristicScore.sourcePhrase || heuristicScore.punteggio}"`;
+          res.logs.push(`🎯 Punteggio rilevato dal testo: ${heuristicScore.punteggio} (${heuristicScore.sourcePhrase || ""})`);
+        }
+      }
+
       // Incrocio graduatorie per risalire a punteggi mancanti
       const currentGrad = getStoredGraduatorie();
       const topCross = crossReferenceNomina(
@@ -1515,7 +1642,22 @@ const executeClientSideExtract = async (
           const tipologia = inferTipologiaPersonale(item);
           const cdcArea = inferClasseConcorsoAreaLab(item, tipologia);
           const tipoPosto = inferTipoPosto(item);
-          const punt = normalizePunteggio(item.punteggio);
+          let punt = normalizePunteggio(item.punteggio);
+
+          // Se manca il punteggio in questa singola nomina, tenta estrazione euristica specifica per profilo/nominativo
+          if (punt === null && res.fullText) {
+            const hMatch = extractPunteggioHeuristic(res.fullText, {
+              profilo: item.profilo_lavorativo || item.profilo_professionale,
+              cdc: cdcArea,
+              nominativo: item.nominativo || extractedData.nominativo,
+            });
+            if (hMatch.punteggio !== null) {
+              punt = hMatch.punteggio;
+              item.origine_punteggio = "Esplicito";
+              item.note_cross_reference = `Punteggio rilevato nel testo: "${hMatch.sourcePhrase || punt}"`;
+              res.logs.push(`🎯 Punteggio nomina (${item.profilo_lavorativo || "profilo"}): ${punt}`);
+            }
+          }
 
           const baseItem = {
             ...item,
