@@ -28,7 +28,12 @@ import {
   Save,
   Github,
   Globe,
-  Trash2
+  Trash2,
+  Eye,
+  EyeOff,
+  Check,
+  X,
+  AlertTriangle
 } from "lucide-react";
 import { ExtractionResult, ExtractionData, BatchHistoryItem } from "./types";
 
@@ -54,6 +59,9 @@ export default function App() {
   const [customProxyUrl, setCustomProxyUrl] = useState(() => typeof window !== "undefined" ? localStorage.getItem("scuola_custom_proxy") || "" : "");
   const [isSettingsOpen, setIsSettingsOpen] = useState(false);
   const [settingsSavedMessage, setSettingsSavedMessage] = useState("");
+  const [showApiKey, setShowApiKey] = useState(false);
+  const [isTestingKey, setIsTestingKey] = useState(false);
+  const [keyTestStatus, setKeyTestStatus] = useState<{ valid: boolean; message: string } | null>(null);
 
   // Albo Pretorio & PDF test state
   const [alboUrlInput, setAlboUrlInput] = useState("");
@@ -115,18 +123,67 @@ export default function App() {
     setActiveTab("batch");
   };
 
-  const saveSettings = (e: React.FormEvent) => {
-    e.preventDefault();
-    localStorage.setItem("scuola_openrouter_api_key", openRouterApiKey.trim());
+  const testOpenRouterKey = async () => {
+    const cleanKey = openRouterApiKey.trim();
+    if (!cleanKey) {
+      setKeyTestStatus({ valid: false, message: "Inserisci prima una chiave API valida." });
+      return;
+    }
+    setIsTestingKey(true);
+    setKeyTestStatus(null);
+    try {
+      const res = await fetch("https://openrouter.ai/api/v1/auth/key", {
+        headers: {
+          Authorization: `Bearer ${cleanKey}`,
+        },
+      });
+      const data = await res.json();
+      if (res.ok && data?.data) {
+        const usage = data.data.usage !== undefined ? `$${Number(data.data.usage).toFixed(3)}` : "";
+        const limit = data.data.limit !== undefined ? `$${Number(data.data.limit).toFixed(2)}` : "";
+        let msg = "Chiave OpenRouter valida e attiva!";
+        if (usage && limit) {
+          msg = `Chiave valida! (Utilizzo: ${usage} / Limite: ${limit})`;
+        } else if (usage) {
+          msg = `Chiave valida! (Utilizzo: ${usage})`;
+        }
+        setKeyTestStatus({ valid: true, message: msg });
+      } else {
+        const err = data?.error?.message || (res.status === 401 ? "Chiave API non valida (401 Unauthorized)." : `Errore HTTP ${res.status}`);
+        setKeyTestStatus({ valid: false, message: err });
+      }
+    } catch (e: any) {
+      setKeyTestStatus({
+        valid: false,
+        message: `Impossibile verificare: ${e.message || "Errore di connessione"}`
+      });
+    } finally {
+      setIsTestingKey(false);
+    }
+  };
+
+  const saveSettings = (e?: React.FormEvent) => {
+    if (e) e.preventDefault();
+    const cleanKey = openRouterApiKey.trim();
+    localStorage.setItem("scuola_openrouter_api_key", cleanKey);
     localStorage.setItem("scuola_github_user", githubUser.trim());
     localStorage.setItem("scuola_github_repo", githubRepo.trim());
     localStorage.setItem("scuola_github_pat", githubPat.trim());
     localStorage.setItem("scuola_custom_proxy", customProxyUrl.trim());
     setSettingsSavedMessage("Impostazioni salvate con successo in LocalStorage!");
+
+    if (cleanKey) {
+      setSingleError(prev => (prev.includes("API Key") || prev.includes("Impostazioni") ? "" : prev));
+      setBatchError(prev => (prev.includes("API Key") || prev.includes("Impostazioni") ? "" : prev));
+      setAlboScanError(prev => (prev.includes("API Key") || prev.includes("Impostazioni") ? "" : prev));
+      setPdfExtractError(prev => (prev.includes("API Key") || prev.includes("Impostazioni") ? "" : prev));
+      setSearchError(prev => (prev.includes("API Key") || prev.includes("Impostazioni") ? "" : prev));
+    }
+
     setTimeout(() => {
       setSettingsSavedMessage("");
       setIsSettingsOpen(false);
-    }, 1500);
+    }, 1200);
   };
 
   // Export local backup (JSON)
@@ -993,7 +1050,10 @@ const executeClientSideExtract = async (targetUrl: string, apiKey: string, custo
     setAlboScanResult(null);
     const formattedUrl = alboUrlInput.trim().startsWith("http") ? alboUrlInput.trim() : `https://${alboUrlInput.trim()}`;
     try {
-      if (!openRouterApiKey.trim()) throw new Error("Inserisci API Key");
+      if (!openRouterApiKey.trim()) {
+        setIsSettingsOpen(true);
+        throw new Error("Inserisci la tua OpenRouter API Key nelle Impostazioni per abilitare la scansione dell'Albo Pretorio.");
+      }
       const res = await scrapeWebsite(formattedUrl, openRouterApiKey.trim(), EXTRACTION_SYSTEM_PROMPT, customProxyUrl.trim());
       setAlboScanResult({ success: true, ...res });
     } catch (err: any) {
@@ -1012,6 +1072,7 @@ const executeClientSideExtract = async (targetUrl: string, apiKey: string, custo
 
     try {
       if (!openRouterApiKey.trim()) {
+        setIsSettingsOpen(true);
         throw new Error("Inserisci la tua OpenRouter API Key nelle Impostazioni per abilitare l'estrazione client-side dei PDF.");
       }
 
@@ -1066,6 +1127,7 @@ const executeClientSideExtract = async (targetUrl: string, apiKey: string, custo
 
     try {
       if (!openRouterApiKey.trim()) {
+        setIsSettingsOpen(true);
         throw new Error("Inserisci la tua OpenRouter API Key nelle Impostazioni per abilitare la ricerca client-side.");
       }
       const resultText = await executeClientSideSearch(searchQuery.trim(), openRouterApiKey.trim());
@@ -1344,6 +1406,7 @@ const executeClientSideExtract = async (targetUrl: string, apiKey: string, custo
 
     try {
       if (!openRouterApiKey.trim()) {
+        setIsSettingsOpen(true);
         throw new Error("Inserisci la tua OpenRouter API Key nelle Impostazioni per abilitare l'estrazione client-side.");
       }
 
@@ -1464,7 +1527,7 @@ const executeClientSideExtract = async (targetUrl: string, apiKey: string, custo
   return (
     <div className="min-h-screen bg-slate-950 text-slate-100 flex flex-col font-sans selection:bg-indigo-500 selection:text-white">
       {/* Top Navbar */}
-      <header className="border-b border-slate-800 bg-slate-900/80 backdrop-blur-md sticky top-0 z-50 px-6 py-4 flex items-center justify-between">
+      <header className="border-b border-slate-800 bg-slate-900/80 backdrop-blur-md sticky top-0 z-40 px-6 py-4 flex items-center justify-between">
         <div className="flex items-center space-x-3">
           <div className="bg-indigo-600/20 border border-indigo-500/30 p-2.5 rounded-xl text-indigo-400">
             <Cpu className="w-6 h-6 animate-pulse" />
@@ -1472,7 +1535,28 @@ const executeClientSideExtract = async (targetUrl: string, apiKey: string, custo
           <div>
             <h1 className="text-lg font-bold tracking-tight text-white flex items-center gap-2">
               ScuolaATA Data Scraper & AI Extractor
-              <span className="text-xs bg-emerald-500/20 text-emerald-300 border border-emerald-500/30 px-2 py-0.5 rounded-full font-medium">OpenRouter AI</span>
+              {openRouterApiKey ? (
+                <button
+                  type="button"
+                  onClick={() => setIsSettingsOpen(true)}
+                  className="text-xs bg-emerald-500/20 hover:bg-emerald-500/30 text-emerald-300 border border-emerald-500/30 px-2.5 py-0.5 rounded-full font-medium flex items-center gap-1.5 transition-colors cursor-pointer"
+                  title="OpenRouter AI Attivo - Clicca per gestire la chiave"
+                >
+                  <span className="w-1.5 h-1.5 rounded-full bg-emerald-400"></span>
+                  <span>OpenRouter AI Connesso</span>
+                  <Check className="w-3 h-3 text-emerald-400" />
+                </button>
+              ) : (
+                <button
+                  type="button"
+                  onClick={() => setIsSettingsOpen(true)}
+                  className="text-xs bg-amber-500/20 hover:bg-amber-500/30 text-amber-300 border border-amber-500/40 px-2.5 py-0.5 rounded-full font-medium flex items-center gap-1.5 transition-colors cursor-pointer animate-pulse"
+                  title="Clicca qui per inserire la tua OpenRouter API Key"
+                >
+                  <Key className="w-3 h-3 text-amber-400" />
+                  <span>API Key Mancante (Clicca per inserire)</span>
+                </button>
+              )}
             </h1>
             <p className="text-xs text-slate-400">Automazione avanzata per bandi, convocazioni e pensionamenti scolastici</p>
           </div>
@@ -1547,55 +1631,180 @@ const executeClientSideExtract = async (targetUrl: string, apiKey: string, custo
           </button>
           <button
             onClick={() => setIsSettingsOpen(true)}
-            className="px-4 py-2 rounded-lg text-sm font-medium transition-all flex items-center gap-2 bg-slate-800 hover:bg-slate-700 text-slate-200 border border-slate-700"
+            className={`px-4 py-2 rounded-lg text-sm font-medium transition-all flex items-center gap-2 border cursor-pointer ${
+              !openRouterApiKey
+                ? "bg-amber-500/20 hover:bg-amber-500/30 text-amber-300 border-amber-500/50 shadow-lg shadow-amber-500/10 animate-pulse"
+                : "bg-slate-800 hover:bg-slate-700 text-slate-200 border-slate-700"
+            }`}
           >
-            <Settings className="w-4 h-4 text-indigo-400" />
-            <span>Impostazioni & API Key</span>
+            {openRouterApiKey ? (
+              <Settings className="w-4 h-4 text-indigo-400" />
+            ) : (
+              <Key className="w-4 h-4 text-amber-400" />
+            )}
+            <span>{openRouterApiKey ? "Impostazioni & API Key" : "Configura API Key"}</span>
+            {!openRouterApiKey && (
+              <span className="w-2 h-2 rounded-full bg-amber-400 animate-ping"></span>
+            )}
           </button>
         </div>
       </header>
 
-      {/* Settings Modal */}
+      {/* Settings Modal - Responsive, Scrollable & Always Accessible */}
       {isSettingsOpen && (
-        <div className="fixed inset-0 z-50 bg-black/70 backdrop-blur-sm flex items-center justify-center p-4">
-          <div className="bg-slate-900 border border-slate-800 rounded-2xl max-w-lg w-full p-6 shadow-2xl space-y-6 relative animate-fadeIn">
-            <div className="flex items-center justify-between border-b border-slate-800 pb-4">
-              <h3 className="text-lg font-semibold text-white flex items-center gap-2">
-                <Settings className="w-5 h-5 text-indigo-400" />
-                Configurazione & Credenziali (LocalStorage)
-              </h3>
+        <div 
+          className="fixed inset-0 z-50 bg-black/80 backdrop-blur-md overflow-y-auto p-3 sm:p-6 flex items-start sm:items-center justify-center"
+          onClick={(e) => {
+            if (e.target === e.currentTarget) setIsSettingsOpen(false);
+          }}
+        >
+          <div 
+            className="bg-slate-900 border border-slate-700 rounded-2xl max-w-2xl w-full my-auto shadow-2xl flex flex-col max-h-[90vh] overflow-hidden relative animate-fadeIn"
+            onClick={(e) => e.stopPropagation()}
+          >
+            {/* Modal Header (Fixed & Sticky) */}
+            <div className="flex items-center justify-between border-b border-slate-800 px-6 py-4 bg-slate-900/95 sticky top-0 z-20 shrink-0">
+              <div className="flex items-center gap-3">
+                <div className="p-2.5 rounded-xl bg-indigo-600/20 text-indigo-400 border border-indigo-500/30">
+                  <Settings className="w-5 h-5" />
+                </div>
+                <div>
+                  <h3 className="text-base font-semibold text-white">
+                    Configurazione & Credenziali (LocalStorage)
+                  </h3>
+                  <p className="text-xs text-slate-400">
+                    Inserisci la tua OpenRouter API Key e gestisci le preferenze di scraping
+                  </p>
+                </div>
+              </div>
               <button
+                type="button"
                 onClick={() => setIsSettingsOpen(false)}
-                className="text-slate-400 hover:text-white text-sm font-bold px-2 py-1 rounded-lg bg-slate-800"
+                className="text-slate-400 hover:text-white p-2 rounded-xl bg-slate-800 hover:bg-slate-700 transition-colors"
+                title="Chiudi"
               >
-                ✕
+                <X className="w-4 h-4" />
               </button>
             </div>
 
-            <form onSubmit={saveSettings} className="space-y-4">
+            {/* Scrollable Form Body */}
+            <form onSubmit={saveSettings} className="overflow-y-auto p-5 sm:p-6 space-y-6 flex-1">
               {settingsSavedMessage && (
-                <div className="bg-emerald-500/10 border border-emerald-500/30 text-emerald-400 px-4 py-2.5 rounded-xl text-sm flex items-center gap-2">
-                  <CheckCircle2 className="w-4 h-4 flex-shrink-0" />
-                  <span>{settingsSavedMessage}</span>
+                <div className="bg-emerald-500/15 border border-emerald-500/40 text-emerald-300 px-4 py-3 rounded-xl text-sm flex items-center gap-2.5 animate-fadeIn">
+                  <CheckCircle2 className="w-4 h-4 shrink-0 text-emerald-400" />
+                  <span className="font-medium">{settingsSavedMessage}</span>
                 </div>
               )}
 
-              <div className="space-y-1.5">
-                <label className="text-xs font-medium text-slate-300 flex items-center gap-1.5">
-                  <Key className="w-3.5 h-3.5 text-emerald-400" />
-                  <span>OpenRouter API Key (Richiesta per AI Extractor)</span>
-                </label>
-                <input
-                  type="password"
-                  value={openRouterApiKey}
-                  onChange={(e) => setOpenRouterApiKey(e.target.value)}
-                  placeholder="sk-or-v1-..."
-                  className="w-full bg-slate-950 border border-slate-800 rounded-xl px-4 py-2.5 text-sm text-white focus:outline-none focus:border-indigo-500"
-                />
-                <p className="text-[11px] text-slate-500">Inserisci la chiave OpenRouter per abilitare le chiamate di ricerca e analisi LLM.</p>
+              {/* PRIMARY & PROMINENT: OpenRouter API Key Input Card */}
+              <div className="bg-slate-950 border-2 border-indigo-500/40 rounded-2xl p-5 space-y-3.5 shadow-lg relative overflow-hidden">
+                <div className="flex items-center justify-between flex-wrap gap-2">
+                  <div className="flex items-center gap-2">
+                    <div className="p-1.5 bg-indigo-500/20 text-indigo-400 rounded-lg">
+                      <Key className="w-4 h-4" />
+                    </div>
+                    <label htmlFor="openrouter-api-key-input" className="text-sm font-semibold text-white">
+                      OpenRouter API Key
+                    </label>
+                    <span className="text-[10px] uppercase font-bold tracking-wider px-2 py-0.5 rounded-full bg-indigo-500/20 text-indigo-300 border border-indigo-500/30">
+                      Obbligatoria per AI
+                    </span>
+                  </div>
+                  <a
+                    href="https://openrouter.ai/keys"
+                    target="_blank"
+                    rel="noopener noreferrer"
+                    className="text-xs text-indigo-400 hover:text-indigo-300 hover:underline flex items-center gap-1 font-medium transition-colors"
+                  >
+                    <span>Ottieni chiave su openrouter.ai</span>
+                    <ExternalLink className="w-3 h-3" />
+                  </a>
+                </div>
+
+                <p className="text-xs text-slate-300 leading-relaxed">
+                  Incolla qui la tua chiave segreta OpenRouter (inizia con <code className="bg-slate-800 text-indigo-300 px-1.5 py-0.5 rounded font-mono text-[11px]">sk-or-v1-...</code>). Viene memorizzata esclusivamente nel LocalStorage del tuo browser e usata direttamente per le chiamate AI (Gemini 2.5 Flash / Claude).
+                </p>
+
+                <div className="space-y-2">
+                  <div className="relative flex items-center">
+                    <input
+                      id="openrouter-api-key-input"
+                      type={showApiKey ? "text" : "password"}
+                      value={openRouterApiKey}
+                      onChange={(e) => {
+                        setOpenRouterApiKey(e.target.value);
+                        setKeyTestStatus(null);
+                      }}
+                      placeholder="sk-or-v1-xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx"
+                      className="w-full bg-slate-900 border border-slate-700 rounded-xl pl-4 pr-24 py-3 text-sm text-white placeholder-slate-500 focus:outline-none focus:border-indigo-500 focus:ring-1 focus:ring-indigo-500 font-mono transition-all"
+                      autoFocus
+                    />
+                    <div className="absolute right-2 flex items-center gap-1">
+                      {openRouterApiKey && (
+                        <button
+                          type="button"
+                          onClick={() => {
+                            setOpenRouterApiKey("");
+                            setKeyTestStatus(null);
+                          }}
+                          title="Svuota campo"
+                          className="p-1.5 text-slate-400 hover:text-white rounded-lg hover:bg-slate-800 transition-colors"
+                        >
+                          <X className="w-3.5 h-3.5" />
+                        </button>
+                      )}
+                      <button
+                        type="button"
+                        onClick={() => setShowApiKey(!showApiKey)}
+                        title={showApiKey ? "Nascondi chiave" : "Mostra chiave"}
+                        className="p-1.5 text-slate-400 hover:text-white rounded-lg hover:bg-slate-800 transition-colors"
+                      >
+                        {showApiKey ? <EyeOff className="w-4 h-4" /> : <Eye className="w-4 h-4" />}
+                      </button>
+                    </div>
+                  </div>
+
+                  {/* Test Key Button & Validation Result */}
+                  <div className="flex items-center justify-between flex-wrap gap-2 pt-1">
+                    <button
+                      type="button"
+                      onClick={testOpenRouterKey}
+                      disabled={!openRouterApiKey.trim() || isTestingKey}
+                      className="px-3 py-1.5 rounded-lg text-xs font-medium bg-slate-800 hover:bg-slate-700 text-slate-200 border border-slate-700 flex items-center gap-1.5 disabled:opacity-50 disabled:cursor-not-allowed transition-all"
+                    >
+                      {isTestingKey ? (
+                        <>
+                          <Loader2 className="w-3.5 h-3.5 animate-spin text-indigo-400" />
+                          <span>Verifica connessione in corso...</span>
+                        </>
+                      ) : (
+                        <>
+                          <ShieldCheck className="w-3.5 h-3.5 text-emerald-400" />
+                          <span>Testa Validità Chiave</span>
+                        </>
+                      )}
+                    </button>
+
+                    {keyTestStatus && (
+                      <div className={`text-xs flex items-center gap-1.5 font-medium px-2.5 py-1 rounded-lg ${
+                        keyTestStatus.valid 
+                          ? "bg-emerald-500/10 text-emerald-400 border border-emerald-500/30" 
+                          : "bg-rose-500/10 text-rose-400 border border-rose-500/30"
+                      }`}>
+                        {keyTestStatus.valid ? (
+                          <CheckCircle2 className="w-3.5 h-3.5 text-emerald-400 shrink-0" />
+                        ) : (
+                          <AlertCircle className="w-3.5 h-3.5 text-rose-400 shrink-0" />
+                        )}
+                        <span>{keyTestStatus.message}</span>
+                      </div>
+                    )}
+                  </div>
+                </div>
               </div>
 
-              <div className="border-t border-slate-800 pt-4 space-y-3">
+              {/* SECTION: Rete & Architettura Anti-403 */}
+              <div className="border-t border-slate-800 pt-5 space-y-3">
                 <div className="flex items-center justify-between">
                   <h4 className="text-xs font-semibold uppercase tracking-wider text-slate-400 flex items-center gap-1.5">
                     <Globe className="w-3.5 h-3.5 text-indigo-400" />
@@ -1629,32 +1838,35 @@ const executeClientSideExtract = async (targetUrl: string, apiKey: string, custo
                 </div>
               </div>
 
-              <div className="border-t border-slate-800 pt-4 space-y-3">
+              {/* SECTION: GitHub Integration */}
+              <div className="border-t border-slate-800 pt-5 space-y-3">
                 <h4 className="text-xs font-semibold uppercase tracking-wider text-slate-400 flex items-center gap-1.5">
                   <Github className="w-3.5 h-3.5 text-slate-300" />
                   <span>GitHub Integration (Opzionale)</span>
                 </h4>
 
-                <div className="space-y-1.5">
-                  <label className="text-xs font-medium text-slate-300">Username GitHub</label>
-                  <input
-                    type="text"
-                    value={githubUser}
-                    onChange={(e) => setGithubUser(e.target.value)}
-                    placeholder="es. mariosrossi"
-                    className="w-full bg-slate-950 border border-slate-800 rounded-xl px-4 py-2.5 text-sm text-white focus:outline-none focus:border-indigo-500"
-                  />
-                </div>
+                <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
+                  <div className="space-y-1.5">
+                    <label className="text-xs font-medium text-slate-300">Username GitHub</label>
+                    <input
+                      type="text"
+                      value={githubUser}
+                      onChange={(e) => setGithubUser(e.target.value)}
+                      placeholder="es. mariosrossi"
+                      className="w-full bg-slate-950 border border-slate-800 rounded-xl px-4 py-2.5 text-sm text-white focus:outline-none focus:border-indigo-500"
+                    />
+                  </div>
 
-                <div className="space-y-1.5">
-                  <label className="text-xs font-medium text-slate-300">Nome Repository</label>
-                  <input
-                    type="text"
-                    value={githubRepo}
-                    onChange={(e) => setGithubRepo(e.target.value)}
-                    placeholder="es. dashboard-etsy"
-                    className="w-full bg-slate-950 border border-slate-800 rounded-xl px-4 py-2.5 text-sm text-white focus:outline-none focus:border-indigo-500"
-                  />
+                  <div className="space-y-1.5">
+                    <label className="text-xs font-medium text-slate-300">Nome Repository</label>
+                    <input
+                      type="text"
+                      value={githubRepo}
+                      onChange={(e) => setGithubRepo(e.target.value)}
+                      placeholder="es. dashboard-etsy"
+                      className="w-full bg-slate-950 border border-slate-800 rounded-xl px-4 py-2.5 text-sm text-white focus:outline-none focus:border-indigo-500"
+                    />
+                  </div>
                 </div>
 
                 <div className="space-y-1.5">
@@ -1669,7 +1881,8 @@ const executeClientSideExtract = async (targetUrl: string, apiKey: string, custo
                 </div>
               </div>
 
-              <div className="border-t border-slate-800 pt-4 space-y-3">
+              {/* SECTION: Salvataggio e Backup Locale */}
+              <div className="border-t border-slate-800 pt-5 space-y-3">
                 <h4 className="text-xs font-semibold uppercase tracking-wider text-slate-400 flex items-center gap-1.5">
                   <Database className="w-3.5 h-3.5 text-indigo-400" />
                   <span>Salvataggio e Backup Locale sul Device</span>
@@ -1694,21 +1907,28 @@ const executeClientSideExtract = async (targetUrl: string, apiKey: string, custo
                 </div>
               </div>
 
-              <div className="flex justify-end gap-3 pt-4 border-t border-slate-800">
-                <button
-                  type="button"
-                  onClick={() => setIsSettingsOpen(false)}
-                  className="px-4 py-2 rounded-xl text-sm font-medium text-slate-400 hover:text-white bg-slate-800 hover:bg-slate-700"
-                >
-                  Annulla
-                </button>
-                <button
-                  type="submit"
-                  className="px-5 py-2 rounded-xl text-sm font-medium bg-indigo-600 hover:bg-indigo-500 text-white shadow-lg shadow-indigo-600/25 flex items-center gap-2"
-                >
-                  <Save className="w-4 h-4" />
-                  <span>Salva Impostazioni</span>
-                </button>
+              {/* Sticky Footer */}
+              <div className="flex items-center justify-between gap-3 pt-5 border-t border-slate-800 bg-slate-900/95 sticky bottom-0 z-20 shrink-0">
+                <div className="text-xs text-slate-400 flex items-center gap-1.5">
+                  <span className={`w-2 h-2 rounded-full ${openRouterApiKey ? "bg-emerald-400" : "bg-amber-400"}`}></span>
+                  <span>{openRouterApiKey ? "Chiave inserita" : "Chiave non ancora impostata"}</span>
+                </div>
+                <div className="flex items-center gap-3">
+                  <button
+                    type="button"
+                    onClick={() => setIsSettingsOpen(false)}
+                    className="px-4 py-2 rounded-xl text-sm font-medium text-slate-400 hover:text-white bg-slate-800 hover:bg-slate-700 transition-colors"
+                  >
+                    Annulla
+                  </button>
+                  <button
+                    type="submit"
+                    className="px-5 py-2 rounded-xl text-sm font-medium bg-indigo-600 hover:bg-indigo-500 text-white shadow-lg shadow-indigo-600/25 flex items-center gap-2 transition-all cursor-pointer"
+                  >
+                    <Save className="w-4 h-4" />
+                    <span>Salva Impostazioni</span>
+                  </button>
+                </div>
               </div>
             </form>
           </div>
@@ -1717,6 +1937,36 @@ const executeClientSideExtract = async (targetUrl: string, apiKey: string, custo
 
       {/* Main Content Area */}
       <main className="flex-1 max-w-7xl w-full mx-auto p-6 space-y-8">
+
+        {/* Global OpenRouter API Key Missing Banner */}
+        {!openRouterApiKey && (
+          <div className="bg-gradient-to-r from-amber-500/15 via-indigo-950/30 to-slate-900 border border-amber-500/40 rounded-2xl p-4 sm:p-5 flex flex-col sm:flex-row items-start sm:items-center justify-between gap-4 shadow-xl animate-fadeIn">
+            <div className="flex items-start sm:items-center gap-3.5">
+              <div className="p-2.5 bg-amber-500/20 text-amber-300 border border-amber-500/30 rounded-xl shrink-0">
+                <Key className="w-5 h-5 animate-pulse" />
+              </div>
+              <div className="space-y-0.5">
+                <h3 className="text-sm sm:text-base font-semibold text-white flex items-center gap-2">
+                  <span>OpenRouter API Key richiesta per l'estrazione AI</span>
+                  <span className="text-[10px] bg-amber-500/20 text-amber-300 border border-amber-500/30 px-2 py-0.5 rounded-full uppercase tracking-wider font-bold">
+                    Non Configurato
+                  </span>
+                </h3>
+                <p className="text-xs text-slate-300">
+                  Per scansionare i siti degli istituti scolastici, analizzare l'Albo Pretorio ed estrarre i dati delle convocazioni ATA, inserisci la tua API Key di OpenRouter.
+                </p>
+              </div>
+            </div>
+            <button
+              type="button"
+              onClick={() => setIsSettingsOpen(true)}
+              className="px-4 py-2.5 bg-indigo-600 hover:bg-indigo-500 text-white text-xs font-semibold rounded-xl transition-all shadow-lg shadow-indigo-600/30 flex items-center gap-2 shrink-0 cursor-pointer"
+            >
+              <Key className="w-4 h-4" />
+              <span>Inserisci API Key Ora</span>
+            </button>
+          </div>
+        )}
         
         {/* TAB 1: BATCH CSV PROCESSING */}
         {activeTab === "batch" && (
@@ -1786,10 +2036,39 @@ const executeClientSideExtract = async (targetUrl: string, apiKey: string, custo
                   </div>
                 </form>
 
+                {!openRouterApiKey && (
+                  <div className="bg-amber-500/10 border border-amber-500/30 rounded-xl p-3.5 flex flex-col sm:flex-row items-start sm:items-center justify-between gap-3 text-xs text-amber-300 animate-fadeIn">
+                    <div className="flex items-center gap-2.5">
+                      <AlertTriangle className="w-4 h-4 shrink-0 text-amber-400" />
+                      <span><strong>Attenzione:</strong> OpenRouter API Key non ancora configurata per l'elaborazione batch.</span>
+                    </div>
+                    <button
+                      type="button"
+                      onClick={() => setIsSettingsOpen(true)}
+                      className="bg-amber-500 hover:bg-amber-400 text-slate-950 font-bold px-3 py-1.5 rounded-lg transition-colors shrink-0 flex items-center gap-1.5 cursor-pointer"
+                    >
+                      <Key className="w-3.5 h-3.5" />
+                      <span>Configura API Key</span>
+                    </button>
+                  </div>
+                )}
+
                 {batchError && (
-                  <div className="bg-rose-500/10 border border-rose-500/20 text-rose-400 p-4 rounded-xl text-sm flex items-center gap-3">
-                    <AlertCircle className="w-5 h-5 shrink-0" />
-                    <span>{batchError}</span>
+                  <div className="bg-rose-500/10 border border-rose-500/20 text-rose-400 p-4 rounded-xl text-sm flex flex-col sm:flex-row sm:items-center justify-between gap-3 animate-fadeIn">
+                    <div className="flex items-center gap-3">
+                      <AlertCircle className="w-5 h-5 shrink-0 text-rose-400" />
+                      <span>{batchError}</span>
+                    </div>
+                    {(!openRouterApiKey || batchError.includes("API Key") || batchError.includes("Impostazioni")) && (
+                      <button
+                        type="button"
+                        onClick={() => setIsSettingsOpen(true)}
+                        className="px-3 py-1.5 bg-rose-600 hover:bg-rose-500 text-white rounded-lg text-xs font-semibold shrink-0 transition-colors shadow flex items-center gap-1.5 self-start sm:self-auto cursor-pointer"
+                      >
+                        <Key className="w-3.5 h-3.5" />
+                        <span>Inserisci API Key</span>
+                      </button>
+                    )}
                   </div>
                 )}
               </div>
@@ -2018,10 +2297,39 @@ const executeClientSideExtract = async (targetUrl: string, apiKey: string, custo
                 </div>
               </form>
 
+              {!openRouterApiKey && (
+                <div className="bg-amber-500/10 border border-amber-500/30 rounded-xl p-3.5 flex flex-col sm:flex-row items-start sm:items-center justify-between gap-3 text-xs text-amber-300 animate-fadeIn">
+                  <div className="flex items-center gap-2.5">
+                    <AlertTriangle className="w-4 h-4 shrink-0 text-amber-400" />
+                    <span><strong>OpenRouter API Key richiesta:</strong> Inserisci la tua API Key per sbloccare l'estrazione AI e la scansione della pagina.</span>
+                  </div>
+                  <button
+                    type="button"
+                    onClick={() => setIsSettingsOpen(true)}
+                    className="bg-amber-500 hover:bg-amber-400 text-slate-950 font-bold px-3 py-1.5 rounded-lg transition-colors shrink-0 flex items-center gap-1.5 cursor-pointer"
+                  >
+                    <Key className="w-3.5 h-3.5" />
+                    <span>Configura Chiave</span>
+                  </button>
+                </div>
+              )}
+
               {singleError && (
-                <div className="bg-rose-500/10 border border-rose-500/20 text-rose-400 p-4 rounded-xl text-sm flex items-center gap-3">
-                  <AlertCircle className="w-5 h-5 shrink-0" />
-                  <span>{singleError}</span>
+                <div className="bg-rose-500/10 border border-rose-500/20 text-rose-400 p-4 rounded-xl text-sm flex flex-col sm:flex-row sm:items-center justify-between gap-3 animate-fadeIn">
+                  <div className="flex items-center gap-3">
+                    <AlertCircle className="w-5 h-5 shrink-0 text-rose-400" />
+                    <span>{singleError}</span>
+                  </div>
+                  {(!openRouterApiKey || singleError.includes("API Key") || singleError.includes("Impostazioni")) && (
+                    <button
+                      type="button"
+                      onClick={() => setIsSettingsOpen(true)}
+                      className="px-3.5 py-1.5 bg-rose-600 hover:bg-rose-500 text-white rounded-lg text-xs font-semibold shrink-0 transition-colors shadow flex items-center gap-1.5 self-start sm:self-auto cursor-pointer"
+                    >
+                      <Key className="w-3.5 h-3.5" />
+                      <span>Inserisci API Key</span>
+                    </button>
+                  )}
                 </div>
               )}
             </div>
@@ -2261,9 +2569,21 @@ const executeClientSideExtract = async (targetUrl: string, apiKey: string, custo
               </form>
 
               {alboScanError && (
-                <div className="bg-rose-500/10 border border-rose-500/20 text-rose-400 p-4 rounded-xl text-sm flex items-center gap-3">
-                  <AlertCircle className="w-5 h-5 shrink-0" />
-                  <span>{alboScanError}</span>
+                <div className="bg-rose-500/10 border border-rose-500/20 text-rose-400 p-4 rounded-xl text-sm flex flex-col sm:flex-row sm:items-center justify-between gap-3 animate-fadeIn">
+                  <div className="flex items-center gap-3">
+                    <AlertCircle className="w-5 h-5 shrink-0 text-rose-400" />
+                    <span>{alboScanError}</span>
+                  </div>
+                  {(!openRouterApiKey || alboScanError.includes("API Key") || alboScanError.includes("Impostazioni")) && (
+                    <button
+                      type="button"
+                      onClick={() => setIsSettingsOpen(true)}
+                      className="px-3.5 py-1.5 bg-rose-600 hover:bg-rose-500 text-white rounded-lg text-xs font-semibold shrink-0 transition-colors shadow flex items-center gap-1.5 self-start sm:self-auto cursor-pointer"
+                    >
+                      <Key className="w-3.5 h-3.5" />
+                      <span>Inserisci API Key</span>
+                    </button>
+                  )}
                 </div>
               )}
 
@@ -2391,9 +2711,21 @@ const executeClientSideExtract = async (targetUrl: string, apiKey: string, custo
               </form>
 
               {pdfExtractError && (
-                <div className="bg-rose-500/10 border border-rose-500/20 text-rose-400 p-4 rounded-xl text-sm flex items-center gap-3">
-                  <AlertCircle className="w-5 h-5 shrink-0" />
-                  <span>{pdfExtractError}</span>
+                <div className="bg-rose-500/10 border border-rose-500/20 text-rose-400 p-4 rounded-xl text-sm flex flex-col sm:flex-row sm:items-center justify-between gap-3 animate-fadeIn">
+                  <div className="flex items-center gap-3">
+                    <AlertCircle className="w-5 h-5 shrink-0 text-rose-400" />
+                    <span>{pdfExtractError}</span>
+                  </div>
+                  {(!openRouterApiKey || pdfExtractError.includes("API Key") || pdfExtractError.includes("Impostazioni")) && (
+                    <button
+                      type="button"
+                      onClick={() => setIsSettingsOpen(true)}
+                      className="px-3.5 py-1.5 bg-rose-600 hover:bg-rose-500 text-white rounded-lg text-xs font-semibold shrink-0 transition-colors shadow flex items-center gap-1.5 self-start sm:self-auto cursor-pointer"
+                    >
+                      <Key className="w-3.5 h-3.5" />
+                      <span>Inserisci API Key</span>
+                    </button>
+                  )}
                 </div>
               )}
 
@@ -2493,9 +2825,21 @@ const executeClientSideExtract = async (targetUrl: string, apiKey: string, custo
               </form>
 
               {searchError && (
-                <div className="bg-rose-500/10 border border-rose-500/20 text-rose-400 p-4 rounded-xl text-sm flex items-center gap-3">
-                  <AlertCircle className="w-5 h-5 shrink-0" />
-                  <span>{searchError}</span>
+                <div className="bg-rose-500/10 border border-rose-500/20 text-rose-400 p-4 rounded-xl text-sm flex flex-col sm:flex-row sm:items-center justify-between gap-3 animate-fadeIn">
+                  <div className="flex items-center gap-3">
+                    <AlertCircle className="w-5 h-5 shrink-0 text-rose-400" />
+                    <span>{searchError}</span>
+                  </div>
+                  {(!openRouterApiKey || searchError.includes("API Key") || searchError.includes("Impostazioni")) && (
+                    <button
+                      type="button"
+                      onClick={() => setIsSettingsOpen(true)}
+                      className="px-3.5 py-1.5 bg-rose-600 hover:bg-rose-500 text-white rounded-lg text-xs font-semibold shrink-0 transition-colors shadow flex items-center gap-1.5 self-start sm:self-auto cursor-pointer"
+                    >
+                      <Key className="w-3.5 h-3.5" />
+                      <span>Inserisci API Key</span>
+                    </button>
+                  )}
                 </div>
               )}
             </div>
