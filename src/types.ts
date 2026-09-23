@@ -4,6 +4,8 @@ export interface AlboPretorioContract {
   data_pubblicazione?: string;
   pdf_url?: string;
   graduatoria_fascia: string;
+  punteggio?: string;
+  posizione_graduatoria?: string;
   profilo_professionale: string;
   classe_di_concorso: string;
   ore_settimanali: string;

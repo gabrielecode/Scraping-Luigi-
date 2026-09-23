@@ -270,9 +270,16 @@ Analizza il documento PDF del contratto di supplenza ed estrai con la massima pr
 ⚠️ VINCOLO FONDAMENTALE DI PRIVACY (NON NEGOZIABILE):
 - NON estrarre MAI nomi, cognomi, codici fiscali, indirizzi, numeri di telefono o dati anagrafici individuali. Ometti categoricamente qualsiasi dato personale identificativo del lavoratore o del dirigente.
 
+CAMPI DA ESTRARRE:
+- "graduatoria_fascia": fascia graduatoria (es. "I Fascia", "II Fascia", "III Fascia", oppure "Non specificata").
+- "punteggio": punteggio numerico di convocazione/graduatoria come nel documento (es "13,17"), "" se assente.
+- "posizione_graduatoria": posizione numerica in graduatoria (es "313"), "" se assente.
+
 Restituisci ESCLUSIVAMENTE un oggetto JSON valido con la seguente struttura:
 {
   "graduatoria_fascia": stringa (es. "I Fascia", "II Fascia", "III Fascia", oppure "Non specificata"),
+  "punteggio": stringa,
+  "posizione_graduatoria": stringa,
   "profilo_professionale": stringa (es. "Collaboratore Scolastico", "Assistente Amministrativo", "Assistente Tecnico", "Docente", ecc.),
   "classe_di_concorso": stringa (es. "A012", "A022", "AA25", oppure "" se non applicabile o non presente),
   "ore_settimanali": stringa (es. "36 ore", "18 ore", "12 ore", ecc.),
@@ -1033,6 +1040,8 @@ const executeClientSideExtract = async (targetUrl: string, apiKey: string, custo
         size: selectedPdfFile.size,
         data: {
           graduatoria_fascia: extracted.graduatoria_fascia || "Non specificata",
+          punteggio: extracted.punteggio || "N/D",
+          posizione_graduatoria: extracted.posizione_graduatoria || "N/D",
           profilo_professionale: extracted.profilo_professionale || "Personale ATA / Docente",
           classe_di_concorso: extracted.classe_di_concorso || "",
           ore_settimanali: extracted.ore_settimanali || "",
@@ -2404,6 +2413,14 @@ const executeClientSideExtract = async (targetUrl: string, apiKey: string, custo
                     <div className="bg-slate-950/60 border border-slate-800 rounded-xl p-4">
                       <span className="text-[11px] font-semibold text-indigo-400 uppercase tracking-wider block mb-1">Graduatoria Fascia</span>
                       <span className="text-base font-bold text-white">{pdfExtractResult.data.graduatoria_fascia || "N/D"}</span>
+                    </div>
+                    <div className="bg-slate-950/60 border border-slate-800 rounded-xl p-4">
+                      <span className="text-[11px] font-semibold text-indigo-400 uppercase tracking-wider block mb-1">Punteggio</span>
+                      <span className="text-base font-bold text-white">{pdfExtractResult.data.punteggio || "N/D"}</span>
+                    </div>
+                    <div className="bg-slate-950/60 border border-slate-800 rounded-xl p-4">
+                      <span className="text-[11px] font-semibold text-indigo-400 uppercase tracking-wider block mb-1">Posizione in Graduatoria</span>
+                      <span className="text-base font-bold text-white">{pdfExtractResult.data.posizione_graduatoria || "N/D"}</span>
                     </div>
                     <div className="bg-slate-950/60 border border-slate-800 rounded-xl p-4">
                       <span className="text-[11px] font-semibold text-indigo-400 uppercase tracking-wider block mb-1">Profilo Professionale</span>
