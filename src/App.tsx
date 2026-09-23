@@ -53,6 +53,18 @@ export default function App() {
     }
     return "";
   });
+  const [jinaApiKey, setJinaApiKey] = useState(() => {
+    if (typeof window !== "undefined") {
+      const meta = import.meta as any;
+      return (
+        localStorage.getItem("scuola_jina_api_key") || 
+        (meta && meta.env && meta.env.VITE_JINA_API_KEY) || 
+        (meta && meta.env && meta.env.JINA_API_KEY) || 
+        ""
+      );
+    }
+    return "";
+  });
   const [githubUser, setGithubUser] = useState(() => typeof window !== "undefined" ? localStorage.getItem("scuola_github_user") || "" : "");
   const [githubRepo, setGithubRepo] = useState(() => typeof window !== "undefined" ? localStorage.getItem("scuola_github_repo") || "" : "");
   const [githubPat, setGithubPat] = useState(() => typeof window !== "undefined" ? localStorage.getItem("scuola_github_pat") || "" : "");
@@ -165,7 +177,9 @@ export default function App() {
   const saveSettings = (e?: React.FormEvent) => {
     if (e) e.preventDefault();
     const cleanKey = openRouterApiKey.trim();
+    const cleanJinaKey = jinaApiKey.trim();
     localStorage.setItem("scuola_openrouter_api_key", cleanKey);
+    localStorage.setItem("scuola_jina_api_key", cleanJinaKey);
     localStorage.setItem("scuola_github_user", githubUser.trim());
     localStorage.setItem("scuola_github_repo", githubRepo.trim());
     localStorage.setItem("scuola_github_pat", githubPat.trim());
@@ -192,6 +206,7 @@ export default function App() {
       version: 1,
       timestamp: new Date().toISOString(),
       openRouterApiKey,
+      jinaApiKey,
       githubUser,
       githubRepo,
       customProxyUrl,
@@ -222,6 +237,10 @@ export default function App() {
         if (json.openRouterApiKey !== undefined) {
           setOpenRouterApiKey(json.openRouterApiKey);
           localStorage.setItem("scuola_openrouter_api_key", json.openRouterApiKey);
+        }
+        if (json.jinaApiKey !== undefined) {
+          setJinaApiKey(json.jinaApiKey);
+          localStorage.setItem("scuola_jina_api_key", json.jinaApiKey);
         }
         if (json.githubUser !== undefined) {
           setGithubUser(json.githubUser);
@@ -757,6 +776,11 @@ async function fetchWithProxy(
         reqHeaders["Accept"] = "text/html,text/plain,*/*";
         reqHeaders["x-return-format"] = asArrayBuffer ? "html" : "markdown";
         reqHeaders["x-timeout"] = "10";
+
+        const effectiveJinaKey = (jinaApiKey || (typeof window !== "undefined" ? localStorage.getItem("scuola_jina_api_key") || "" : "")).trim();
+        if (effectiveJinaKey) {
+          reqHeaders["Authorization"] = `Bearer ${effectiveJinaKey}`;
+        }
 
         if (url.includes("#")) {
           onLog?.(`Rendering hash-route: ${url}`);
@@ -1382,54 +1406,72 @@ const executeClientSideExtract = async (targetUrl: string, apiKey: string, custo
         batchSize: BATCH_SIZE,
       });
 
-      const results: ExtractionResult[] = [];
+      const results: ExtractionResult[] = new Array(urls.length);
       let processedCount = 0;
 
       for (let b = 0; b < batches.length; b++) {
         const currentBatchNum = b + 1;
         const currentBatchUrls = batches[b];
+        const batchStartIndex = b * BATCH_SIZE;
         setBatchInfo(prev => ({ ...prev, currentBatch: currentBatchNum, totalBatches }));
 
-        for (const u of currentBatchUrls) {
-          setBatchLiveLog(prev => [...prev, `▶ ${u}`]);
-          try {
-            const clientData = await executeClientSideExtract(u, openRouterApiKey.trim(), customProxyUrl.trim());
-            const lastLog = clientData.logs && clientData.logs.length > 0 ? clientData.logs[clientData.logs.length - 1] : "Completato";
-            setBatchLiveLog(prev => [...prev, `✅ ${u} — ${lastLog}`]);
-            results.push(clientData as any);
-          } catch (itemErr: any) {
-            setBatchLiveLog(prev => [...prev, `❌ ${u} — ${itemErr.message}`]);
-            results.push({
-              status: "error",
-              url: u,
-              navigatedUrl: u,
-              logs: [itemErr.message],
-              data: {
-                convocazioni_collaboratore_scolastico: 0,
-                convocazioni_assistente_amministrativo: 0,
-                convocazioni_docenti: 0,
-                convocazioni_assistente_tecnico: 0,
-                convocazioni_cuoco: 0,
-                convocazioni_assistente_agrario: 0,
-                pensionamenti_collaboratore_scolastico: 0,
-                pensionamenti_assistente_amministrativo: 0,
-                pensionamenti_docenti: 0,
-                pensionamenti_assistente_tecnico: 0,
-                pensionamenti_cuoco: 0,
-                pensionamenti_assistente_agrario: 0,
-                graduatoria_fascia: "",
-                profilo_professionale: "",
-                classe_di_concorso: "",
-                ore_settimanali: "",
-                decorrenza_da: "",
-                decorrenza_a: "",
-                albo_contratti: []
+        // Concurrency pool with maximum 4 parallel requests within each batch of 15
+        const CONCURRENCY_LIMIT = 4;
+        let nextIndex = 0;
+
+        const workers = Array.from(
+          { length: Math.min(CONCURRENCY_LIMIT, currentBatchUrls.length) },
+          async () => {
+            while (nextIndex < currentBatchUrls.length) {
+              const itemIdx = nextIndex++;
+              const u = currentBatchUrls[itemIdx];
+              const globalIndex = batchStartIndex + itemIdx;
+
+              setBatchLiveLog(prev => [...prev, `▶ ${u}`]);
+              try {
+                const clientData = await executeClientSideExtract(u, openRouterApiKey.trim(), customProxyUrl.trim());
+                const lastLog = clientData.logs && clientData.logs.length > 0 ? clientData.logs[clientData.logs.length - 1] : "Completato";
+                setBatchLiveLog(prev => [...prev, `✅ ${u} — ${lastLog}`]);
+                results[globalIndex] = clientData as any;
+              } catch (itemErr: any) {
+                const errMsg = itemErr?.message || "Errore sconosciuto";
+                setBatchLiveLog(prev => [...prev, `❌ ${u} — ${errMsg}`]);
+                results[globalIndex] = {
+                  status: "error",
+                  url: u,
+                  navigatedUrl: u,
+                  logs: [errMsg],
+                  data: {
+                    convocazioni_collaboratore_scolastico: 0,
+                    convocazioni_assistente_amministrativo: 0,
+                    convocazioni_docenti: 0,
+                    convocazioni_assistente_tecnico: 0,
+                    convocazioni_cuoco: 0,
+                    convocazioni_assistente_agrario: 0,
+                    pensionamenti_collaboratore_scolastico: 0,
+                    pensionamenti_assistente_amministrativo: 0,
+                    pensionamenti_docenti: 0,
+                    pensionamenti_assistente_tecnico: 0,
+                    pensionamenti_cuoco: 0,
+                    pensionamenti_assistente_agrario: 0,
+                    graduatoria_fascia: "",
+                    profilo_professionale: "",
+                    classe_di_concorso: "",
+                    ore_settimanali: "",
+                    decorrenza_da: "",
+                    decorrenza_a: "",
+                    albo_contratti: []
+                  }
+                };
+              } finally {
+                processedCount++;
+                setBatchProgress({ current: processedCount, total: urls.length });
               }
-            });
+            }
           }
-          processedCount++;
-          setBatchProgress({ current: processedCount, total: urls.length });
-        }
+        );
+
+        await Promise.all(workers);
       }
 
       const clientSuccessMsg = `Elaborazione completata: ${urls.length} link processati su ${urls.length} totali in ${totalBatches} batch.`;
@@ -2014,6 +2056,42 @@ const executeClientSideExtract = async (targetUrl: string, apiKey: string, custo
                     <li><strong className="text-slate-300">Jina AI Reader</strong> con CORS nativo del browser, bypass 403 e rendering JavaScript di portali Albo (Argo, Trasparenza-PA).</li>
                     <li><strong className="text-slate-300">Web Grounding Search IA</strong> mirato per reperire bandi e convocazioni ufficiali se il sito è offline.</li>
                   </ol>
+                </div>
+
+                <div className="space-y-1.5">
+                  <div className="flex items-center justify-between">
+                    <label htmlFor="jina-api-key-input" className="text-xs font-medium text-slate-300">
+                      Jina AI Reader API Key (opzionale)
+                    </label>
+                    <a
+                      href="https://jina.ai/reader"
+                      target="_blank"
+                      rel="noopener noreferrer"
+                      className="text-[11px] text-indigo-400 hover:text-indigo-300 hover:underline flex items-center gap-1"
+                    >
+                      <span>jina.ai/reader</span>
+                      <ExternalLink className="w-2.5 h-2.5" />
+                    </a>
+                  </div>
+                  <input
+                    id="jina-api-key-input"
+                    type="password"
+                    value={jinaApiKey}
+                    onChange={(e) => setJinaApiKey(e.target.value)}
+                    placeholder="jina_..."
+                    className="w-full bg-slate-950 border border-slate-800 rounded-xl px-4 py-2.5 text-sm text-white focus:outline-none focus:border-indigo-500 font-mono"
+                  />
+                  <p className="text-[11px] text-slate-500">
+                    Alza il rate limit di r.jina.ai da 20 a 500 richieste/minuto. Ottienila gratis su{" "}
+                    <a
+                      href="https://jina.ai/reader"
+                      target="_blank"
+                      rel="noopener noreferrer"
+                      className="text-indigo-400 hover:underline"
+                    >
+                      jina.ai/reader
+                    </a>.
+                  </p>
                 </div>
 
                 <div className="space-y-1.5">
