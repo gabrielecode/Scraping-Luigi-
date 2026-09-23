@@ -710,11 +710,25 @@ function findActLinks(rawContent: string, baseUrl: string, doc?: Document): { ur
   return acts.sort((a, b) => b.score - a.score).slice(0, 10);
 }
 
+function extractDomain(urlStr: string): string {
+  if (!urlStr) return "";
+  try {
+    const formatted = urlStr.startsWith("http://") || urlStr.startsWith("https://")
+      ? urlStr
+      : `https://${urlStr}`;
+    const parsed = new URL(formatted);
+    return parsed.hostname.toLowerCase().replace(/^www\./, "");
+  } catch {
+    return urlStr.toLowerCase();
+  }
+}
+
 interface ProxyCandidate {
   name: string;
   isJina?: boolean;
   isLocal?: boolean;
   isEmergency?: boolean;
+  timeoutMs: number;
   buildUrl: (u: string) => string;
 }
 
@@ -722,48 +736,77 @@ async function fetchWithProxy(
   url: string,
   asArrayBuffer: boolean = false,
   onLog?: (msg: string) => void,
-  customProxyUrl?: string
+  customProxyUrl?: string,
+  failedProxiesByDomain?: Map<string, Set<string>>
 ): Promise<{ data: any; method: string; format: "html" | "markdown" | "buffer" }> {
   let lastError = "";
+  const currentDomain = extractDomain(url);
+
+  const markProxyFailed = (proxyName: string) => {
+    if (failedProxiesByDomain && currentDomain) {
+      let failedSet = failedProxiesByDomain.get(currentDomain);
+      if (!failedSet) {
+        failedSet = new Set<string>();
+        failedProxiesByDomain.set(currentDomain, failedSet);
+      }
+      failedSet.add(proxyName);
+    }
+  };
 
   const candidates: ProxyCandidate[] = [];
 
-  // Custom proxy if specified by user
+  // 1. Primary: Server Proxy (/api/proxy) - has browser impersonation + server-side Jina fallback (7000 ms)
+  candidates.push({
+    name: "Server Proxy (/api/proxy)",
+    isLocal: true,
+    timeoutMs: 7000,
+    buildUrl: (u: string) => `/api/proxy?url=${encodeURIComponent(u)}`
+  });
+
+  // 2. Client-side Native CORS: Jina AI Web Reader (bypasses 403, executes JS, extracts full page text) (9000 ms)
+  candidates.push({
+    name: "Jina AI Web Reader (Bypass 403 & CORS)",
+    isJina: true,
+    timeoutMs: 9000,
+    buildUrl: (u: string) => `https://r.jina.ai/${u}`
+  });
+
+  // 3. Tertiary Emergency Fallback: CorsProxy.io (6000 ms)
+  candidates.push({
+    name: "CorsProxy.io (Emergenza)",
+    isEmergency: true,
+    timeoutMs: 6000,
+    buildUrl: (u: string) => `https://corsproxy.io/?url=${encodeURIComponent(u)}`
+  });
+
+  // 4. Custom proxy if specified by user
   if (customProxyUrl && customProxyUrl.trim()) {
     const cleanProxy = customProxyUrl.trim();
     candidates.push({
       name: "Proxy Personalizzato Utente",
+      timeoutMs: 7000,
       buildUrl: (u: string) => cleanProxy.includes("${url}") ? cleanProxy.replace("${url}", encodeURIComponent(u)) : `${cleanProxy}${encodeURIComponent(u)}`
     });
   }
 
-  // 1. Primary: Server Proxy (/api/proxy) - has browser impersonation + server-side Jina fallback
-  candidates.push({
-    name: "Server Proxy (/api/proxy)",
-    isLocal: true,
-    buildUrl: (u: string) => `/api/proxy?url=${encodeURIComponent(u)}`
-  });
-
-  // 2. Client-side Native CORS: Jina AI Web Reader (bypasses 403, executes JS, extracts full page text)
-  candidates.push({
-    name: "Jina AI Web Reader (Bypass 403 & CORS)",
-    isJina: true,
-    buildUrl: (u: string) => `https://r.jina.ai/${u}`
-  });
-
-  // 3. Tertiary Emergency Fallback: CorsProxy.io
-  candidates.push({
-    name: "CorsProxy.io (Emergenza)",
-    isEmergency: true,
-    buildUrl: (u: string) => `https://corsproxy.io/?url=${encodeURIComponent(u)}`
-  });
+  let allSkipped = true;
 
   for (const proxy of candidates) {
+    if (failedProxiesByDomain && currentDomain) {
+      const failedSet = failedProxiesByDomain.get(currentDomain);
+      if (failedSet && failedSet.has(proxy.name)) {
+        onLog?.(`Salto ${proxy.name}: già fallito su questo dominio`);
+        continue;
+      }
+    }
+
+    allSkipped = false;
+
     try {
       onLog?.(`Connessione in corso tramite ${proxy.name}...`);
       const target = proxy.buildUrl(url);
       const controller = new AbortController();
-      const timeoutId = setTimeout(() => controller.abort(), proxy.isJina ? 15000 : 12000);
+      const timeoutId = setTimeout(() => controller.abort(), proxy.timeoutMs);
 
       const reqHeaders: Record<string, string> = {};
       const fetchOptions: RequestInit = {
@@ -805,7 +848,9 @@ async function fetchWithProxy(
         const text = await response.text();
 
         if (proxy.isLocal && isSelfAppHtml(text)) {
-          onLog?.(`Avviso: ${proxy.name} ha restituito l'app SPA invece del sito remoto. Passo al provider successivo.`);
+          lastError = `${proxy.name} ha restituito l'app SPA invece del sito remoto`;
+          onLog?.(`Avviso: ${lastError}. Passo al provider successivo.`);
+          markProxyFailed(proxy.name);
           continue;
         }
 
@@ -813,15 +858,26 @@ async function fetchWithProxy(
           const format = proxy.isJina ? "markdown" : "html";
           onLog?.(`Connessione riuscita via ${proxy.name} (${text.length} caratteri ricevuti).`);
           return { data: text, method: proxy.name, format };
+        } else {
+          lastError = `Risposta vuota o troppo breve (${text ? text.length : 0} caratteri)`;
+          onLog?.(`Proxy ${proxy.name}: ${lastError}`);
+          markProxyFailed(proxy.name);
         }
       } else {
         lastError = `Status ${response.status} (${response.statusText})`;
         onLog?.(`Proxy ${proxy.name} ha risposto con ${lastError}`);
+        markProxyFailed(proxy.name);
       }
     } catch (e: any) {
-      lastError = e.name === "AbortError" ? "Timeout connessione (15s)" : e.message;
+      const timeoutSec = Math.round(proxy.timeoutMs / 1000);
+      lastError = e.name === "AbortError" ? `Timeout connessione (${timeoutSec}s)` : e.message;
       onLog?.(`Tentativo fallito con ${proxy.name}: ${lastError}`);
+      markProxyFailed(proxy.name);
     }
+  }
+
+  if (allSkipped && !lastError) {
+    lastError = `Tutti i proxy disponibili sono già risultati falliti in precedenza su questo dominio (${currentDomain})`;
   }
 
   throw new Error(`Impossibile connettersi all'URL tramite la suite di proxy. Ultimo errore: ${lastError}`);
@@ -853,7 +909,14 @@ async function extractWithOpenRouter(text: string, apiKey: string, systemPrompt?
   return await response.json();
 }
 
-async function extractPdfWithOpenRouter(pdfSource: string, promptText: string, apiKey: string, isBase64 = false, customProxyUrl?: string) {
+async function extractPdfWithOpenRouter(
+  pdfSource: string,
+  promptText: string,
+  apiKey: string,
+  isBase64 = false,
+  customProxyUrl?: string,
+  failedProxiesByDomain?: Map<string, Set<string>>
+) {
   try {
     const response = await fetch("https://openrouter.ai/api/v1/chat/completions", {
       method: "POST",
@@ -887,19 +950,16 @@ async function extractPdfWithOpenRouter(pdfSource: string, promptText: string, a
   let base64Data = pdfSource;
   if (!isBase64) {
     try {
-      const proxyTarget = customProxyUrl ? customProxyUrl.replace("${url}", encodeURIComponent(pdfSource)) : `/api/proxy?url=${encodeURIComponent(pdfSource)}&raw=1`;
-      const binRes = await fetch(proxyTarget);
-      if (binRes.ok) {
-        const buf = await binRes.arrayBuffer();
-        const u8 = new Uint8Array(buf);
-        let binString = "";
-        const chunkSize = 8192;
-        for (let i = 0; i < u8.length; i += chunkSize) {
-          const chunk = u8.subarray(i, i + chunkSize);
-          binString += String.fromCharCode.apply(null, chunk as unknown as number[]);
-        }
-        base64Data = `data:application/pdf;base64,${btoa(binString)}`;
+      const res = await fetchWithProxy(pdfSource, true, undefined, customProxyUrl, failedProxiesByDomain);
+      const buf = res.data as ArrayBuffer;
+      const u8 = new Uint8Array(buf);
+      let binString = "";
+      const chunkSize = 8192;
+      for (let i = 0; i < u8.length; i += chunkSize) {
+        const chunk = u8.subarray(i, i + chunkSize);
+        binString += String.fromCharCode.apply(null, chunk as unknown as number[]);
       }
+      base64Data = `data:application/pdf;base64,${btoa(binString)}`;
     } catch (e: any) {
       throw new Error(`Impossibile scaricare o convertire il PDF: ${e.message}`);
     }
@@ -962,7 +1022,13 @@ async function executeClientSideSearch(queryStr: string, apiKey: string) {
   return respData?.choices?.[0]?.message?.content || "Nessun risultato trovato.";
 }
 
-async function scrapeWebsite(targetUrl: string, apiKey: string, systemPrompt?: string, customProxyUrl?: string) {
+async function scrapeWebsite(
+  targetUrl: string,
+  apiKey: string,
+  systemPrompt?: string,
+  customProxyUrl?: string,
+  failedProxiesByDomain: Map<string, Set<string>> = new Map()
+) {
   const logs: string[] = [];
   const log = (msg: string) => {
     logs.push(msg);
@@ -977,7 +1043,7 @@ async function scrapeWebsite(targetUrl: string, apiKey: string, systemPrompt?: s
 
   try {
     // 1. Download homepage
-    const homeRes = await fetchWithProxy(currentUrl, false, log, customProxyUrl);
+    const homeRes = await fetchWithProxy(currentUrl, false, log, customProxyUrl, failedProxiesByDomain);
     const rawHome = homeRes.data as string;
     let homeText = "";
     let homeDoc: Document | undefined;
@@ -1001,7 +1067,7 @@ async function scrapeWebsite(targetUrl: string, apiKey: string, systemPrompt?: s
       log(`Scansione approfondita sottolink: "${link.title}" (${link.url})`);
       try {
         navigatedUrl = link.url;
-        const subRes = await fetchWithProxy(link.url, false, log, customProxyUrl);
+        const subRes = await fetchWithProxy(link.url, false, log, customProxyUrl, failedProxiesByDomain);
         const rawSub = subRes.data as string;
         let subText = "";
         let subDoc: Document | undefined;
@@ -1021,7 +1087,7 @@ async function scrapeWebsite(targetUrl: string, apiKey: string, systemPrompt?: s
             log(`Apertura dettaglio atto ${act.id}`);
             try {
               navigatedUrl = act.url;
-              const detailRes = await fetchWithProxy(act.url, false, log, customProxyUrl);
+              const detailRes = await fetchWithProxy(act.url, false, log, customProxyUrl, failedProxiesByDomain);
               const rawDetail = detailRes.data as string;
               let detailText = "";
               if (detailRes.format === "html") {
@@ -1042,7 +1108,8 @@ async function scrapeWebsite(targetUrl: string, apiKey: string, systemPrompt?: s
                         "Estrai con precisione da questo atto/PDF i dati relativi a: convocazioni personale ATA (collaboratore scolastico, assistente amministrativo, tecnico, cuoco, agrario), pensionamenti, graduatorie, profilo professionale, ore e decorrenza. Rispondi in JSON.",
                         apiKey,
                         false,
-                        customProxyUrl
+                        customProxyUrl,
+                        failedProxiesByDomain
                       );
                       if (pdfResJson && !pdfResJson.error && pdfResJson?.choices?.[0]?.message?.content) {
                         const pdfContentStr = pdfResJson.choices[0].message.content;
@@ -1111,8 +1178,13 @@ async function scrapeWebsite(targetUrl: string, apiKey: string, systemPrompt?: s
   }
 }
 
-const executeClientSideExtract = async (targetUrl: string, apiKey: string, customProxy?: string) => {
-    const res = await scrapeWebsite(targetUrl, apiKey, EXTRACTION_SYSTEM_PROMPT, customProxy);
+const executeClientSideExtract = async (
+  targetUrl: string,
+  apiKey: string,
+  customProxy?: string,
+  failedProxiesByDomain: Map<string, Set<string>> = new Map()
+) => {
+    const res = await scrapeWebsite(targetUrl, apiKey, EXTRACTION_SYSTEM_PROMPT, customProxy, failedProxiesByDomain);
     const defaultData = {
       nome_istituto: "",
       codice_meccanografico: "",
