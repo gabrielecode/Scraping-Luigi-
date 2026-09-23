@@ -24,12 +24,13 @@ export interface NominaContrattoItem {
   id?: string;
   nome_istituto: string;
   codice_meccanografico: string;
+  nominativo?: string;
   tipologia_personale: TipologiaPersonale;
   profilo_lavorativo: string;
   classe_concorso_area_lab: string;
   tipo_posto: TipoPosto;
   classe_di_concorso?: string;
-  punteggio: number | null;
+  punteggio: number | null | string;
   origine_punteggio?: OriginePunteggio;
   posizione_graduatoria: string;
   fascia: string;
@@ -44,6 +45,7 @@ export interface NominaContrattoItem {
 export interface AlboPretorioContract {
   id?: string;
   titolo_bando: string;
+  nominativo?: string;
   data_pubblicazione?: string;
   pdf_url?: string;
   tipologia_personale?: TipologiaPersonale;
@@ -52,7 +54,7 @@ export interface AlboPretorioContract {
   classe_di_concorso?: string;
   tipo_posto?: TipoPosto;
   graduatoria_fascia: string;
-  punteggio?: number | null;
+  punteggio?: number | null | string;
   origine_punteggio?: OriginePunteggio;
   posizione_graduatoria?: string;
   ore_settimanali: string;
@@ -65,6 +67,7 @@ export interface AlboPretorioContract {
 export interface ExtractionData {
   nome_istituto?: string;
   codice_meccanografico?: string;
+  nominativo?: string;
   nomine_contratti?: NominaContrattoItem[];
 
   convocazioni_collaboratore_scolastico: number;
@@ -88,7 +91,7 @@ export interface ExtractionData {
 
   // Retrocompatibilità & campi singoli
   graduatoria_fascia?: string;
-  punteggio?: number | null;
+  punteggio?: number | null | string;
   origine_punteggio?: OriginePunteggio;
   posizione_graduatoria?: string;
   profilo_professionale?: string;
@@ -102,6 +105,7 @@ export interface ExtractionData {
   link_del_documento?: string;
   albo_contratti?: AlboPretorioContract[];
   note_cross_reference?: string;
+  pagine_graduatoria_esplorate?: string[];
 }
 
 export interface ExtractionResult {

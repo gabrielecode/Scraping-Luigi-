@@ -37,11 +37,22 @@ import {
 } from "lucide-react";
 import { ExtractionResult, ExtractionData, BatchHistoryItem, NominaContrattoItem, GraduatoriaIstituto, OriginePunteggio } from "./types";
 import { GraduatorieManager } from "./components/GraduatorieManager";
-import { getStoredGraduatorie, saveStoredGraduatorie, crossReferenceNomina } from "./services/graduatorieService";
+import {
+  getStoredGraduatorie,
+  saveStoredGraduatorie,
+  crossReferenceNomina,
+  searchGraduatoriaPages,
+  GRADUATORIA_EXTRACTION_SYSTEM_PROMPT,
+  isNameMatch,
+  isClassMatch,
+} from "./services/graduatorieService";
+
+export { GRADUATORIA_EXTRACTION_SYSTEM_PROMPT };
 
 export default function App() {
   const [activeTab, setActiveTab] = useState<"batch" | "single" | "albo" | "search" | "history" | "guide" | "graduatorie">("batch");
   const [graduatorie, setGraduatorie] = useState<GraduatoriaIstituto[]>(() => getStoredGraduatorie());
+  const [singleNominativo, setSingleNominativo] = useState("");
   
   // Configuration & LocalStorage state
   const [openRouterApiKey, setOpenRouterApiKey] = useState(() => {
@@ -1291,12 +1302,14 @@ const executeClientSideExtract = async (
   targetUrl: string,
   apiKey: string,
   customProxy?: string,
-  failedProxiesByDomain: Map<string, Set<string>> = new Map()
+  failedProxiesByDomain: Map<string, Set<string>> = new Map(),
+  inputNominativo?: string
 ) => {
     const res = await scrapeWebsite(targetUrl, apiKey, EXTRACTION_SYSTEM_PROMPT, customProxy, failedProxiesByDomain);
     const defaultData = {
       nome_istituto: "",
       codice_meccanografico: "",
+      nominativo: inputNominativo ? inputNominativo.trim() : "",
       convocazioni_collaboratore_scolastico: 0,
       convocazioni_assistente_amministrativo: 0,
       convocazioni_docenti: 0,
@@ -1312,7 +1325,7 @@ const executeClientSideExtract = async (
       tipologia_personale: "ATA" as "ATA" | "DOCENTE",
       classe_concorso_area_lab: "Non applicabile",
       tipo_posto: "comune" as "comune" | "sostegno",
-      punteggio: null as number | null,
+      punteggio: null as number | null | string,
       origine_punteggio: undefined as OriginePunteggio | undefined,
       posizione_graduatoria: "",
       graduatoria_fascia: "",
@@ -1328,12 +1341,17 @@ const executeClientSideExtract = async (
       link_del_documento: "",
       note_cross_reference: "",
       nomine_contratti: [] as NominaContrattoItem[],
-      albo_contratti: []
+      albo_contratti: [],
+      pagine_graduatoria_esplorate: [] as string[]
     };
     let extractedData = { ...defaultData };
     try {
       const parsed = JSON.parse(res.content);
       extractedData = { ...defaultData, ...parsed };
+
+      if (inputNominativo && inputNominativo.trim() && !extractedData.nominativo) {
+        extractedData.nominativo = inputNominativo.trim();
+      }
 
       // Infer school name / code if missing
       if (!extractedData.nome_istituto) {
@@ -1396,6 +1414,7 @@ const executeClientSideExtract = async (
 
           const baseItem = {
             ...item,
+            nominativo: item.nominativo || extractedData.nominativo || "",
             nome_istituto: item.nome_istituto || extractedData.nome_istituto || "",
             codice_meccanografico: item.codice_meccanografico || extractedData.codice_meccanografico || "",
             tipologia_personale: tipologia,
@@ -1418,6 +1437,252 @@ const executeClientSideExtract = async (
             nome_istituto: baseItem.nome_istituto,
           });
         });
+      }
+
+      // -------------------------------------------------------------
+      // TASK 5.1 — Trigger + ricerca pagina graduatoria
+      // Se PUNTEGGIO manca ma NOMINATIVO è presente → avvia ricerca
+      // -------------------------------------------------------------
+      const topPunteggioMancante =
+        extractedData.punteggio === null ||
+        extractedData.punteggio === undefined ||
+        extractedData.punteggio === "";
+      const topNominativoPresente = !!(extractedData.nominativo && extractedData.nominativo.trim());
+
+      const hasNominaNeedingSearch =
+        Array.isArray(extractedData.nomine_contratti) &&
+        extractedData.nomine_contratti.some(
+          (n: any) =>
+            (n.punteggio === null || n.punteggio === undefined || n.punteggio === "") &&
+            !!(n.nominativo && n.nominativo.trim())
+        );
+
+      if ((topPunteggioMancante && topNominativoPresente) || hasNominaNeedingSearch) {
+        res.logs.push("🔎 Cerco in graduatoria...");
+
+        try {
+          const exploredPages = await searchGraduatoriaPages(
+            targetUrl,
+            (url, asBuf, onLog) =>
+              fetchWithProxy(url, asBuf, onLog, customProxy, failedProxiesByDomain),
+            (logMsg) => res.logs.push(logMsg)
+          );
+          extractedData.pagine_graduatoria_esplorate = exploredPages.map((p) => p.url);
+          res.logs.push(
+            `Completata ricerca sezioni graduatorie: ${exploredPages.length} pagine esplorate sul dominio.`
+          );
+
+          // -------------------------------------------------------------
+          // TASK 5.2 & 5.3 — Estrazione + matching + fallback
+          // -------------------------------------------------------------
+          let matchedScore: number | null = null;
+          let matchedEntry: { nominativo: string; punteggio: number; classe_concorso?: string; sourceUrl: string } | null = null;
+
+          if (exploredPages.length > 0) {
+            const targetNom = (extractedData.nominativo || "").trim();
+            const targetCdc = (
+              extractedData.classe_concorso_area_lab ||
+              extractedData.classe_di_concorso ||
+              extractedData.profilo_lavorativo ||
+              ""
+            ).trim();
+
+            for (const page of exploredPages) {
+              if (matchedEntry) break;
+
+              // 1. Analisi testo HTML / markdown della pagina
+              const pageText = (page.content || "").slice(0, 35000).trim();
+              if (pageText.length > 50) {
+                res.logs.push(`Estrazione dati graduatoria da: "${page.title}" (${page.url})`);
+                try {
+                  const llmRes = await extractWithOpenRouter(pageText, apiKey, GRADUATORIA_EXTRACTION_SYSTEM_PROMPT);
+                  const parsedJson = JSON.parse(llmRes?.choices?.[0]?.message?.content || "{}");
+                  const entries: any[] = Array.isArray(parsedJson.graduatoria_entries)
+                    ? parsedJson.graduatoria_entries
+                    : [];
+
+                  for (const entry of entries) {
+                    if (
+                      entry &&
+                      entry.punteggio !== null &&
+                      entry.punteggio !== undefined &&
+                      !isNaN(parseFloat(String(entry.punteggio)))
+                    ) {
+                      const scoreNum = Number(parseFloat(String(entry.punteggio)).toFixed(2));
+                      // Verifica corrispondenza nome E classe di concorso
+                      const nameMatches = isNameMatch(entry.nominativo, targetNom) ||
+                        (Array.isArray(extractedData.nomine_contratti) &&
+                          extractedData.nomine_contratti.some((n: any) => isNameMatch(entry.nominativo, n.nominativo)));
+
+                      const classMatches = isClassMatch(entry.classe_concorso, targetCdc) ||
+                        (Array.isArray(extractedData.nomine_contratti) &&
+                          extractedData.nomine_contratti.some((n: any) =>
+                            isClassMatch(
+                              entry.classe_concorso,
+                              n.classe_concorso_area_lab || n.classe_di_concorso || n.profilo_lavorativo
+                            )
+                          ));
+
+                      if (nameMatches && classMatches) {
+                        matchedScore = scoreNum;
+                        matchedEntry = {
+                          nominativo: entry.nominativo,
+                          punteggio: scoreNum,
+                          classe_concorso: entry.classe_concorso || targetCdc,
+                          sourceUrl: page.url,
+                        };
+                        break;
+                      }
+                    }
+                  }
+                } catch (pageErr: any) {
+                  res.logs.push(`Avviso estrazione pagina graduatoria: ${pageErr.message}`);
+                }
+              }
+
+              // 2. Analisi PDF allegati alla pagina se non ancora trovato
+              if (!matchedEntry && Array.isArray(page.pdfLinks) && page.pdfLinks.length > 0) {
+                const pdfsToScan = page.pdfLinks.slice(0, 3);
+                for (const pdfUrl of pdfsToScan) {
+                  if (matchedEntry) break;
+                  res.logs.push(`Estrazione da PDF graduatoria allegato: ${pdfUrl}`);
+                  try {
+                    const pdfResult = await extractPdfWithOpenRouter(
+                      pdfUrl,
+                      GRADUATORIA_EXTRACTION_SYSTEM_PROMPT,
+                      apiKey,
+                      false,
+                      customProxy,
+                      failedProxiesByDomain
+                    );
+                    const parsedPdf = JSON.parse(pdfResult?.choices?.[0]?.message?.content || "{}");
+                    const entries: any[] = Array.isArray(parsedPdf.graduatoria_entries)
+                      ? parsedPdf.graduatoria_entries
+                      : [];
+
+                    for (const entry of entries) {
+                      if (
+                        entry &&
+                        entry.punteggio !== null &&
+                        entry.punteggio !== undefined &&
+                        !isNaN(parseFloat(String(entry.punteggio)))
+                      ) {
+                        const scoreNum = Number(parseFloat(String(entry.punteggio)).toFixed(2));
+                        const nameMatches = isNameMatch(entry.nominativo, targetNom) ||
+                          (Array.isArray(extractedData.nomine_contratti) &&
+                            extractedData.nomine_contratti.some((n: any) => isNameMatch(entry.nominativo, n.nominativo)));
+
+                        const classMatches = isClassMatch(entry.classe_concorso, targetCdc) ||
+                          (Array.isArray(extractedData.nomine_contratti) &&
+                            extractedData.nomine_contratti.some((n: any) =>
+                              isClassMatch(
+                                entry.classe_concorso,
+                                n.classe_concorso_area_lab || n.classe_di_concorso || n.profilo_lavorativo
+                              )
+                            ));
+
+                        if (nameMatches && classMatches) {
+                          matchedScore = scoreNum;
+                          matchedEntry = {
+                            nominativo: entry.nominativo,
+                            punteggio: scoreNum,
+                            classe_concorso: entry.classe_concorso || targetCdc,
+                            sourceUrl: pdfUrl,
+                          };
+                          break;
+                        }
+                      }
+                    }
+                  } catch (pdfErr: any) {
+                    res.logs.push(`Avviso estrazione PDF: ${pdfErr.message}`);
+                  }
+                }
+              }
+            }
+          }
+
+          // Se match → compila PUNTEGGIO con valore trovato
+          if (matchedEntry && matchedScore !== null) {
+            res.logs.push(`✅ Trovato: ${matchedScore}`);
+            extractedData.punteggio = matchedScore;
+            extractedData.origine_punteggio = "Incrociato";
+            extractedData.note_cross_reference = `Punteggio incrociato da graduatoria (${matchedEntry.sourceUrl}): ${matchedEntry.nominativo} [${matchedEntry.classe_concorso}] = ${matchedScore} pt`;
+
+            // Aggiorna anche le nomine nei contratti
+            if (Array.isArray(extractedData.nomine_contratti)) {
+              extractedData.nomine_contratti = extractedData.nomine_contratti.map((n: any) => {
+                if (
+                  isNameMatch(n.nominativo, matchedEntry!.nominativo) &&
+                  isClassMatch(
+                    n.classe_concorso_area_lab || n.classe_di_concorso || n.profilo_lavorativo,
+                    matchedEntry!.classe_concorso
+                  )
+                ) {
+                  return {
+                    ...n,
+                    punteggio: matchedScore,
+                    origine_punteggio: "Incrociato",
+                    note_cross_reference: `Punteggio incrociato da graduatoria (${matchedEntry!.sourceUrl}): ${matchedEntry!.nominativo} = ${matchedScore} pt`,
+                  };
+                } else if (
+                  (n.punteggio === null || n.punteggio === undefined || n.punteggio === "") &&
+                  !!(n.nominativo && n.nominativo.trim())
+                ) {
+                  return {
+                    ...n,
+                    punteggio: "Da verificare manualmente",
+                    origine_punteggio: "Non disponibile",
+                  };
+                }
+                return n;
+              });
+            }
+          } else {
+            // TASK 5.3: Nessuna graduatoria trovata O nessun match valido → PUNTEGGIO = "Da verificare manualmente"
+            res.logs.push("⚠️ Non trovato, segnato per verifica");
+            if (topPunteggioMancante && topNominativoPresente) {
+              extractedData.punteggio = "Da verificare manualmente";
+              extractedData.origine_punteggio = "Non disponibile";
+            }
+            if (Array.isArray(extractedData.nomine_contratti)) {
+              extractedData.nomine_contratti = extractedData.nomine_contratti.map((n: any) => {
+                if (
+                  (n.punteggio === null || n.punteggio === undefined || n.punteggio === "") &&
+                  !!(n.nominativo && n.nominativo.trim())
+                ) {
+                  return {
+                    ...n,
+                    punteggio: "Da verificare manualmente",
+                    origine_punteggio: "Non disponibile",
+                  };
+                }
+                return n;
+              });
+            }
+          }
+        } catch (searchErr: any) {
+          res.logs.push(`Avviso ricerca pagine graduatoria: ${searchErr.message}`);
+          res.logs.push("⚠️ Non trovato, segnato per verifica");
+          if (topPunteggioMancante && topNominativoPresente) {
+            extractedData.punteggio = "Da verificare manualmente";
+            extractedData.origine_punteggio = "Non disponibile";
+          }
+          if (Array.isArray(extractedData.nomine_contratti)) {
+            extractedData.nomine_contratti = extractedData.nomine_contratti.map((n: any) => {
+              if (
+                (n.punteggio === null || n.punteggio === undefined || n.punteggio === "") &&
+                !!(n.nominativo && n.nominativo.trim())
+              ) {
+                return {
+                  ...n,
+                  punteggio: "Da verificare manualmente",
+                  origine_punteggio: "Non disponibile",
+                };
+              }
+              return n;
+            });
+          }
+        }
       }
     } catch {
       // fallback
@@ -1580,7 +1845,7 @@ const executeClientSideExtract = async (
 
   // Handle sample CSV download
   const downloadSampleCsv = () => {
-    const csvContent = "url\nhttps://www.icmariantomai.edu.it\nhttps://www.iischiapparelli.edu.it\nhttps://www.liceoclassicocavour.edu.it";
+    const csvContent = "url,nominativo\nhttps://www.icmariantomai.edu.it,Rossi Mario\nhttps://www.iischiapparelli.edu.it,\nhttps://www.liceoclassicocavour.edu.it,Bianchi Anna";
     const blob = new Blob([csvContent], { type: "text/csv;charset=utf-8;" });
     const url = URL.createObjectURL(blob);
     const link = document.createElement("a");
@@ -1591,33 +1856,92 @@ const executeClientSideExtract = async (
     document.body.removeChild(link);
   };
 
-  const parseCsvClientSide = (csvText: string): string[] => {
-    const lines = csvText.split(/\r?\n/);
-    const results: string[] = [];
+  interface BatchInputRow {
+    url: string;
+    nominativo?: string;
+  }
 
-    for (const line of lines) {
-      if (!line.trim()) continue;
-      const parts = line.split(/[;,]/);
-      for (const part of parts) {
-        const clean = part.trim().replace(/^["']|["']$/g, "");
-        if (
-          clean.startsWith("http://") ||
-          clean.startsWith("https://") ||
-          clean.includes(".edu.it") ||
-          clean.includes(".gov.it") ||
-          clean.includes("www.") ||
-          clean.includes(".it")
-        ) {
-          let foundUrl = clean;
-          if (!foundUrl.startsWith("http://") && !foundUrl.startsWith("https://")) {
-            foundUrl = `https://${foundUrl}`;
+  const parseCsvClientSide = (csvText: string): BatchInputRow[] => {
+    const lines = csvText.split(/\r?\n/).map(l => l.trim()).filter(Boolean);
+    if (lines.length === 0) return [];
+
+    const firstLine = lines[0].toLowerCase();
+    const hasHeader =
+      firstLine.includes("url") ||
+      firstLine.includes("link") ||
+      firstLine.includes("scuola") ||
+      firstLine.includes("nominativo") ||
+      firstLine.includes("candidato");
+
+    let urlCol = 0;
+    let nomCol = -1;
+
+    if (hasHeader) {
+      const headerParts = lines[0]
+        .split(/[;,]/)
+        .map(p => p.trim().replace(/^["']|["']$/g, "").toLowerCase());
+      urlCol = headerParts.findIndex(h => h.includes("url") || h.includes("link") || h.includes("scuola"));
+      if (urlCol === -1) urlCol = 0;
+      nomCol = headerParts.findIndex(
+        h =>
+          h.includes("nominativo") ||
+          h.includes("candidato") ||
+          h.includes("nome") ||
+          h.includes("docente") ||
+          h.includes("persona")
+      );
+    }
+
+    const results: BatchInputRow[] = [];
+    const startIdx = hasHeader ? 1 : 0;
+
+    for (let i = startIdx; i < lines.length; i++) {
+      const line = lines[i];
+      if (!line) continue;
+      const parts = line.split(/[;,]/).map(p => p.trim().replace(/^["']|["']$/g, ""));
+
+      let foundUrl = "";
+      let foundNom: string | undefined = undefined;
+
+      if (hasHeader) {
+        if (parts[urlCol]) foundUrl = parts[urlCol];
+        if (nomCol !== -1 && parts[nomCol]) foundNom = parts[nomCol];
+      } else {
+        // Cerca colonna con URL
+        for (let pIdx = 0; pIdx < parts.length; pIdx++) {
+          const val = parts[pIdx];
+          if (
+            val.startsWith("http://") ||
+            val.startsWith("https://") ||
+            val.includes(".edu.it") ||
+            val.includes(".gov.it") ||
+            val.includes("www.") ||
+            val.includes(".it")
+          ) {
+            foundUrl = val;
+            const otherCol = parts.find((o, idx) => idx !== pIdx && o.length > 1 && !o.startsWith("http"));
+            if (otherCol) foundNom = otherCol;
+            break;
           }
-          results.push(foundUrl);
-          break;
         }
       }
+
+      if (foundUrl) {
+        if (!foundUrl.startsWith("http://") && !foundUrl.startsWith("https://")) {
+          foundUrl = `https://${foundUrl}`;
+        }
+        results.push({ url: foundUrl, nominativo: foundNom ? foundNom.trim() : undefined });
+      }
     }
-    return Array.from(new Set(results));
+
+    // Deduplica per url + nominativo
+    const seen = new Set<string>();
+    return results.filter(item => {
+      const key = `${item.url}|${item.nominativo || ""}`;
+      if (seen.has(key)) return false;
+      seen.add(key);
+      return true;
+    });
   };
 
   // Handle batch CSV upload & processing client-side
@@ -1652,32 +1976,33 @@ const executeClientSideExtract = async (
 
     try {
       const csvText = await selectedFile.text();
-      const urls = parseCsvClientSide(csvText);
+      const batchItems = parseCsvClientSide(csvText);
 
-      if (urls.length === 0) {
+      if (batchItems.length === 0) {
         throw new Error("Nessun URL valido trovato nel file CSV. Assicurarsi che il file contenga una colonna con link validi.");
       }
 
       const BATCH_SIZE = 15;
-      const batches: string[][] = [];
-      for (let i = 0; i < urls.length; i += BATCH_SIZE) {
-        batches.push(urls.slice(i, i + BATCH_SIZE));
+      const batches: BatchInputRow[][] = [];
+      for (let i = 0; i < batchItems.length; i += BATCH_SIZE) {
+        batches.push(batchItems.slice(i, i + BATCH_SIZE));
       }
       const totalBatches = batches.length;
 
-      setBatchProgress({ current: 0, total: urls.length });
+      setBatchProgress({ current: 0, total: batchItems.length });
       setBatchInfo({
         currentBatch: 1,
         totalBatches,
         batchSize: BATCH_SIZE,
       });
 
-      const results: ExtractionResult[] = new Array(urls.length);
+      const results: ExtractionResult[] = new Array(batchItems.length);
       let processedCount = 0;
+      const failedProxiesByDomain = new Map<string, Set<string>>();
 
       for (let b = 0; b < batches.length; b++) {
         const currentBatchNum = b + 1;
-        const currentBatchUrls = batches[b];
+        const currentBatchRowItems = batches[b];
         const batchStartIndex = b * BATCH_SIZE;
         setBatchInfo(prev => ({ ...prev, currentBatch: currentBatchNum, totalBatches }));
 
@@ -1686,28 +2011,36 @@ const executeClientSideExtract = async (
         let nextIndex = 0;
 
         const workers = Array.from(
-          { length: Math.min(CONCURRENCY_LIMIT, currentBatchUrls.length) },
+          { length: Math.min(CONCURRENCY_LIMIT, currentBatchRowItems.length) },
           async () => {
-            while (nextIndex < currentBatchUrls.length) {
+            while (nextIndex < currentBatchRowItems.length) {
               const itemIdx = nextIndex++;
-              const u = currentBatchUrls[itemIdx];
+              const rowItem = currentBatchRowItems[itemIdx];
               const globalIndex = batchStartIndex + itemIdx;
+              const itemLabel = rowItem.nominativo ? `${rowItem.url} [${rowItem.nominativo}]` : rowItem.url;
 
-              setBatchLiveLog(prev => [...prev, `▶ ${u}`]);
+              setBatchLiveLog(prev => [...prev, `▶ ${itemLabel}`]);
               try {
-                const clientData = await executeClientSideExtract(u, openRouterApiKey.trim(), customProxyUrl.trim());
+                const clientData = await executeClientSideExtract(
+                  rowItem.url,
+                  openRouterApiKey.trim(),
+                  customProxyUrl.trim(),
+                  failedProxiesByDomain,
+                  rowItem.nominativo
+                );
                 const lastLog = clientData.logs && clientData.logs.length > 0 ? clientData.logs[clientData.logs.length - 1] : "Completato";
-                setBatchLiveLog(prev => [...prev, `✅ ${u} — ${lastLog}`]);
+                setBatchLiveLog(prev => [...prev, `✅ ${itemLabel} — ${lastLog}`]);
                 results[globalIndex] = clientData as any;
               } catch (itemErr: any) {
                 const errMsg = itemErr?.message || "Errore sconosciuto";
-                setBatchLiveLog(prev => [...prev, `❌ ${u} — ${errMsg}`]);
+                setBatchLiveLog(prev => [...prev, `❌ ${itemLabel} — ${errMsg}`]);
                 results[globalIndex] = {
                   status: "error",
-                  url: u,
-                  navigatedUrl: u,
+                  url: rowItem.url,
+                  navigatedUrl: rowItem.url,
                   logs: [errMsg],
                   data: {
+                    nominativo: rowItem.nominativo,
                     convocazioni_collaboratore_scolastico: 0,
                     convocazioni_assistente_amministrativo: 0,
                     convocazioni_docenti: 0,
@@ -1731,7 +2064,7 @@ const executeClientSideExtract = async (
                 };
               } finally {
                 processedCount++;
-                setBatchProgress({ current: processedCount, total: urls.length });
+                setBatchProgress({ current: processedCount, total: batchItems.length });
               }
             }
           }
@@ -1740,7 +2073,7 @@ const executeClientSideExtract = async (
         await Promise.all(workers);
       }
 
-      const clientSuccessMsg = `Elaborazione completata: ${urls.length} link processati su ${urls.length} totali in ${totalBatches} batch.`;
+      const clientSuccessMsg = `Elaborazione completata: ${batchItems.length} link processati su ${batchItems.length} totali in ${totalBatches} batch.`;
       setBatchInfo(prev => ({ ...prev, finalMessage: clientSuccessMsg }));
       setBatchResults(results);
       saveBatchToHistory(results, selectedFile?.name || "batch_urls.csv");
@@ -2078,7 +2411,13 @@ const executeClientSideExtract = async (
         throw new Error("Inserisci la tua OpenRouter API Key nelle Impostazioni per abilitare l'estrazione client-side.");
       }
 
-      const clientData = await executeClientSideExtract(formattedUrl, openRouterApiKey.trim(), customProxyUrl.trim());
+      const clientData = await executeClientSideExtract(
+        formattedUrl,
+        openRouterApiKey.trim(),
+        customProxyUrl.trim(),
+        undefined,
+        singleNominativo.trim()
+      );
       setSingleResult(clientData as any);
     } catch (err: any) {
       setSingleError(err.message || "Errore durante l'elaborazione.");
@@ -2900,8 +3239,14 @@ const executeClientSideExtract = async (
                               </td>
                               <td className="p-4 text-center font-mono">
                                 <div className="flex flex-col items-center gap-0.5">
-                                  <span className="font-bold text-white">{punt}</span>
-                                  {r.data.origine_punteggio && r.data.punteggio !== null && (
+                                  {punt === "Da verificare manualmente" ? (
+                                    <span className="px-2 py-0.5 rounded text-[10px] font-semibold bg-amber-500/15 text-amber-300 border border-amber-500/30 whitespace-nowrap">
+                                      Da verificare manualmente
+                                    </span>
+                                  ) : (
+                                    <span className="font-bold text-white">{punt}</span>
+                                  )}
+                                  {r.data.origine_punteggio && r.data.punteggio !== null && punt !== "Da verificare manualmente" && (
                                     <span
                                       title={r.data.note_cross_reference || ""}
                                       className={`px-1.5 py-0.5 rounded text-[9px] font-semibold uppercase tracking-wider ${
@@ -2953,7 +3298,7 @@ const executeClientSideExtract = async (
               </div>
 
               <form onSubmit={handleSingleProcess} className="space-y-4">
-                <div className="flex gap-3">
+                <div className="flex flex-col sm:flex-row gap-3">
                   <input
                     type="text"
                     placeholder="https://www.istitutoscolastico.edu.it"
@@ -2961,10 +3306,18 @@ const executeClientSideExtract = async (
                     onChange={(e) => setSingleUrl(e.target.value)}
                     className="flex-1 bg-slate-950 border border-slate-700 focus:border-indigo-500 rounded-xl px-4 py-3 text-sm text-white placeholder-slate-500 outline-none transition-colors"
                   />
+                  <input
+                    type="text"
+                    placeholder="Nominativo (opzionale)"
+                    value={singleNominativo}
+                    onChange={(e) => setSingleNominativo(e.target.value)}
+                    className="sm:w-64 bg-slate-950 border border-slate-700 focus:border-indigo-500 rounded-xl px-4 py-3 text-sm text-white placeholder-slate-500 outline-none transition-colors"
+                    title="Se inserito e il punteggio manca nel contratto, avvia la ricerca automatica nelle graduatorie d'istituto"
+                  />
                   <button
                     type="submit"
                     disabled={isProcessingSingle || !singleUrl.trim()}
-                    className="bg-indigo-600 hover:bg-indigo-500 disabled:opacity-50 text-white font-medium px-6 py-3 rounded-xl transition-all shadow-lg shadow-indigo-600/30 flex items-center gap-2 shrink-0"
+                    className="bg-indigo-600 hover:bg-indigo-500 disabled:opacity-50 text-white font-medium px-6 py-3 rounded-xl transition-all shadow-lg shadow-indigo-600/30 flex items-center justify-center gap-2 shrink-0 cursor-pointer"
                   >
                     {isProcessingSingle ? (
                       <>
@@ -3115,7 +3468,12 @@ const executeClientSideExtract = async (
                             ? (typeof singleResult.data.punteggio === "number" ? singleResult.data.punteggio.toFixed(2) : singleResult.data.punteggio)
                             : "Non riportato (null)"}
                         </span>
-                        {singleResult.data.origine_punteggio && singleResult.data.punteggio !== null && (
+                        {singleResult.data.punteggio === "Da verificare manualmente" && (
+                          <span className="px-1.5 py-0.5 rounded text-[10px] font-semibold uppercase tracking-wider bg-amber-500/20 text-amber-300 border border-amber-500/30">
+                            Da verificare
+                          </span>
+                        )}
+                        {singleResult.data.origine_punteggio && singleResult.data.punteggio !== null && singleResult.data.punteggio !== "Da verificare manualmente" && (
                           <span className={`px-1.5 py-0.5 rounded text-[10px] font-semibold uppercase tracking-wider ${
                             singleResult.data.origine_punteggio === "Esplicito"
                               ? "bg-emerald-500/20 text-emerald-300 border border-emerald-500/30"
@@ -3151,6 +3509,30 @@ const executeClientSideExtract = async (
                         {singleResult.data.decorrenza_contratto || (singleResult.data.decorrenza_da ? `${singleResult.data.decorrenza_da} - ${singleResult.data.decorrenza_a || "termine"}` : "N/D")}
                       </span>
                     </div>
+
+                    {singleResult.data.nominativo && (
+                      <div className="bg-slate-950/60 border border-indigo-500/30 rounded-xl p-3.5">
+                        <span className="text-[11px] uppercase tracking-wider text-indigo-400 font-semibold block mb-1">Nominativo</span>
+                        <span className="text-sm font-bold text-white">{singleResult.data.nominativo}</span>
+                      </div>
+                    )}
+
+                    {singleResult.data.pagine_graduatoria_esplorate && singleResult.data.pagine_graduatoria_esplorate.length > 0 && (
+                      <div className="bg-slate-950/60 border border-emerald-500/30 rounded-xl p-3.5 col-span-2 sm:col-span-4">
+                        <span className="text-[11px] uppercase tracking-wider text-emerald-400 font-semibold block mb-1">
+                          Pagine Graduatorie Esplorate ({singleResult.data.pagine_graduatoria_esplorate.length}/5 max)
+                        </span>
+                        <ul className="text-xs text-slate-300 space-y-1">
+                          {singleResult.data.pagine_graduatoria_esplorate.map((pageUrl, pIdx) => (
+                            <li key={pIdx} className="truncate">
+                              <a href={pageUrl} target="_blank" rel="noopener noreferrer" className="hover:underline text-indigo-300">
+                                {pageUrl}
+                              </a>
+                            </li>
+                          ))}
+                        </ul>
+                      </div>
+                    )}
                   </div>
 
                   {singleResult.data.albo_contratti && singleResult.data.albo_contratti.length > 0 && (

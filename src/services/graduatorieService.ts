@@ -409,3 +409,404 @@ function getDefaultDemoGraduatorie(): GraduatoriaIstituto[] {
     }
   ];
 }
+
+// -------------------------------------------------------------
+// TASK 5.1 — Ricerca pagina graduatorie su stesso dominio (max 5)
+// -------------------------------------------------------------
+
+export interface ExploredGraduatoriaPage {
+  url: string;
+  title: string;
+  keywordMatched: string;
+  content: string;
+  format: "html" | "markdown" | "buffer";
+  pdfLinks: string[];
+}
+
+export interface GraduatoriaCandidateLink {
+  url: string;
+  title: string;
+  keyword: string;
+  priority: number;
+}
+
+/**
+ * Verifica se un testo o URL fa riferimento a graduatorie, albo pretorio o amministrazione trasparente
+ */
+export function isGraduatoriaLink(text: string, href: string): { matches: boolean; keyword: string; priority: number } {
+  const combined = `${text || ""} ${href || ""}`.toLowerCase();
+
+  // 1. graduatoria / graduatorie (priorità massima)
+  if (/\bgraduatorie?\b/i.test(combined) || combined.includes("graduatoria") || combined.includes("graduatorie")) {
+    return { matches: true, keyword: "graduatoria/e", priority: 10 };
+  }
+
+  // 2. albo pretorio / albo online / pubblicità legale
+  if (
+    combined.includes("albo pretorio") ||
+    combined.includes("albo-pretorio") ||
+    combined.includes("albopretorio") ||
+    combined.includes("albo online") ||
+    combined.includes("albo-online") ||
+    combined.includes("/albo/") ||
+    combined.includes("albipretorionline") ||
+    combined.includes("pubblicita legale") ||
+    combined.includes("pubblicità legale")
+  ) {
+    return { matches: true, keyword: "albo pretorio", priority: 6 };
+  }
+
+  // 3. amministrazione trasparente / trasparenza
+  if (
+    combined.includes("amministrazione trasparente") ||
+    combined.includes("amministrazione-trasparente") ||
+    combined.includes("amministrazionetrasparente") ||
+    combined.includes("/amministrazione_trasparente") ||
+    combined.includes("/trasparenza") ||
+    combined.includes("trasparenza-pa")
+  ) {
+    return { matches: true, keyword: "amministrazione trasparente", priority: 5 };
+  }
+
+  return { matches: false, keyword: "", priority: 0 };
+}
+
+/**
+ * Normalizza il dominio rimuovendo protocollo, prefisso www. e porta
+ */
+export function normalizeDomainForComparison(urlStr: string): string {
+  if (!urlStr) return "";
+  try {
+    const formatted = urlStr.startsWith("http://") || urlStr.startsWith("https://")
+      ? urlStr
+      : `https://${urlStr}`;
+    const parsed = new URL(formatted);
+    return parsed.hostname.toLowerCase().replace(/^www\./, "");
+  } catch {
+    return urlStr.toLowerCase().replace(/^https?:\/\//, "").replace(/^www\./, "").split("/")[0];
+  }
+}
+
+/**
+ * Trova i link candidati relativi a graduatoria, amministrazione trasparente o albo pretorio
+ * filtrando RIGOROSAMENTE sullo stesso dominio di base.
+ */
+export function findGraduatoriaCandidateLinks(
+  rawContent: string,
+  baseUrl: string,
+  doc?: Document
+): GraduatoriaCandidateLink[] {
+  const candidates: GraduatoriaCandidateLink[] = [];
+  const seen = new Set<string>();
+  const baseDomain = normalizeDomainForComparison(baseUrl);
+
+  const addCandidate = (rawUrl: string, title: string) => {
+    if (!rawUrl) return;
+    const cleanUrl = rawUrl.trim();
+    if (
+      cleanUrl.startsWith("#") ||
+      cleanUrl.startsWith("javascript:") ||
+      cleanUrl.startsWith("mailto:") ||
+      cleanUrl.startsWith("tel:")
+    ) {
+      return;
+    }
+
+    try {
+      const resolved = new URL(cleanUrl, baseUrl).href;
+      if (seen.has(resolved)) return;
+
+      // Stesso dominio: verifica se il dominio corrisponde
+      const linkDomain = normalizeDomainForComparison(resolved);
+      if (linkDomain !== baseDomain) {
+        return; // Salta link esterni fuori dal dominio scolastico
+      }
+
+      const match = isGraduatoriaLink(title, resolved);
+      if (match.matches) {
+        seen.add(resolved);
+        candidates.push({
+          url: resolved,
+          title: (title || resolved).trim(),
+          keyword: match.keyword,
+          priority: match.priority,
+        });
+      }
+    } catch {
+      // Ignora URL non validi
+    }
+  };
+
+  // 1. Estrazione link da Markdown: [Titolo](URL)
+  const mdRegex = /\[([^\]]+)\]\((https?:\/\/[^\s\)\'\"]+)\)/g;
+  let match;
+  while ((match = mdRegex.exec(rawContent)) !== null) {
+    addCandidate(match[2], match[1]);
+  }
+
+  // 2. Estrazione da HTML se disponibile
+  if (doc) {
+    const anchors = Array.from(doc.querySelectorAll("a"));
+    for (const a of anchors) {
+      const href = a.getAttribute("href") || "";
+      const text = a.textContent || a.getAttribute("title") || a.getAttribute("aria-label") || "";
+      addCandidate(href, text);
+    }
+  } else if (rawContent.includes("<a ") || rawContent.includes("<A ")) {
+    // Fallback regex su tag <a> HTML
+    const aRegex = /<a\s+(?:[^>]*?\s+)?href=["']([^"']+)["'][^>]*>(.*?)<\/a>/gi;
+    while ((match = aRegex.exec(rawContent)) !== null) {
+      const href = match[1];
+      const text = match[2].replace(/<[^>]+>/g, "").trim();
+      addCandidate(href, text);
+    }
+  }
+
+  // Ordina per priorità decrescente (graduatorie prima di albo/trasparenza)
+  return candidates.sort((a, b) => b.priority - a.priority);
+}
+
+/**
+ * 5.1 — Trigger + ricerca pagina graduatoria
+ * Segue i link individuati (stesso dominio) tramite fetchWithProxy fino a max 5 pagine.
+ */
+export async function searchGraduatoriaPages(
+  baseUrl: string,
+  fetchFn: (
+    url: string,
+    asArrayBuffer?: boolean,
+    onLog?: (msg: string) => void
+  ) => Promise<{ data: any; method?: string; format: "html" | "markdown" | "buffer" }>,
+  onLog?: (msg: string) => void,
+  initialContent?: string,
+  initialDoc?: Document
+): Promise<ExploredGraduatoriaPage[]> {
+  onLog?.(`🔎 Cerco in graduatoria...`);
+  const exploredPages: ExploredGraduatoriaPage[] = [];
+  const visitedUrls = new Set<string>();
+  const MAX_PAGES = 5;
+
+  // Marca la homepage come visitata per non rianalizzarla inutilmente
+  visitedUrls.add(baseUrl);
+  try {
+    const normBase = new URL(baseUrl).origin;
+    visitedUrls.add(normBase);
+    visitedUrls.add(`${normBase}/`);
+  } catch {}
+
+  // 1. Trova candidati iniziali
+  let candidateLinks: GraduatoriaCandidateLink[] = [];
+  if (initialContent) {
+    candidateLinks = findGraduatoriaCandidateLinks(initialContent, baseUrl, initialDoc);
+  }
+
+  // Se non abbiamo candidati iniziali o initialContent era vuoto, proviamo a scaricare la homepage
+  if (candidateLinks.length === 0) {
+    try {
+      onLog?.(`Analisi homepage per individuazione sezioni Graduatorie / Albo / Trasparenza...`);
+      const homeRes = await fetchFn(baseUrl, false, onLog);
+      const raw = homeRes.data as string;
+      candidateLinks = findGraduatoriaCandidateLinks(raw, baseUrl);
+    } catch (e: any) {
+      onLog?.(`Impossibile interrogare la homepage per le graduatorie: ${e.message}`);
+    }
+  }
+
+  onLog?.(`Trovati ${candidateLinks.length} link candidati (graduatorie/albo/trasparenza) su ${baseUrl}`);
+
+  const queue: GraduatoriaCandidateLink[] = [...candidateLinks];
+
+  // 2. Esplora i link in coda fino a max 5 pagine
+  while (queue.length > 0 && exploredPages.length < MAX_PAGES) {
+    const current = queue.shift()!;
+    if (visitedUrls.has(current.url)) continue;
+    visitedUrls.add(current.url);
+
+    const pageNum = exploredPages.length + 1;
+    onLog?.(`Esplorazione pagina graduatoria (${pageNum}/${MAX_PAGES}): "${current.title}" (${current.url}) [tipo: ${current.keyword}]`);
+
+    try {
+      const res = await fetchFn(current.url, false, onLog);
+      const rawData = res.data as string;
+      let textContent = "";
+      const pdfs: string[] = [];
+
+      if (res.format === "html") {
+        if (typeof window !== "undefined" && window.DOMParser) {
+          const parser = new DOMParser();
+          const doc = parser.parseFromString(rawData, "text/html");
+          textContent = doc.body?.textContent?.replace(/\s+/g, " ").trim() || "";
+
+          // Individua PDF allegati
+          const anchors = Array.from(doc.querySelectorAll("a"));
+          for (const a of anchors) {
+            const h = a.getAttribute("href") || "";
+            if (h.toLowerCase().includes(".pdf") || h.toLowerCase().includes("/allegat") || h.toLowerCase().includes("/download")) {
+              try {
+                const fullPdf = new URL(h, current.url).href;
+                if (!pdfs.includes(fullPdf)) {
+                  pdfs.push(fullPdf);
+                }
+              } catch {}
+            }
+          }
+
+          // Se abbiamo ancora spazio nelle 5 pagine, raccogli eventuali sottolink specifici su questa pagina (es. da trasparenza a graduatorie)
+          if (exploredPages.length + 1 < MAX_PAGES) {
+            const nestedCandidates = findGraduatoriaCandidateLinks(rawData, current.url, doc);
+            for (const n of nestedCandidates) {
+              if (!visitedUrls.has(n.url) && !queue.some(q => q.url === n.url)) {
+                // Se è una graduatoria specifica, mettila in testa
+                if (n.keyword === "graduatoria/e") {
+                  queue.unshift(n);
+                } else {
+                  queue.push(n);
+                }
+              }
+            }
+          }
+        } else {
+          textContent = rawData.replace(/<[^>]+>/g, " ").replace(/\s+/g, " ").trim();
+        }
+      } else {
+        textContent = rawData.replace(/[#*`_\[\]]/g, " ").replace(/\s+/g, " ").trim();
+        // Estrai PDF links da markdown
+        const pdfMatches = rawData.match(/https?:\/\/[^\s\)\'\"]+\.pdf/gi);
+        if (pdfMatches) {
+          for (const p of pdfMatches) {
+            if (!pdfs.includes(p)) pdfs.push(p);
+          }
+        }
+      }
+
+      onLog?.(`Pagina letta con successo: "${current.title}" (${textContent.length} caratteri estratti, ${pdfs.length} allegati/PDF rilevati)`);
+
+      exploredPages.push({
+        url: current.url,
+        title: current.title,
+        keywordMatched: current.keyword,
+        content: textContent,
+        format: res.format,
+        pdfLinks: pdfs,
+      });
+    } catch (err: any) {
+      onLog?.(`Avviso lettura link graduatoria ${current.url}: ${err.message}`);
+    }
+  }
+
+  onLog?.(`Completata ricerca graduatorie: ${exploredPages.length} pagine esplorate su ${baseUrl}`);
+  return exploredPages;
+}
+
+// -------------------------------------------------------------
+// TASK 5.2 — Estrazione + Matching Graduatoria
+// -------------------------------------------------------------
+
+export const GRADUATORIA_EXTRACTION_SYSTEM_PROMPT = `Sei un assistente specializzato nell'estrazione precisa di dati da graduatorie d'istituto scolastiche italiane (Docenti e Personale ATA) pubblicate su pagine web, albi pretori o file PDF.
+
+Il tuo compito è individuare e estrarre tutti i candidati/nominativi presenti nella graduatoria o elenco con il relativo punteggio e la classe di concorso o profilo professionale.
+
+SCHEMA JSON OBBLIGATORIO:
+{
+  "graduatoria_entries": [
+    {
+      "nominativo": "COGNOME NOME o NOME COGNOME del candidato",
+      "punteggio": 54.5,
+      "classe_concorso": "Codice classe di concorso (es. A-22, A-12, A-28, ADMM, ADSS) oppure profilo ATA (es. Collaboratore Scolastico, Assistente Amministrativo, Assistente Tecnico)"
+    }
+  ]
+}
+
+REGOLE CRITICHE:
+1. "nominativo": Riporta il nome completo del candidato esattamente come scritto nel documento (es. "ROSSI MARIO", "MARIO ROSSI").
+2. "punteggio": Deve essere un valore numerico (es. 54.5, 88.0, 112.5). Se il punteggio non è esplicitato o non è presente, imposta RIGOROSAMENTE null. MAI restituire 0 se il punteggio è assente.
+3. "classe_concorso": Riporta la classe di concorso per docenti (es. "A-22", "A-12", "A-28", "ADMM") o il profilo ATA (es. "AA", "CS", "AT", "Collaboratore Scolastico", "Assistente Amministrativo").
+4. Rispondi RIGOROSAMENTE ed ESCLUSIVAMENTE con l'oggetto JSON richiesto, senza markdown o commenti esterni.`;
+
+export interface GraduatoriaExtractedEntry {
+  nominativo: string;
+  punteggio: number | null;
+  classe_concorso?: string;
+}
+
+/**
+ * Confronta due nominativi gestendo l'ordine nome/cognome invertito.
+ * Non accetta errori di battitura (no fuzzy matching).
+ * Esempio: "MARIO ROSSI" corrisponde a "ROSSI MARIO".
+ */
+export function isNameMatch(nameA?: string, nameB?: string): boolean {
+  if (!nameA || !nameB) return false;
+
+  const cleanTokens = (str: string): string[] =>
+    str
+      .toLowerCase()
+      .replace(/[^a-z0-9àèéìòù]/gi, " ")
+      .trim()
+      .split(/\s+/)
+      .filter(Boolean);
+
+  const tokensA = cleanTokens(nameA);
+  const tokensB = cleanTokens(nameB);
+
+  if (tokensA.length === 0 || tokensB.length === 0) return false;
+
+  // Corrispondenza esatta di tutti i token (ordine invariante)
+  const sortedA = [...tokensA].sort().join(" ");
+  const sortedB = [...tokensB].sort().join(" ");
+  if (sortedA === sortedB) return true;
+
+  // Gestione di 2 parole: A B === B A
+  if (tokensA.length === 2 && tokensB.length === 2) {
+    if (tokensA[0] === tokensB[1] && tokensA[1] === tokensB[0]) return true;
+  }
+
+  // Gestione di iniziali es: "M. ROSSI" o "ROSSI M." con "MARIO ROSSI"
+  if (tokensA.length === 2 && tokensB.length === 2) {
+    const isInitA = tokensA[0].length === 1 || tokensA[1].length === 1;
+    const isInitB = tokensB[0].length === 1 || tokensB[1].length === 1;
+    if (isInitA || isInitB) {
+      const surnameA = tokensA[0].length > 1 ? tokensA[0] : tokensA[1];
+      const surnameB = tokensB[0].length > 1 ? tokensB[0] : tokensB[1];
+      const initA = tokensA[0].length === 1 ? tokensA[0] : tokensA[1][0];
+      const initB = tokensB[0].length === 1 ? tokensB[0] : tokensB[1][0];
+      if (surnameA === surnameB && initA === initB) return true;
+    }
+  }
+
+  return false;
+}
+
+/**
+ * Normalizza classe di concorso o profilo professionale per il matching
+ */
+export function normalizeCdcOrProfile(val?: string): string {
+  if (!val) return "";
+  const s = val.toLowerCase().replace(/[^a-z0-9]/g, "");
+
+  // Mappatura ATA
+  if (s.includes("collaboratore") || s === "cs" || s.includes("scolastico")) return "cs";
+  if (s.includes("amministrativo") || s === "aa") return "aa";
+  if (s.includes("tecnico") || s === "at") return "at";
+  if (s.includes("cuoco") || s === "cu") return "cu";
+  if (s.includes("agrario") || s === "cr") return "cr";
+  if (s.includes("guardarob") || s === "gu") return "gu";
+  if (s.includes("inferm") || s === "if") return "if";
+
+  // Docenti: rimozione zeri iniziali e standardizzazione (es. a022 -> a22)
+  return s.replace(/^a0+([1-9])/i, "a$1");
+}
+
+/**
+ * Confronta due classi di concorso o profili professionali
+ */
+export function isClassMatch(classA?: string, classB?: string): boolean {
+  if (!classA || !classB) return false;
+  const normA = normalizeCdcOrProfile(classA);
+  const normB = normalizeCdcOrProfile(classB);
+  if (!normA || !normB) return false;
+  if (normA === normB) return true;
+  if (normA.includes(normB) || normB.includes(normA)) return true;
+  return false;
+}
+
+
