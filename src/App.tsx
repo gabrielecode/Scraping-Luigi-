@@ -35,10 +35,13 @@ import {
   X,
   AlertTriangle
 } from "lucide-react";
-import { ExtractionResult, ExtractionData, BatchHistoryItem, NominaContrattoItem } from "./types";
+import { ExtractionResult, ExtractionData, BatchHistoryItem, NominaContrattoItem, GraduatoriaIstituto, OriginePunteggio } from "./types";
+import { GraduatorieManager } from "./components/GraduatorieManager";
+import { getStoredGraduatorie, saveStoredGraduatorie, crossReferenceNomina } from "./services/graduatorieService";
 
 export default function App() {
-  const [activeTab, setActiveTab] = useState<"batch" | "single" | "albo" | "search" | "history" | "guide">("batch");
+  const [activeTab, setActiveTab] = useState<"batch" | "single" | "albo" | "search" | "history" | "guide" | "graduatorie">("batch");
+  const [graduatorie, setGraduatorie] = useState<GraduatoriaIstituto[]>(() => getStoredGraduatorie());
   
   // Configuration & LocalStorage state
   const [openRouterApiKey, setOpenRouterApiKey] = useState(() => {
@@ -1310,8 +1313,11 @@ const executeClientSideExtract = async (
       classe_concorso_area_lab: "Non applicabile",
       tipo_posto: "comune" as "comune" | "sostegno",
       punteggio: null as number | null,
+      origine_punteggio: undefined as OriginePunteggio | undefined,
+      posizione_graduatoria: "",
       graduatoria_fascia: "",
       profilo_professionale: "",
+      profilo_lavorativo: "",
       classe_di_concorso: "",
       ore_settimanali: "",
       decorrenza_da: "",
@@ -1320,6 +1326,7 @@ const executeClientSideExtract = async (
       durata_contratto_mesi: "",
       durata_contratto_giorni: "",
       link_del_documento: "",
+      note_cross_reference: "",
       nomine_contratti: [] as NominaContrattoItem[],
       albo_contratti: []
     };
@@ -1356,7 +1363,29 @@ const executeClientSideExtract = async (
       extractedData.classe_di_concorso = extractedData.classe_concorso_area_lab;
       extractedData.punteggio = normalizePunteggio(extractedData.punteggio);
 
-      // Calculate duration for each contract in nomine_contratti
+      // Incrocio graduatorie per risalire a punteggi mancanti
+      const currentGrad = getStoredGraduatorie();
+      const topCross = crossReferenceNomina(
+        {
+          ...extractedData,
+          posizione_graduatoria: extractedData.posizione_graduatoria || "",
+          punteggio: extractedData.punteggio,
+          profilo_lavorativo: extractedData.profilo_lavorativo || extractedData.profilo_professionale,
+          fascia: extractedData.graduatoria_fascia,
+          tipologia_personale: topTipologia,
+          classe_concorso_area_lab: extractedData.classe_concorso_area_lab,
+        } as any,
+        currentGrad,
+        {
+          codice_meccanografico: extractedData.codice_meccanografico,
+          nome_istituto: extractedData.nome_istituto,
+        }
+      );
+      extractedData.punteggio = topCross.punteggio;
+      extractedData.origine_punteggio = topCross.origine_punteggio;
+      extractedData.note_cross_reference = topCross.note_cross_reference;
+
+      // Calculate duration and cross-reference for each contract in nomine_contratti
       if (Array.isArray(extractedData.nomine_contratti)) {
         extractedData.nomine_contratti = extractedData.nomine_contratti.map((item: any) => {
           const duration = calculateContractDuration(item.decorrenza_contratto || "");
@@ -1365,7 +1394,7 @@ const executeClientSideExtract = async (
           const tipoPosto = inferTipoPosto(item);
           const punt = normalizePunteggio(item.punteggio);
 
-          return {
+          const baseItem = {
             ...item,
             nome_istituto: item.nome_istituto || extractedData.nome_istituto || "",
             codice_meccanografico: item.codice_meccanografico || extractedData.codice_meccanografico || "",
@@ -1383,6 +1412,11 @@ const executeClientSideExtract = async (
             durata_contratto_giorni: duration.giorni,
             link_del_documento: item.link_del_documento || item.pdf_url || res.navigatedUrl || targetUrl,
           };
+
+          return crossReferenceNomina(baseItem, currentGrad, {
+            codice_meccanografico: baseItem.codice_meccanografico,
+            nome_istituto: baseItem.nome_istituto,
+          });
         });
       }
     } catch {
@@ -1461,11 +1495,8 @@ const executeClientSideExtract = async (
       const pdfTipoPosto = inferTipoPosto(extracted);
       const pdfPunteggio = normalizePunteggio(extracted.punteggio);
 
-      setPdfExtractResult({
-        success: true,
-        filename: selectedPdfFile.name,
-        size: selectedPdfFile.size,
-        data: {
+      const crossPdf = crossReferenceNomina(
+        {
           nome_istituto: extracted.nome_istituto || "Istituto Scolastico",
           codice_meccanografico: extracted.codice_meccanografico || "",
           tipologia_personale: pdfTipologia,
@@ -1481,9 +1512,39 @@ const executeClientSideExtract = async (
           durata_contratto_mesi: duration.mesi,
           durata_contratto_giorni: duration.giorni,
           link_del_documento: selectedPdfFile.name,
+        } as any,
+        graduatorie,
+        {
+          codice_meccanografico: extracted.codice_meccanografico,
+          nome_istituto: extracted.nome_istituto,
+        }
+      );
+
+      setPdfExtractResult({
+        success: true,
+        filename: selectedPdfFile.name,
+        size: selectedPdfFile.size,
+        data: {
+          nome_istituto: crossPdf.nome_istituto || "Istituto Scolastico",
+          codice_meccanografico: crossPdf.codice_meccanografico || "",
+          tipologia_personale: pdfTipologia,
+          profilo_lavorativo: crossPdf.profilo_lavorativo,
+          classe_concorso_area_lab: pdfCdcArea,
+          tipo_posto: pdfTipoPosto,
+          classe_di_concorso: pdfCdcArea,
+          punteggio: crossPdf.punteggio,
+          origine_punteggio: crossPdf.origine_punteggio,
+          note_cross_reference: crossPdf.note_cross_reference,
+          posizione_graduatoria: crossPdf.posizione_graduatoria,
+          fascia: crossPdf.fascia,
+          ore_settimanali: crossPdf.ore_settimanali,
+          decorrenza_contratto: duration.formattedPeriod,
+          durata_contratto_mesi: duration.mesi,
+          durata_contratto_giorni: duration.giorni,
+          link_del_documento: selectedPdfFile.name,
           // Compatibilità pregressa
-          graduatoria_fascia: extracted.fascia || extracted.graduatoria_fascia || "Non specificata",
-          profilo_professionale: extracted.profilo_lavorativo || extracted.profilo_professionale || (pdfTipologia === "DOCENTE" ? "Personale Docente" : "Personale ATA"),
+          graduatoria_fascia: crossPdf.fascia,
+          profilo_professionale: crossPdf.profilo_lavorativo,
           decorrenza_da: normalizeDateOutput(extracted.decorrenza_da || ""),
           decorrenza_a: normalizeDateOutput(extracted.decorrenza_a || ""),
         }
@@ -1690,20 +1751,79 @@ const executeClientSideExtract = async (
     }
   };
 
-  // Unified helper to convert any results to 11-column CSV format
+  // Recalculates cross-referencing on existing batch results with current graduatorie in memory
+  const recalculateCrossReferenceOnBatchResults = () => {
+    if (batchResults.length === 0) return;
+    const currentGrad = getStoredGraduatorie();
+    const updated = batchResults.map(r => {
+      if (!r.data) return r;
+      const topTip = inferTipologiaPersonale(r.data);
+      const topCross = crossReferenceNomina(
+        {
+          ...r.data,
+          posizione_graduatoria: r.data.posizione_graduatoria || "",
+          punteggio: r.data.origine_punteggio === "Incrociato" ? null : r.data.punteggio,
+          profilo_lavorativo: r.data.profilo_lavorativo || r.data.profilo_professionale,
+          fascia: r.data.graduatoria_fascia,
+          tipologia_personale: topTip,
+          classe_concorso_area_lab: r.data.classe_concorso_area_lab,
+        } as any,
+        currentGrad,
+        {
+          codice_meccanografico: r.data.codice_meccanografico,
+          nome_istituto: r.data.nome_istituto,
+        }
+      );
+
+      let updatedNomine = r.data.nomine_contratti;
+      if (Array.isArray(updatedNomine)) {
+        updatedNomine = updatedNomine.map((item: any) => {
+          return crossReferenceNomina(
+            {
+              ...item,
+              punteggio: item.origine_punteggio === "Incrociato" ? null : item.punteggio,
+            },
+            currentGrad,
+            {
+              codice_meccanografico: item.codice_meccanografico || r.data.codice_meccanografico,
+              nome_istituto: item.nome_istituto || r.data.nome_istituto,
+            }
+          );
+        });
+      }
+
+      return {
+        ...r,
+        data: {
+          ...r.data,
+          punteggio: topCross.punteggio,
+          origine_punteggio: topCross.origine_punteggio,
+          note_cross_reference: topCross.note_cross_reference,
+          nomine_contratti: updatedNomine,
+        }
+      };
+    });
+    setBatchResults(updated);
+  };
+
+  // Unified helper to convert any results to 16-column CSV format with cross-referencing
   const generateUnifiedCsvContent = (items: ExtractionResult[]): string => {
     const headers = [
       "Nome Istituto",
       "Codice Meccanografico",
+      "Tipologia",
       "Profilo",
       "Classe di Concorso / Area AT",
+      "Tipo Posto",
       "Punteggio",
+      "Origine Punteggio",
       "Posizione",
       "Fascia",
       "Ore",
       "Decorrenza",
       "Durata Mesi",
       "Durata Giorni",
+      "Note Incrocio",
       "Link",
     ];
 
@@ -1739,29 +1859,37 @@ const executeClientSideExtract = async (
           const duration = calculateContractDuration(c.decorrenza_contratto || "");
           const schoolName = c.nome_istituto || defaultSchoolName;
           const schoolCode = c.codice_meccanografico || defaultSchoolCode;
+          const tipologia = c.tipologia_personale || "ATA";
           const profilo = c.profilo_lavorativo || "Collaboratore scolastico TD";
           const classe = c.classe_concorso_area_lab || c.classe_di_concorso || "Non applicabile";
+          const tipoPosto = c.tipo_posto || "comune";
           const punteggio = formatCsvPunteggio(c.punteggio);
+          const origine = c.origine_punteggio || (punteggio ? "Esplicito" : "Non disponibile");
           const posizione = c.posizione_graduatoria || "Non riportata";
           const fascia = c.fascia || "Non specificata";
           const ore = c.ore_settimanali || "Non riportate";
           const decorrenza = duration.formattedPeriod;
           const mesi = duration.mesi;
           const giorni = duration.giorni;
+          const noteIncrocio = c.note_cross_reference || "";
           const link = c.link_del_documento || r.navigatedUrl || r.url;
 
           rows.push([
             `"${schoolName.replace(/"/g, '""')}"`,
             `"${schoolCode.replace(/"/g, '""')}"`,
+            `"${tipologia.replace(/"/g, '""')}"`,
             `"${profilo.replace(/"/g, '""')}"`,
             `"${classe.replace(/"/g, '""')}"`,
+            `"${tipoPosto.replace(/"/g, '""')}"`,
             `"${punteggio.replace(/"/g, '""')}"`,
+            `"${origine.replace(/"/g, '""')}"`,
             `"${posizione.replace(/"/g, '""')}"`,
             `"${fascia.replace(/"/g, '""')}"`,
             `"${ore.replace(/"/g, '""')}"`,
             `"${decorrenza.replace(/"/g, '""')}"`,
             `"${mesi}"`,
             `"${giorni}"`,
+            `"${noteIncrocio.replace(/"/g, '""')}"`,
             `"${link.replace(/"/g, '""')}"`,
           ].join(","));
         }
@@ -1772,29 +1900,37 @@ const executeClientSideExtract = async (
           const duration = calculateContractDuration("", c.decorrenza_da, c.decorrenza_a);
           const schoolName = defaultSchoolName;
           const schoolCode = defaultSchoolCode;
+          const tipologia = c.tipologia_personale || "ATA";
           const profilo = c.profilo_professionale || c.titolo_bando || "Personale Scolastico";
           const classe = c.classe_concorso_area_lab || c.classe_di_concorso || "Non applicabile";
+          const tipoPosto = c.tipo_posto || "comune";
           const punteggio = formatCsvPunteggio(c.punteggio);
+          const origine = c.origine_punteggio || (punteggio ? "Esplicito" : "Non disponibile");
           const posizione = c.posizione_graduatoria || "Non riportata";
           const fascia = c.graduatoria_fascia || "Non specificata";
           const ore = c.ore_settimanali || "Non riportate";
           const decorrenza = duration.formattedPeriod;
           const mesi = duration.mesi;
           const giorni = duration.giorni;
+          const noteIncrocio = c.note_cross_reference || "";
           const link = c.pdf_url || r.navigatedUrl || r.url;
 
           rows.push([
             `"${schoolName.replace(/"/g, '""')}"`,
             `"${schoolCode.replace(/"/g, '""')}"`,
+            `"${tipologia.replace(/"/g, '""')}"`,
             `"${profilo.replace(/"/g, '""')}"`,
             `"${classe.replace(/"/g, '""')}"`,
+            `"${tipoPosto.replace(/"/g, '""')}"`,
             `"${punteggio.replace(/"/g, '""')}"`,
+            `"${origine.replace(/"/g, '""')}"`,
             `"${posizione.replace(/"/g, '""')}"`,
             `"${fascia.replace(/"/g, '""')}"`,
             `"${ore.replace(/"/g, '""')}"`,
             `"${decorrenza.replace(/"/g, '""')}"`,
             `"${mesi}"`,
             `"${giorni}"`,
+            `"${noteIncrocio.replace(/"/g, '""')}"`,
             `"${link.replace(/"/g, '""')}"`,
           ].join(","));
         }
@@ -1808,7 +1944,8 @@ const executeClientSideExtract = async (
         );
         const schoolName = defaultSchoolName;
         const schoolCode = defaultSchoolCode;
-        const profilo = data.profilo_professionale || (
+        const tipologia = data.tipologia_personale || "ATA";
+        const profilo = data.profilo_lavorativo || data.profilo_professionale || (
           data.convocazioni_collaboratore_scolastico > 0 ? "Collaboratore Scolastico TD" :
           data.convocazioni_assistente_amministrativo > 0 ? "Assistente Amministrativo TD" :
           data.convocazioni_docenti > 0 ? "Docente TD" :
@@ -1816,27 +1953,34 @@ const executeClientSideExtract = async (
           "Personale Scolastico"
         );
         const classe = data.classe_concorso_area_lab || data.classe_di_concorso || "Non applicabile";
+        const tipoPosto = data.tipo_posto || "comune";
         const punteggio = formatCsvPunteggio(data.punteggio);
+        const origine = data.origine_punteggio || (punteggio ? "Esplicito" : "Non disponibile");
         const posizione = data.posizione_graduatoria || "Non riportata";
         const fascia = data.graduatoria_fascia || "Non specificata";
         const ore = data.ore_settimanali || "Non riportate";
         const decorrenza = duration.formattedPeriod;
         const mesi = duration.mesi;
         const giorni = duration.giorni;
+        const noteIncrocio = data.note_cross_reference || "";
         const link = data.link_del_documento || r.navigatedUrl || r.url;
 
         rows.push([
           `"${schoolName.replace(/"/g, '""')}"`,
           `"${schoolCode.replace(/"/g, '""')}"`,
+          `"${tipologia.replace(/"/g, '""')}"`,
           `"${profilo.replace(/"/g, '""')}"`,
           `"${classe.replace(/"/g, '""')}"`,
+          `"${tipoPosto.replace(/"/g, '""')}"`,
           `"${punteggio.replace(/"/g, '""')}"`,
+          `"${origine.replace(/"/g, '""')}"`,
           `"${posizione.replace(/"/g, '""')}"`,
           `"${fascia.replace(/"/g, '""')}"`,
           `"${ore.replace(/"/g, '""')}"`,
           `"${decorrenza.replace(/"/g, '""')}"`,
           `"${mesi}"`,
           `"${giorni}"`,
+          `"${noteIncrocio.replace(/"/g, '""')}"`,
           `"${link.replace(/"/g, '""')}"`,
         ].join(","));
       }
@@ -2042,6 +2186,17 @@ const executeClientSideExtract = async (
           >
             <FileText className="w-4 h-4" />
             <span>Albo Pretorio & PDF</span>
+          </button>
+          <button
+            onClick={() => setActiveTab("graduatorie")}
+            className={`px-4 py-2 rounded-lg text-sm font-medium transition-all flex items-center gap-2 ${
+              activeTab === "graduatorie"
+                ? "bg-indigo-600 text-white shadow-lg shadow-indigo-600/25"
+                : "text-slate-400 hover:text-white hover:bg-slate-800/60"
+            }`}
+          >
+            <GraduationCap className="w-4 h-4" />
+            <span>Graduatorie ({graduatorie.length})</span>
           </button>
           <button
             onClick={() => setActiveTab("history")}
@@ -2636,12 +2791,20 @@ const executeClientSideExtract = async (
                   </div>
                   <div className="flex flex-wrap items-center gap-3">
                     <button
+                      onClick={recalculateCrossReferenceOnBatchResults}
+                      className="bg-indigo-600/20 hover:bg-indigo-600/30 text-indigo-300 border border-indigo-500/30 font-medium px-4 py-2.5 rounded-xl transition-all flex items-center gap-2 text-sm cursor-pointer"
+                      title="Ricalcola l'incrocio con le Graduatorie d'Istituto salvate per completare i punteggi mancanti"
+                    >
+                      <GraduationCap className="w-4 h-4 text-indigo-400" />
+                      <span>Ricalcola Incroci</span>
+                    </button>
+                    <button
                       onClick={exportResultsToCsv}
                       className="bg-emerald-600 hover:bg-emerald-500 text-white font-medium px-4 py-2.5 rounded-xl transition-all shadow-lg shadow-emerald-600/20 flex items-center gap-2 text-sm cursor-pointer"
-                      title="Esporta tutte le nomine nel formato CSV a 11 colonne con calcolo automatico della durata"
+                      title="Esporta tutte le nomine nel formato CSV a 16 colonne con tracciamento incrocio graduatorie"
                     >
                       <Download className="w-4 h-4" />
-                      <span>Esporta CSV Nomine (11 Colonne)</span>
+                      <span>Esporta CSV Nomine (16 Colonne)</span>
                     </button>
                     <button
                       onClick={exportToGitHub}
@@ -2681,7 +2844,7 @@ const executeClientSideExtract = async (
                           <th className="p-4 font-semibold text-center text-emerald-400">Profilo</th>
                           <th className="p-4 font-semibold text-center text-emerald-400">CDC / Area AT</th>
                           <th className="p-4 font-semibold text-center text-emerald-400">Posto</th>
-                          <th className="p-4 font-semibold text-center text-emerald-400">Punti</th>
+                          <th className="p-4 font-semibold text-center text-emerald-400">Punti / Origine</th>
                           <th className="p-4 font-semibold text-center text-emerald-400">Fascia</th>
                           <th className="p-4 font-semibold text-center">Conv. Doc.</th>
                           <th className="p-4 font-semibold text-center">Conv. ATA</th>
@@ -2735,8 +2898,24 @@ const executeClientSideExtract = async (
                               <td className="p-4 text-center text-slate-400 capitalize">
                                 {tipoPosto}
                               </td>
-                              <td className="p-4 text-center text-white font-mono font-bold">
-                                {punt}
+                              <td className="p-4 text-center font-mono">
+                                <div className="flex flex-col items-center gap-0.5">
+                                  <span className="font-bold text-white">{punt}</span>
+                                  {r.data.origine_punteggio && r.data.punteggio !== null && (
+                                    <span
+                                      title={r.data.note_cross_reference || ""}
+                                      className={`px-1.5 py-0.5 rounded text-[9px] font-semibold uppercase tracking-wider ${
+                                        r.data.origine_punteggio === "Esplicito"
+                                          ? "bg-emerald-500/20 text-emerald-300 border border-emerald-500/30"
+                                          : r.data.origine_punteggio === "Incrociato"
+                                          ? "bg-sky-500/20 text-sky-300 border border-sky-500/30"
+                                          : "text-slate-500"
+                                      }`}
+                                    >
+                                      {r.data.origine_punteggio}
+                                    </span>
+                                  )}
+                                </div>
                               </td>
                               <td className="p-4 text-center text-slate-300 font-medium">{r.data.graduatoria_fascia || "-"}</td>
                               <td className="p-4 text-center font-bold text-amber-300">{r.data.convocazioni_docenti ?? 0}</td>
@@ -2929,12 +3108,30 @@ const executeClientSideExtract = async (
                       <span className="text-sm font-bold text-white font-mono">{singleResult.data.classe_concorso_area_lab || singleResult.data.classe_di_concorso || "Non applicabile"}</span>
                     </div>
                     <div className="bg-slate-950/60 border border-slate-800/80 rounded-xl p-3.5">
-                      <span className="text-[11px] uppercase tracking-wider text-slate-400 font-semibold block mb-1">Punteggio</span>
-                      <span className="text-sm font-bold text-white font-mono">
-                        {singleResult.data.punteggio !== null && singleResult.data.punteggio !== undefined
-                          ? (typeof singleResult.data.punteggio === "number" ? singleResult.data.punteggio.toFixed(2) : singleResult.data.punteggio)
-                          : "Non riportato (null)"}
-                      </span>
+                      <span className="text-[11px] uppercase tracking-wider text-slate-400 font-semibold block mb-1">Punteggio / Origine</span>
+                      <div className="flex items-center gap-1.5 flex-wrap">
+                        <span className="text-sm font-bold text-white font-mono">
+                          {singleResult.data.punteggio !== null && singleResult.data.punteggio !== undefined
+                            ? (typeof singleResult.data.punteggio === "number" ? singleResult.data.punteggio.toFixed(2) : singleResult.data.punteggio)
+                            : "Non riportato (null)"}
+                        </span>
+                        {singleResult.data.origine_punteggio && singleResult.data.punteggio !== null && (
+                          <span className={`px-1.5 py-0.5 rounded text-[10px] font-semibold uppercase tracking-wider ${
+                            singleResult.data.origine_punteggio === "Esplicito"
+                              ? "bg-emerald-500/20 text-emerald-300 border border-emerald-500/30"
+                              : singleResult.data.origine_punteggio === "Incrociato"
+                              ? "bg-sky-500/20 text-sky-300 border border-sky-500/30"
+                              : "text-slate-500"
+                          }`}>
+                            {singleResult.data.origine_punteggio}
+                          </span>
+                        )}
+                      </div>
+                      {singleResult.data.note_cross_reference && (
+                        <p className="text-[10px] text-slate-400 mt-1 line-clamp-2" title={singleResult.data.note_cross_reference}>
+                          {singleResult.data.note_cross_reference}
+                        </p>
+                      )}
                     </div>
                     <div className="bg-slate-950/60 border border-slate-800/80 rounded-xl p-3.5">
                       <span className="text-[11px] uppercase tracking-wider text-slate-400 font-semibold block mb-1">Fascia Graduatoria</span>
@@ -3386,12 +3583,30 @@ const executeClientSideExtract = async (
                       <span className="text-base font-bold text-white font-mono">{pdfExtractResult.data.classe_concorso_area_lab || pdfExtractResult.data.classe_di_concorso || "Non applicabile"}</span>
                     </div>
                     <div className="bg-slate-950/60 border border-slate-800 rounded-xl p-4">
-                      <span className="text-[11px] font-semibold text-indigo-400 uppercase tracking-wider block mb-1">Punteggio</span>
-                      <span className="text-base font-bold text-white font-mono">
-                        {pdfExtractResult.data.punteggio !== null && pdfExtractResult.data.punteggio !== undefined
-                          ? (typeof pdfExtractResult.data.punteggio === "number" ? pdfExtractResult.data.punteggio.toFixed(2) : pdfExtractResult.data.punteggio)
-                          : "Non riportato (null)"}
-                      </span>
+                      <span className="text-[11px] font-semibold text-indigo-400 uppercase tracking-wider block mb-1">Punteggio / Origine</span>
+                      <div className="flex items-center gap-1.5 flex-wrap">
+                        <span className="text-base font-bold text-white font-mono">
+                          {pdfExtractResult.data.punteggio !== null && pdfExtractResult.data.punteggio !== undefined
+                            ? (typeof pdfExtractResult.data.punteggio === "number" ? pdfExtractResult.data.punteggio.toFixed(2) : pdfExtractResult.data.punteggio)
+                            : "Non riportato (null)"}
+                        </span>
+                        {pdfExtractResult.data.origine_punteggio && pdfExtractResult.data.punteggio !== null && (
+                          <span className={`px-1.5 py-0.5 rounded text-[10px] font-semibold uppercase tracking-wider ${
+                            pdfExtractResult.data.origine_punteggio === "Esplicito"
+                              ? "bg-emerald-500/20 text-emerald-300 border border-emerald-500/30"
+                              : pdfExtractResult.data.origine_punteggio === "Incrociato"
+                              ? "bg-sky-500/20 text-sky-300 border border-sky-500/30"
+                              : "text-slate-500"
+                          }`}>
+                            {pdfExtractResult.data.origine_punteggio}
+                          </span>
+                        )}
+                      </div>
+                      {pdfExtractResult.data.note_cross_reference && (
+                        <p className="text-[10px] text-slate-400 mt-1 line-clamp-2" title={pdfExtractResult.data.note_cross_reference}>
+                          {pdfExtractResult.data.note_cross_reference}
+                        </p>
+                      )}
                     </div>
                     <div className="bg-slate-950/60 border border-slate-800 rounded-xl p-4">
                       <span className="text-[11px] font-semibold text-emerald-400 uppercase tracking-wider block mb-1">Graduatoria Fascia</span>
@@ -3427,6 +3642,19 @@ const executeClientSideExtract = async (
                 </div>
               )}
             </div>
+          </div>
+        )}
+
+        {/* TAB: GESTIONE GRADUATORIE D'ISTITUTO */}
+        {activeTab === "graduatorie" && (
+          <div className="animate-fadeIn max-w-5xl mx-auto">
+            <GraduatorieManager
+              graduatorie={graduatorie}
+              onUpdateGraduatorie={(updated) => {
+                setGraduatorie(updated);
+                saveStoredGraduatorie(updated);
+              }}
+            />
           </div>
         )}
 
