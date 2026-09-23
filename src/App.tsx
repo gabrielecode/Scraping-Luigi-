@@ -303,21 +303,24 @@ export default function App() {
   const [isSearching, setIsSearching] = useState(false);
   const [searchError, setSearchError] = useState("");
 
-  const EXTRACTION_SYSTEM_PROMPT = `Sei un assistente specializzato nell'analisi di documenti scolastici, delibere, circolari, atti dell'Albo Pretorio e contratti/nomine di supplenza per le scuole italiane.
+  const EXTRACTION_SYSTEM_PROMPT = `Sei un assistente specializzato nell'analisi di documenti scolastici, delibere, circolari, atti dell'Albo Pretorio, avvisi di interpello, convocazioni e contratti/nomine di supplenza per le scuole italiane, sia per il personale ATA che per il personale DOCENTE.
 Leggi attentamente il testo ed estrai con la massima precisione:
 1. "nome_istituto": denominazione ufficiale dell'istituto scolastico (es. "IC Ripa Teatina–Miglianico", "IIS Schiaparelli", "Liceo Cavour"), se deducibile.
 2. "codice_meccanografico": codice meccanografico della scuola (es. "CHIC81000A", "MIPC01000C", ecc.), se presente o deducibile.
 3. CONTEGGIO GENERALE:
    - "convocazioni_collaboratore_scolastico", "convocazioni_assistente_amministrativo", "convocazioni_docenti", "convocazioni_assistente_tecnico", "convocazioni_cuoco", "convocazioni_assistente_agrario" (numero)
    - "pensionamenti_collaboratore_scolastico", "pensionamenti_assistente_amministrativo", "pensionamenti_docenti", "pensionamenti_assistente_tecnico", "pensionamenti_cuoco", "pensionamenti_assistente_agrario" (numero)
-4. "nomine_contratti": ELENCO COMPLETO di TUTTE le singole nomine / contratti di supplenza / atti di assegnazione posti individuati nel documento (una voce per ciascuna nomina/assegnazione).
-   Per ciascuna nomina/contratto specifica i campi:
-   - "profilo_lavorativo": profilo completo e tipologia (es. "Collaboratore scolastico TD — fino al 30 giugno", "Collaboratore scolastico TD — annuale al 31 agosto", "Docente secondaria I grado — posto comune TD — supplenza temporanea Storico 2025/26", ecc.).
-   - "classe_di_concorso": codice della classe di concorso se docente (es. "AM12", "A-22", "A-11"); se personale ATA o non applicabile scrivi ESATTAMENTE "Non applicabile".
-   - "punteggio": punteggio della graduatoria/nomina formattato all'italiana (es. "13,17", "12,57", "69,50"). Se non presente scrivi "Non riportato".
+4. "nomine_contratti": ELENCO COMPLETO di TUTTE le singole nomine / contratti di supplenza / atti di assegnazione posti / convocazioni individuati nel documento (una voce per ciascuna nomina/assegnazione).
+   Per ciascuna voce specifica i seguenti campi:
+   - "tipologia_personale": "ATA" per profili ATA (Collaboratore scolastico, Assistente Amministrativo, Assistente Tecnico, Cuoco, Guardarobiere, Operatore Scolastico, ecc.) oppure "DOCENTE" per insegnanti (Scuola Infanzia, Primaria, Secondaria I grado, Secondaria II grado, ITP, ecc.).
+   - "profilo_lavorativo": profilo completo e tipologia (es. "Collaboratore scolastico TD", "Assistente Tecnico AR02 - Elettronica", "Docente secondaria II grado A-22 - Lettere", "Docente Primaria posto comune", "Docente Sostegno secondaria I grado ADMM").
+   - "classe_concorso_area_lab": per il personale DOCENTE indica la Classe di Concorso CDC ufficiale (es. "A-12", "A-22", "A-28", "A-48", "ADMM", "ADSS", "ADAA", "ADEE", "AAAA", "EEEE"); per Assistente Tecnico ATA indica l'Area di Laboratorio (es. "AR01", "AR02", "AR08", "AR20"); per gli altri profili ATA dove non applicabile scrivi "Non applicabile".
+   - "tipo_posto": "comune" per posti ordinari/curricolari e ATA; "sostegno" per posti di sostegno / minorati psicofisici / uditivi / vista / cattedre sostegno ADAA/ADEE/ADMM/ADSS.
+   - "punteggio": numero float con punto decimale (es. 13.17, 69.50) OPPURE null. 
+     ⚠️ REGOLA TASSATIVA: Se il punteggio manca, non è riportato o non è rintracciabile nel testo, restituisci RIGOROSAMENTE null. NON USARE MAI 0 O "0" SE IL PUNTEGGIO MANCA!
    - "posizione_graduatoria": posizione in graduatoria (es. "313", "342", "87"). Se non presente scrivi "Non riportata".
-   - "fascia": fascia della graduatoria (es. "Terza fascia", "Seconda fascia", "Prima fascia", "Graduatoria d'Istituto"). Se non specificata scrivi "Non specificata".
-   - "ore_settimanali": orario di cattedra/servizio (es. "36 ore", "18 ore"). Se non menzionato scrivi ESATTAMENTE "Non riportate".
+   - "fascia": fascia della graduatoria (es. "Prima fascia", "Seconda fascia", "Terza fascia", "Graduatoria d'Istituto", "Interpello"). Se non specificata scrivi "Non specificata".
+   - "ore_settimanali": orario di cattedra/servizio (es. "36 ore", "18 ore", "12 ore"). Se non menzionato scrivi ESATTAMENTE "Non riportate".
    - "decorrenza_contratto": intervallo esatto delle date di contratto nel formato "GG/MM/AAAA - GG/MM/AAAA" (es. "09/09/2026 - 30/06/2027", "17/09/2025 - 21/01/2026").
    - "link_del_documento": URL dell'atto o documento di riferimento (se reperito nel testo, altrimenti stringa vuota).
 
@@ -339,9 +342,11 @@ Restituisci ESCLUSIVAMENTE un oggetto JSON valido:
   "pensionamenti_assistente_agrario": numero,
   "nomine_contratti": [
     {
+      "tipologia_personale": "ATA" | "DOCENTE",
       "profilo_lavorativo": stringa,
-      "classe_di_concorso": stringa,
-      "punteggio": stringa,
+      "classe_concorso_area_lab": stringa,
+      "tipo_posto": "comune" | "sostegno",
+      "punteggio": numero | null,
       "posizione_graduatoria": stringa,
       "fascia": stringa,
       "ore_settimanali": stringa,
@@ -349,17 +354,21 @@ Restituisci ESCLUSIVAMENTE un oggetto JSON valido:
       "link_del_documento": stringa
     }
   ],
-  "graduatoria_fascia": stringa,
+  "tipologia_personale": "ATA" | "DOCENTE",
   "profilo_professionale": stringa,
-  "classe_di_concorso": stringa,
+  "classe_concorso_area_lab": stringa,
+  "tipo_posto": "comune" | "sostegno",
+  "graduatoria_fascia": stringa,
+  "punteggio": numero | null,
+  "posizione_graduatoria": stringa,
   "ore_settimanali": stringa,
   "decorrenza_da": stringa,
   "decorrenza_a": stringa
 }
 Se non trovi nomine specifiche, assegna a "nomine_contratti" un array vuoto []. Non aggiungere commenti o testo fuori dal JSON.`;
 
-  const PDF_EXTRACTION_SYSTEM_PROMPT = `Sei un assistente specializzato nell'analisi di contratti scolastici di supplenza, delibere di nomina e atti dell'Albo Pretorio per il personale ATA e Docenti delle scuole italiane.
-Analizza il documento PDF del contratto di supplenza ed estrai con la massima precisione le informazioni richieste.
+  const PDF_EXTRACTION_SYSTEM_PROMPT = `Sei un assistente specializzato nell'analisi di contratti scolastici di supplenza, delibere di nomina, avvisi di convocazione e interpelli per il personale ATA e DOCENTI delle scuole italiane.
+Analizza il documento PDF del contratto o delibera ed estrai con la massima precisione le informazioni richieste.
 
 ⚠️ VINCOLO FONDAMENTALE DI PRIVACY (NON NEGOZIABILE):
 - NON estrarre MAI nomi, cognomi, codici fiscali, indirizzi, numeri di telefono o dati anagrafici individuali. Ometti categoricamente qualsiasi dato personale identificativo del lavoratore o del dirigente.
@@ -367,21 +376,26 @@ Analizza il documento PDF del contratto di supplenza ed estrai con la massima pr
 CAMPI DA ESTRARRE:
 - "nome_istituto": denominazione della scuola (es. "IC Ripa Teatina–Miglianico").
 - "codice_meccanografico": codice meccanografico della scuola se presente (es. "CHIC81000A").
-- "profilo_lavorativo": profilo completo e tipologia (es. "Collaboratore scolastico TD — fino al 30 giugno", "Docente secondaria I grado — posto comune TD — supplenza temporanea Storico 2025/26", ecc.).
-- "classe_di_concorso": codice della classe di concorso se docente (es. "AM12", "A-22"); se personale ATA o non applicabile scrivi ESATTAMENTE "Non applicabile".
-- "punteggio": punteggio numerico di graduatoria/convocazione con virgola (es. "13,17", "12,57", "69,50"). Se non presente scrivi "Non riportato".
+- "tipologia_personale": "ATA" oppure "DOCENTE".
+- "profilo_lavorativo": profilo completo e tipologia (es. "Collaboratore scolastico TD — fino al 30 giugno", "Assistente Tecnico Area Laboratorio AR02", "Docente secondaria II grado posto comune TD", "Docente sostegno secondaria I grado ADMM").
+- "classe_concorso_area_lab": per il personale DOCENTE il codice della Classe di Concorso CDC (es. "A-12", "A-22", "A-28", "ADMM", "ADSS", "EEEE", "AAAA"); per Assistente Tecnico ATA il codice Area di Laboratorio (es. "AR01", "AR02", "AR08", "AR20"); per gli altri profili ATA dove non applicabile scrivi "Non applicabile".
+- "tipo_posto": "comune" per posti ordinari/curricolari e ATA; "sostegno" per posti e cattedre di sostegno / minorati psicofisici / uditivi / della vista / ADAA / ADEE / ADMM / ADSS.
+- "punteggio": punteggio numerico float con punto decimale (es. 13.17, 69.50) OPPURE null.
+  ⚠️ REGOLA TASSATIVA: Se il punteggio manca o non è esplicitato nel documento, restituisci RIGOROSAMENTE null. MAI RESTITUIRE 0 O "0" SE IL PUNTEGGIO MANCA!
 - "posizione_graduatoria": posizione numerica in graduatoria (es. "313", "342", "87"). Se assente scrivi "Non riportata".
-- "fascia": fascia di graduatoria (es. "Terza fascia", "Seconda fascia", "Prima fascia").
-- "ore_settimanali": orario di servizio (es. "36 ore", "18 ore"). Se non indicato scrivi ESATTAMENTE "Non riportate".
+- "fascia": fascia di graduatoria (es. "Prima fascia", "Seconda fascia", "Terza fascia", "Graduatoria d'Istituto", "Interpello").
+- "ore_settimanali": orario di servizio (es. "36 ore", "18 ore", "12 ore"). Se non indicato scrivi ESATTAMENTE "Non riportate".
 - "decorrenza_contratto": intervallo date contratto nel formato "GG/MM/AAAA - GG/MM/AAAA" (es. "09/09/2026 - 30/06/2027"). Se presenti singole date "da" e "a", componi l'intervallo.
 
 Restituisci ESCLUSIVAMENTE un oggetto JSON valido:
 {
   "nome_istituto": stringa,
   "codice_meccanografico": stringa,
+  "tipologia_personale": "ATA" | "DOCENTE",
   "profilo_lavorativo": stringa,
-  "classe_di_concorso": stringa,
-  "punteggio": stringa,
+  "classe_concorso_area_lab": stringa,
+  "tipo_posto": "comune" | "sostegno",
+  "punteggio": numero | null,
   "posizione_graduatoria": stringa,
   "fascia": stringa,
   "ore_settimanali": stringa,
@@ -888,6 +902,98 @@ function parseHtml(html: string): Document {
   return parser.parseFromString(html, "text/html");
 }
 
+function normalizePunteggio(val: any): number | null {
+  if (val === null || val === undefined) return null;
+  if (typeof val === "number") {
+    return isNaN(val) ? null : Number(val.toFixed(2));
+  }
+  if (typeof val === "string") {
+    const s = val.trim().toLowerCase();
+    if (
+      !s ||
+      s === "null" ||
+      s === "none" ||
+      s === "non riportato" ||
+      s === "non specificato" ||
+      s === "non presente" ||
+      s === "n/d" ||
+      s === "-" ||
+      s === "nd" ||
+      s === "assente" ||
+      s === "mancante"
+    ) {
+      return null;
+    }
+    const clean = s.replace(",", ".").replace(/[^\d.-]/g, "");
+    if (!clean) return null;
+    const num = parseFloat(clean);
+    return isNaN(num) ? null : Number(num.toFixed(2));
+  }
+  return null;
+}
+
+function inferTipologiaPersonale(item: any): "ATA" | "DOCENTE" {
+  if (item?.tipologia_personale === "ATA" || item?.tipologia_personale === "DOCENTE") {
+    return item.tipologia_personale;
+  }
+  const str = `${item?.profilo_lavorativo || ""} ${item?.profilo_professionale || ""} ${item?.classe_concorso_area_lab || ""} ${item?.classe_di_concorso || ""} ${item?.titolo_bando || ""}`.toLowerCase();
+  if (
+    str.includes("docente") ||
+    str.includes("insegnante") ||
+    str.includes("professore") ||
+    str.includes("maestr") ||
+    str.includes("primaria") ||
+    str.includes("infanzia") ||
+    str.includes("secondaria") ||
+    str.includes("cattedra") ||
+    str.includes("itp") ||
+    str.includes("cdc") ||
+    /\b(a-\d{2}|b-\d{2}|aaaa|eeee|admm|adss|adaa|adee)\b/i.test(str)
+  ) {
+    return "DOCENTE";
+  }
+  return "ATA";
+}
+
+function inferTipoPosto(item: any): "comune" | "sostegno" {
+  if (item?.tipo_posto === "comune" || item?.tipo_posto === "sostegno") {
+    return item.tipo_posto;
+  }
+  const str = `${item?.profilo_lavorativo || ""} ${item?.profilo_professionale || ""} ${item?.classe_concorso_area_lab || ""} ${item?.classe_di_concorso || ""} ${item?.titolo_bando || ""}`.toLowerCase();
+  if (
+    str.includes("sostegno") ||
+    str.includes("psicofisic") ||
+    str.includes("uditiv") ||
+    str.includes("vista") ||
+    str.includes("admm") ||
+    str.includes("adss") ||
+    str.includes("adaa") ||
+    str.includes("adee")
+  ) {
+    return "sostegno";
+  }
+  return "comune";
+}
+
+function inferClasseConcorsoAreaLab(item: any, tipologia: "ATA" | "DOCENTE"): string {
+  if (item?.classe_concorso_area_lab && item.classe_concorso_area_lab !== "Non applicabile") {
+    return item.classe_concorso_area_lab;
+  }
+  if (item?.classe_di_concorso && item.classe_di_concorso !== "Non applicabile") {
+    return item.classe_di_concorso;
+  }
+  const str = `${item?.profilo_lavorativo || ""} ${item?.profilo_professionale || ""} ${item?.titolo_bando || ""}`;
+  if (tipologia === "DOCENTE") {
+    const cdcMatch = str.match(/\b(A-\d{2}|B-\d{2}|AAAA|EEEE|ADMM|ADSS|ADAA|ADEE)\b/i);
+    if (cdcMatch) return cdcMatch[1].toUpperCase();
+    return "Non applicabile";
+  } else {
+    const atMatch = str.match(/\b(AR\d{2})\b/i);
+    if (atMatch) return atMatch[1].toUpperCase();
+    return "Non applicabile";
+  }
+}
+
 async function extractWithOpenRouter(text: string, apiKey: string, systemPrompt?: string) {
   const response = await fetch("https://openrouter.ai/api/v1/chat/completions", {
     method: "POST",
@@ -900,7 +1006,7 @@ async function extractWithOpenRouter(text: string, apiKey: string, systemPrompt?
     body: JSON.stringify({
       model: "google/gemini-2.5-flash",
       messages: [
-        { role: "system", content: systemPrompt || "Sei un assistente specializzato nell'analisi di documenti scolastici. Estrai convocazioni e pensionamenti ATA. Rispondi solo con JSON valido." },
+        { role: "system", content: systemPrompt || "Sei un assistente specializzato nell'analisi di documenti scolastici. Estrai con precisione convocazioni, delibere e contratti per personale ATA e DOCENTI (inclusi CDC e aree laboratorio AT). Se il punteggio manca, restituisci RIGOROSAMENTE null (MAI 0). Rispondi solo con JSON valido." },
         { role: "user", content: `Analizza questo testo:\n\n${text}` }
       ],
       response_format: { type: "json_object" }
@@ -1105,7 +1211,7 @@ async function scrapeWebsite(
                       log(`Invio PDF via URL/fallback base64: ${pdfResolved}`);
                       const pdfResJson = await extractPdfWithOpenRouter(
                         pdfResolved,
-                        "Estrai con precisione da questo atto/PDF i dati relativi a: convocazioni personale ATA (collaboratore scolastico, assistente amministrativo, tecnico, cuoco, agrario), pensionamenti, graduatorie, profilo professionale, ore e decorrenza. Rispondi in JSON.",
+                        "Estrai con precisione da questo atto/PDF i dati relativi a: convocazioni, contratti e interpelli per personale ATA (collaboratore scolastico, assistente amministrativo, tecnico con relativa area laboratorio es. AR01, AR02, AR08, cuoco, agrario) e DOCENTI (infanzia, primaria, secondaria, cattedre comuni e sostegno con relativa classe di concorso CDC es. A-12, A-22, A-28, ADMM, ADSS), graduatorie, tipologia_personale, classe_concorso_area_lab, tipo_posto, ore e decorrenza. Se il punteggio manca, restituisci RIGOROSAMENTE null (MAI 0). Rispondi in JSON.",
                         apiKey,
                         false,
                         customProxyUrl,
@@ -1200,6 +1306,10 @@ const executeClientSideExtract = async (
       pensionamenti_assistente_tecnico: 0,
       pensionamenti_cuoco: 0,
       pensionamenti_assistente_agrario: 0,
+      tipologia_personale: "ATA" as "ATA" | "DOCENTE",
+      classe_concorso_area_lab: "Non applicabile",
+      tipo_posto: "comune" as "comune" | "sostegno",
+      punteggio: null as number | null,
       graduatoria_fascia: "",
       profilo_professionale: "",
       classe_di_concorso: "",
@@ -1239,17 +1349,32 @@ const executeClientSideExtract = async (
       extractedData.durata_contratto_mesi = topDuration.mesi;
       extractedData.durata_contratto_giorni = topDuration.giorni;
 
+      const topTipologia = inferTipologiaPersonale(extractedData);
+      extractedData.tipologia_personale = topTipologia;
+      extractedData.tipo_posto = inferTipoPosto(extractedData);
+      extractedData.classe_concorso_area_lab = inferClasseConcorsoAreaLab(extractedData, topTipologia);
+      extractedData.classe_di_concorso = extractedData.classe_concorso_area_lab;
+      extractedData.punteggio = normalizePunteggio(extractedData.punteggio);
+
       // Calculate duration for each contract in nomine_contratti
       if (Array.isArray(extractedData.nomine_contratti)) {
         extractedData.nomine_contratti = extractedData.nomine_contratti.map((item: any) => {
           const duration = calculateContractDuration(item.decorrenza_contratto || "");
+          const tipologia = inferTipologiaPersonale(item);
+          const cdcArea = inferClasseConcorsoAreaLab(item, tipologia);
+          const tipoPosto = inferTipoPosto(item);
+          const punt = normalizePunteggio(item.punteggio);
+
           return {
             ...item,
             nome_istituto: item.nome_istituto || extractedData.nome_istituto || "",
             codice_meccanografico: item.codice_meccanografico || extractedData.codice_meccanografico || "",
-            profilo_lavorativo: item.profilo_lavorativo || item.profilo_professionale || "Collaboratore scolastico TD",
-            classe_di_concorso: item.classe_di_concorso || "Non applicabile",
-            punteggio: item.punteggio || "Non riportato",
+            tipologia_personale: tipologia,
+            profilo_lavorativo: item.profilo_lavorativo || item.profilo_professionale || (tipologia === "DOCENTE" ? "Docente TD" : "Collaboratore scolastico TD"),
+            classe_concorso_area_lab: cdcArea,
+            tipo_posto: tipoPosto,
+            classe_di_concorso: cdcArea,
+            punteggio: punt,
             posizione_graduatoria: item.posizione_graduatoria || "Non riportata",
             fascia: item.fascia || item.graduatoria_fascia || "Non specificata",
             ore_settimanali: item.ore_settimanali || "Non riportate",
@@ -1331,6 +1456,11 @@ const executeClientSideExtract = async (
         extracted.decorrenza_a
       );
 
+      const pdfTipologia = inferTipologiaPersonale(extracted);
+      const pdfCdcArea = inferClasseConcorsoAreaLab(extracted, pdfTipologia);
+      const pdfTipoPosto = inferTipoPosto(extracted);
+      const pdfPunteggio = normalizePunteggio(extracted.punteggio);
+
       setPdfExtractResult({
         success: true,
         filename: selectedPdfFile.name,
@@ -1338,9 +1468,12 @@ const executeClientSideExtract = async (
         data: {
           nome_istituto: extracted.nome_istituto || "Istituto Scolastico",
           codice_meccanografico: extracted.codice_meccanografico || "",
-          profilo_lavorativo: extracted.profilo_lavorativo || extracted.profilo_professionale || "Collaboratore scolastico TD",
-          classe_di_concorso: extracted.classe_di_concorso || "Non applicabile",
-          punteggio: extracted.punteggio || "Non riportato",
+          tipologia_personale: pdfTipologia,
+          profilo_lavorativo: extracted.profilo_lavorativo || extracted.profilo_professionale || (pdfTipologia === "DOCENTE" ? "Docente TD" : "Collaboratore scolastico TD"),
+          classe_concorso_area_lab: pdfCdcArea,
+          tipo_posto: pdfTipoPosto,
+          classe_di_concorso: pdfCdcArea,
+          punteggio: pdfPunteggio,
           posizione_graduatoria: extracted.posizione_graduatoria || "Non riportata",
           fascia: extracted.fascia || extracted.graduatoria_fascia || "Non specificata",
           ore_settimanali: extracted.ore_settimanali || "Non riportate",
@@ -1350,7 +1483,7 @@ const executeClientSideExtract = async (
           link_del_documento: selectedPdfFile.name,
           // Compatibilità pregressa
           graduatoria_fascia: extracted.fascia || extracted.graduatoria_fascia || "Non specificata",
-          profilo_professionale: extracted.profilo_lavorativo || extracted.profilo_professionale || "Personale ATA / Docente",
+          profilo_professionale: extracted.profilo_lavorativo || extracted.profilo_professionale || (pdfTipologia === "DOCENTE" ? "Personale Docente" : "Personale ATA"),
           decorrenza_da: normalizeDateOutput(extracted.decorrenza_da || ""),
           decorrenza_a: normalizeDateOutput(extracted.decorrenza_a || ""),
         }
@@ -1563,7 +1696,7 @@ const executeClientSideExtract = async (
       "Nome Istituto",
       "Codice Meccanografico",
       "Profilo",
-      "Classe di Concorso",
+      "Classe di Concorso / Area AT",
       "Punteggio",
       "Posizione",
       "Fascia",
@@ -1573,6 +1706,15 @@ const executeClientSideExtract = async (
       "Durata Giorni",
       "Link",
     ];
+
+    const formatCsvPunteggio = (p: any): string => {
+      if (p === null || p === undefined) return "";
+      if (typeof p === "number") return p.toFixed(2);
+      const str = String(p).trim();
+      if (str === "null" || str === "Non riportato" || str === "Non specificato" || str === "N/D" || str === "-" || str === "") return "";
+      const num = parseFloat(str.replace(",", "."));
+      return isNaN(num) ? str : num.toFixed(2);
+    };
 
     const rows: string[] = [];
 
@@ -1598,8 +1740,8 @@ const executeClientSideExtract = async (
           const schoolName = c.nome_istituto || defaultSchoolName;
           const schoolCode = c.codice_meccanografico || defaultSchoolCode;
           const profilo = c.profilo_lavorativo || "Collaboratore scolastico TD";
-          const classe = c.classe_di_concorso || "Non applicabile";
-          const punteggio = c.punteggio || "Non riportato";
+          const classe = c.classe_concorso_area_lab || c.classe_di_concorso || "Non applicabile";
+          const punteggio = formatCsvPunteggio(c.punteggio);
           const posizione = c.posizione_graduatoria || "Non riportata";
           const fascia = c.fascia || "Non specificata";
           const ore = c.ore_settimanali || "Non riportate";
@@ -1631,8 +1773,8 @@ const executeClientSideExtract = async (
           const schoolName = defaultSchoolName;
           const schoolCode = defaultSchoolCode;
           const profilo = c.profilo_professionale || c.titolo_bando || "Personale Scolastico";
-          const classe = c.classe_di_concorso || "Non applicabile";
-          const punteggio = c.punteggio || "Non riportato";
+          const classe = c.classe_concorso_area_lab || c.classe_di_concorso || "Non applicabile";
+          const punteggio = formatCsvPunteggio(c.punteggio);
           const posizione = c.posizione_graduatoria || "Non riportata";
           const fascia = c.graduatoria_fascia || "Non specificata";
           const ore = c.ore_settimanali || "Non riportate";
@@ -1673,8 +1815,8 @@ const executeClientSideExtract = async (
           data.convocazioni_assistente_tecnico > 0 ? "Assistente Tecnico TD" :
           "Personale Scolastico"
         );
-        const classe = data.classe_di_concorso || "Non applicabile";
-        const punteggio = data.punteggio || "Non riportato";
+        const classe = data.classe_concorso_area_lab || data.classe_di_concorso || "Non applicabile";
+        const punteggio = formatCsvPunteggio(data.punteggio);
         const posizione = data.posizione_graduatoria || "Non riportata";
         const fascia = data.graduatoria_fascia || "Non specificata";
         const ore = data.ore_settimanali || "Non riportate";
@@ -2535,58 +2677,79 @@ const executeClientSideExtract = async (
                         <tr className="bg-slate-950/80 text-slate-400 border-b border-slate-800">
                           <th className="p-4 font-semibold">URL Originale</th>
                           <th className="p-4 font-semibold">Stato</th>
-                          <th className="p-4 font-semibold text-center">Conv. Coll.</th>
-                          <th className="p-4 font-semibold text-center">Conv. Amm.</th>
-                          <th className="p-4 font-semibold text-center">Conv. Docenti</th>
-                          <th className="p-4 font-semibold text-center">Conv. Tecnico</th>
-                          <th className="p-4 font-semibold text-center">Pens. Coll.</th>
-                          <th className="p-4 font-semibold text-center">Pens. Amm.</th>
-                          <th className="p-4 font-semibold text-center">Pens. Docenti</th>
-                          <th className="p-4 font-semibold text-center">Pens. Tecnico</th>
-                          <th className="p-4 font-semibold text-center text-emerald-400">Fascia</th>
+                          <th className="p-4 font-semibold text-center text-indigo-400">Tipo</th>
                           <th className="p-4 font-semibold text-center text-emerald-400">Profilo</th>
-                          <th className="p-4 font-semibold text-center text-emerald-400">Classe Conc.</th>
+                          <th className="p-4 font-semibold text-center text-emerald-400">CDC / Area AT</th>
+                          <th className="p-4 font-semibold text-center text-emerald-400">Posto</th>
+                          <th className="p-4 font-semibold text-center text-emerald-400">Punti</th>
+                          <th className="p-4 font-semibold text-center text-emerald-400">Fascia</th>
+                          <th className="p-4 font-semibold text-center">Conv. Doc.</th>
+                          <th className="p-4 font-semibold text-center">Conv. ATA</th>
+                          <th className="p-4 font-semibold text-center">Pens. Doc.</th>
+                          <th className="p-4 font-semibold text-center">Pens. ATA</th>
                           <th className="p-4 font-semibold text-center text-emerald-400">Ore</th>
                           <th className="p-4 font-semibold text-center text-emerald-400">Decorrenza</th>
                         </tr>
                       </thead>
                       <tbody className="divide-y divide-slate-800/60">
-                        {batchResults.map((r, idx) => (
-                          <tr key={idx} className="hover:bg-slate-800/40 transition-colors">
-                            <td className="p-4 font-medium text-slate-200 max-w-xs truncate">
-                              <a href={r.url} target="_blank" rel="noreferrer" className="hover:text-indigo-400 flex items-center gap-1.5">
-                                <span className="truncate">{r.url}</span>
-                                <ExternalLink className="w-3 h-3 shrink-0 text-slate-500" />
-                              </a>
-                            </td>
-                            <td className="p-4">
-                              {r.status === "success" ? (
-                                <span className="inline-flex items-center gap-1 bg-emerald-500/10 text-emerald-400 border border-emerald-500/20 px-2 py-0.5 rounded-full font-medium">
-                                  <CheckCircle2 className="w-3 h-3" /> Completato
+                        {batchResults.map((r, idx) => {
+                          const totalConvAta = (r.data.convocazioni_collaboratore_scolastico ?? 0) + (r.data.convocazioni_assistente_amministrativo ?? 0) + (r.data.convocazioni_assistente_tecnico ?? 0) + (r.data.convocazioni_cuoco ?? 0) + (r.data.convocazioni_assistente_agrario ?? 0);
+                          const totalPensAta = (r.data.pensionamenti_collaboratore_scolastico ?? 0) + (r.data.pensionamenti_assistente_amministrativo ?? 0) + (r.data.pensionamenti_assistente_tecnico ?? 0) + (r.data.pensionamenti_cuoco ?? 0) + (r.data.pensionamenti_assistente_agrario ?? 0);
+                          const tipo = r.data.tipologia_personale || "ATA";
+                          const cdcArea = r.data.classe_concorso_area_lab || r.data.classe_di_concorso || "-";
+                          const tipoPosto = r.data.tipo_posto || "comune";
+                          const punt = r.data.punteggio !== null && r.data.punteggio !== undefined
+                            ? (typeof r.data.punteggio === "number" ? r.data.punteggio.toFixed(2) : r.data.punteggio)
+                            : "-";
+
+                          return (
+                            <tr key={idx} className="hover:bg-slate-800/40 transition-colors">
+                              <td className="p-4 font-medium text-slate-200 max-w-xs truncate">
+                                <a href={r.url} target="_blank" rel="noreferrer" className="hover:text-indigo-400 flex items-center gap-1.5">
+                                  <span className="truncate">{r.url}</span>
+                                  <ExternalLink className="w-3 h-3 shrink-0 text-slate-500" />
+                                </a>
+                              </td>
+                              <td className="p-4">
+                                {r.status === "success" ? (
+                                  <span className="inline-flex items-center gap-1 bg-emerald-500/10 text-emerald-400 border border-emerald-500/20 px-2 py-0.5 rounded-full font-medium">
+                                    <CheckCircle2 className="w-3 h-3" /> Completato
+                                  </span>
+                                ) : (
+                                  <span className="inline-flex items-center gap-1 bg-rose-500/10 text-rose-400 border border-rose-500/20 px-2 py-0.5 rounded-full font-medium" title={r.error}>
+                                    <AlertCircle className="w-3 h-3" /> Errore
+                                  </span>
+                                )}
+                              </td>
+                              <td className="p-4 text-center">
+                                <span className={`px-2 py-0.5 rounded text-[11px] font-bold ${tipo === "DOCENTE" ? "bg-amber-500/20 text-amber-300 border border-amber-500/30" : "bg-indigo-500/20 text-indigo-300 border border-indigo-500/30"}`}>
+                                  {tipo}
                                 </span>
-                              ) : (
-                                <span className="inline-flex items-center gap-1 bg-rose-500/10 text-rose-400 border border-rose-500/20 px-2 py-0.5 rounded-full font-medium" title={r.error}>
-                                  <AlertCircle className="w-3 h-3" /> Errore
-                                </span>
-                              )}
-                            </td>
-                            <td className="p-4 text-center font-bold text-indigo-300">{r.data.convocazioni_collaboratore_scolastico ?? 0}</td>
-                            <td className="p-4 text-center font-bold text-indigo-300">{r.data.convocazioni_assistente_amministrativo ?? 0}</td>
-                            <td className="p-4 text-center font-bold text-indigo-300">{r.data.convocazioni_docenti ?? 0}</td>
-                            <td className="p-4 text-center font-bold text-indigo-300">{r.data.convocazioni_assistente_tecnico ?? 0}</td>
-                            <td className="p-4 text-center font-bold text-amber-300">{r.data.pensionamenti_collaboratore_scolastico ?? 0}</td>
-                            <td className="p-4 text-center font-bold text-amber-300">{r.data.pensionamenti_assistente_amministrativo ?? 0}</td>
-                            <td className="p-4 text-center font-bold text-amber-300">{r.data.pensionamenti_docenti ?? 0}</td>
-                            <td className="p-4 text-center font-bold text-amber-300">{r.data.pensionamenti_assistente_tecnico ?? 0}</td>
-                            <td className="p-4 text-center text-slate-300 font-medium">{r.data.graduatoria_fascia || "-"}</td>
-                            <td className="p-4 text-center text-slate-300 font-medium max-w-[120px] truncate" title={r.data.profilo_professionale}>{r.data.profilo_professionale || "-"}</td>
-                            <td className="p-4 text-center text-slate-300 font-medium">{r.data.classe_di_concorso || "-"}</td>
-                            <td className="p-4 text-center text-slate-300 font-medium">{r.data.ore_settimanali || "-"}</td>
-                            <td className="p-4 text-center text-slate-300 font-medium text-[11px]">
-                              {r.data.decorrenza_da ? `${r.data.decorrenza_da}${r.data.decorrenza_a ? ` - ${r.data.decorrenza_a}` : ""}` : "-"}
-                            </td>
-                          </tr>
-                        ))}
+                              </td>
+                              <td className="p-4 text-center text-slate-300 font-medium max-w-[120px] truncate" title={r.data.profilo_lavorativo || r.data.profilo_professionale}>
+                                {r.data.profilo_lavorativo || r.data.profilo_professionale || "-"}
+                              </td>
+                              <td className="p-4 text-center text-slate-300 font-medium font-mono">
+                                {cdcArea}
+                              </td>
+                              <td className="p-4 text-center text-slate-400 capitalize">
+                                {tipoPosto}
+                              </td>
+                              <td className="p-4 text-center text-white font-mono font-bold">
+                                {punt}
+                              </td>
+                              <td className="p-4 text-center text-slate-300 font-medium">{r.data.graduatoria_fascia || "-"}</td>
+                              <td className="p-4 text-center font-bold text-amber-300">{r.data.convocazioni_docenti ?? 0}</td>
+                              <td className="p-4 text-center font-bold text-indigo-300">{totalConvAta}</td>
+                              <td className="p-4 text-center font-bold text-amber-300">{r.data.pensionamenti_docenti ?? 0}</td>
+                              <td className="p-4 text-center font-bold text-indigo-300">{totalPensAta}</td>
+                              <td className="p-4 text-center text-slate-300 font-medium">{r.data.ore_settimanali || "-"}</td>
+                              <td className="p-4 text-center text-slate-300 font-medium text-[11px]">
+                                {r.data.decorrenza_da ? `${r.data.decorrenza_da}${r.data.decorrenza_a ? ` - ${r.data.decorrenza_a}` : ""}` : "-"}
+                              </td>
+                            </tr>
+                          );
+                        })}
                       </tbody>
                     </table>
                   </div>
@@ -2750,30 +2913,46 @@ const executeClientSideExtract = async (
                     </span>
                   </div>
 
-                  <div className="grid grid-cols-2 sm:grid-cols-3 gap-3">
+                  <div className="grid grid-cols-2 sm:grid-cols-4 gap-3">
+                    <div className="bg-slate-950/60 border border-slate-800/80 rounded-xl p-3.5">
+                      <span className="text-[11px] uppercase tracking-wider text-slate-400 font-semibold block mb-1">Tipologia</span>
+                      <span className={`text-sm font-bold ${singleResult.data.tipologia_personale === "DOCENTE" ? "text-amber-400" : "text-indigo-400"}`}>
+                        {singleResult.data.tipologia_personale || "ATA"}
+                      </span>
+                    </div>
+                    <div className="bg-slate-950/60 border border-slate-800/80 rounded-xl p-3.5">
+                      <span className="text-[11px] uppercase tracking-wider text-slate-400 font-semibold block mb-1">Tipo Posto</span>
+                      <span className="text-sm font-bold text-white capitalize">{singleResult.data.tipo_posto || "comune"}</span>
+                    </div>
+                    <div className="bg-slate-950/60 border border-slate-800/80 rounded-xl p-3.5">
+                      <span className="text-[11px] uppercase tracking-wider text-slate-400 font-semibold block mb-1">CDC / Area AT</span>
+                      <span className="text-sm font-bold text-white font-mono">{singleResult.data.classe_concorso_area_lab || singleResult.data.classe_di_concorso || "Non applicabile"}</span>
+                    </div>
+                    <div className="bg-slate-950/60 border border-slate-800/80 rounded-xl p-3.5">
+                      <span className="text-[11px] uppercase tracking-wider text-slate-400 font-semibold block mb-1">Punteggio</span>
+                      <span className="text-sm font-bold text-white font-mono">
+                        {singleResult.data.punteggio !== null && singleResult.data.punteggio !== undefined
+                          ? (typeof singleResult.data.punteggio === "number" ? singleResult.data.punteggio.toFixed(2) : singleResult.data.punteggio)
+                          : "Non riportato (null)"}
+                      </span>
+                    </div>
                     <div className="bg-slate-950/60 border border-slate-800/80 rounded-xl p-3.5">
                       <span className="text-[11px] uppercase tracking-wider text-slate-400 font-semibold block mb-1">Fascia Graduatoria</span>
                       <span className="text-sm font-bold text-white">{singleResult.data.graduatoria_fascia || "Nessuna rilevata"}</span>
                     </div>
                     <div className="bg-slate-950/60 border border-slate-800/80 rounded-xl p-3.5">
-                      <span className="text-[11px] uppercase tracking-wider text-slate-400 font-semibold block mb-1">Profilo Professionale</span>
-                      <span className="text-sm font-bold text-white">{singleResult.data.profilo_professionale || "Nessun profilo"}</span>
-                    </div>
-                    <div className="bg-slate-950/60 border border-slate-800/80 rounded-xl p-3.5">
-                      <span className="text-[11px] uppercase tracking-wider text-slate-400 font-semibold block mb-1">Classe di Concorso</span>
-                      <span className="text-sm font-bold text-white">{singleResult.data.classe_di_concorso || "N/D"}</span>
+                      <span className="text-[11px] uppercase tracking-wider text-slate-400 font-semibold block mb-1">Profilo Lavorativo</span>
+                      <span className="text-sm font-bold text-white">{singleResult.data.profilo_lavorativo || singleResult.data.profilo_professionale || "Nessun profilo"}</span>
                     </div>
                     <div className="bg-slate-950/60 border border-slate-800/80 rounded-xl p-3.5">
                       <span className="text-[11px] uppercase tracking-wider text-slate-400 font-semibold block mb-1">Ore Settimanali</span>
                       <span className="text-sm font-bold text-white">{singleResult.data.ore_settimanali || "N/D"}</span>
                     </div>
                     <div className="bg-slate-950/60 border border-slate-800/80 rounded-xl p-3.5">
-                      <span className="text-[11px] uppercase tracking-wider text-slate-400 font-semibold block mb-1">Decorrenza Da</span>
-                      <span className="text-sm font-bold text-white">{singleResult.data.decorrenza_da || "N/D"}</span>
-                    </div>
-                    <div className="bg-slate-950/60 border border-slate-800/80 rounded-xl p-3.5">
-                      <span className="text-[11px] uppercase tracking-wider text-slate-400 font-semibold block mb-1">Decorrenza A</span>
-                      <span className="text-sm font-bold text-white">{singleResult.data.decorrenza_a || "N/D"}</span>
+                      <span className="text-[11px] uppercase tracking-wider text-slate-400 font-semibold block mb-1">Decorrenza</span>
+                      <span className="text-sm font-bold text-white">
+                        {singleResult.data.decorrenza_contratto || (singleResult.data.decorrenza_da ? `${singleResult.data.decorrenza_da} - ${singleResult.data.decorrenza_a || "termine"}` : "N/D")}
+                      </span>
                     </div>
                   </div>
 
@@ -3191,38 +3370,58 @@ const executeClientSideExtract = async (
                     </div>
                   </div>
 
-                  <div className="grid grid-cols-2 sm:grid-cols-3 gap-3">
+                  <div className="grid grid-cols-2 sm:grid-cols-4 gap-3">
                     <div className="bg-slate-950/60 border border-slate-800 rounded-xl p-4">
-                      <span className="text-[11px] font-semibold text-indigo-400 uppercase tracking-wider block mb-1">Graduatoria Fascia</span>
-                      <span className="text-base font-bold text-white">{pdfExtractResult.data.graduatoria_fascia || "N/D"}</span>
+                      <span className="text-[11px] font-semibold text-indigo-400 uppercase tracking-wider block mb-1">Tipologia</span>
+                      <span className={`text-base font-bold ${pdfExtractResult.data.tipologia_personale === "DOCENTE" ? "text-amber-400" : "text-indigo-400"}`}>
+                        {pdfExtractResult.data.tipologia_personale || "ATA"}
+                      </span>
+                    </div>
+                    <div className="bg-slate-950/60 border border-slate-800 rounded-xl p-4">
+                      <span className="text-[11px] font-semibold text-indigo-400 uppercase tracking-wider block mb-1">Tipo Posto</span>
+                      <span className="text-base font-bold text-white capitalize">{pdfExtractResult.data.tipo_posto || "comune"}</span>
+                    </div>
+                    <div className="bg-slate-950/60 border border-slate-800 rounded-xl p-4">
+                      <span className="text-[11px] font-semibold text-indigo-400 uppercase tracking-wider block mb-1">CDC / Area AT</span>
+                      <span className="text-base font-bold text-white font-mono">{pdfExtractResult.data.classe_concorso_area_lab || pdfExtractResult.data.classe_di_concorso || "Non applicabile"}</span>
                     </div>
                     <div className="bg-slate-950/60 border border-slate-800 rounded-xl p-4">
                       <span className="text-[11px] font-semibold text-indigo-400 uppercase tracking-wider block mb-1">Punteggio</span>
-                      <span className="text-base font-bold text-white">{pdfExtractResult.data.punteggio || "N/D"}</span>
+                      <span className="text-base font-bold text-white font-mono">
+                        {pdfExtractResult.data.punteggio !== null && pdfExtractResult.data.punteggio !== undefined
+                          ? (typeof pdfExtractResult.data.punteggio === "number" ? pdfExtractResult.data.punteggio.toFixed(2) : pdfExtractResult.data.punteggio)
+                          : "Non riportato (null)"}
+                      </span>
                     </div>
                     <div className="bg-slate-950/60 border border-slate-800 rounded-xl p-4">
-                      <span className="text-[11px] font-semibold text-indigo-400 uppercase tracking-wider block mb-1">Posizione in Graduatoria</span>
+                      <span className="text-[11px] font-semibold text-emerald-400 uppercase tracking-wider block mb-1">Graduatoria Fascia</span>
+                      <span className="text-base font-bold text-white">{pdfExtractResult.data.fascia || pdfExtractResult.data.graduatoria_fascia || "N/D"}</span>
+                    </div>
+                    <div className="bg-slate-950/60 border border-slate-800 rounded-xl p-4">
+                      <span className="text-[11px] font-semibold text-emerald-400 uppercase tracking-wider block mb-1">Posizione Graduatoria</span>
                       <span className="text-base font-bold text-white">{pdfExtractResult.data.posizione_graduatoria || "N/D"}</span>
                     </div>
                     <div className="bg-slate-950/60 border border-slate-800 rounded-xl p-4">
-                      <span className="text-[11px] font-semibold text-indigo-400 uppercase tracking-wider block mb-1">Profilo Professionale</span>
-                      <span className="text-base font-bold text-white">{pdfExtractResult.data.profilo_professionale || "N/D"}</span>
-                    </div>
-                    <div className="bg-slate-950/60 border border-slate-800 rounded-xl p-4">
-                      <span className="text-[11px] font-semibold text-indigo-400 uppercase tracking-wider block mb-1">Classe di Concorso</span>
-                      <span className="text-base font-bold text-white">{pdfExtractResult.data.classe_di_concorso || "N/D"}</span>
+                      <span className="text-[11px] font-semibold text-emerald-400 uppercase tracking-wider block mb-1">Profilo Lavorativo</span>
+                      <span className="text-base font-bold text-white truncate block" title={pdfExtractResult.data.profilo_lavorativo || pdfExtractResult.data.profilo_professionale}>
+                        {pdfExtractResult.data.profilo_lavorativo || pdfExtractResult.data.profilo_professionale || "N/D"}
+                      </span>
                     </div>
                     <div className="bg-slate-950/60 border border-slate-800 rounded-xl p-4">
                       <span className="text-[11px] font-semibold text-amber-400 uppercase tracking-wider block mb-1">Ore Settimanali</span>
                       <span className="text-base font-bold text-white">{pdfExtractResult.data.ore_settimanali || "N/D"}</span>
                     </div>
-                    <div className="bg-slate-950/60 border border-slate-800 rounded-xl p-4">
-                      <span className="text-[11px] font-semibold text-amber-400 uppercase tracking-wider block mb-1">Decorrenza Da</span>
-                      <span className="text-base font-bold text-white">{pdfExtractResult.data.decorrenza_da || "N/D"}</span>
+                    <div className="bg-slate-950/60 border border-slate-800 rounded-xl p-4 sm:col-span-2">
+                      <span className="text-[11px] font-semibold text-amber-400 uppercase tracking-wider block mb-1">Decorrenza Contratto</span>
+                      <span className="text-base font-bold text-white">
+                        {pdfExtractResult.data.decorrenza_contratto || (pdfExtractResult.data.decorrenza_da ? `${pdfExtractResult.data.decorrenza_da} - ${pdfExtractResult.data.decorrenza_a || "termine"}` : "N/D")}
+                      </span>
                     </div>
-                    <div className="bg-slate-950/60 border border-slate-800 rounded-xl p-4">
-                      <span className="text-[11px] font-semibold text-amber-400 uppercase tracking-wider block mb-1">Decorrenza A</span>
-                      <span className="text-base font-bold text-white">{pdfExtractResult.data.decorrenza_a || "N/D"}</span>
+                    <div className="bg-slate-950/60 border border-slate-800 rounded-xl p-4 sm:col-span-2">
+                      <span className="text-[11px] font-semibold text-amber-400 uppercase tracking-wider block mb-1">Durata Stimata</span>
+                      <span className="text-base font-bold text-white">
+                        {pdfExtractResult.data.durata_contratto_mesi ? `${pdfExtractResult.data.durata_contratto_mesi} mesi (${pdfExtractResult.data.durata_contratto_giorni} gg)` : "N/D"}
+                      </span>
                     </div>
                   </div>
                 </div>

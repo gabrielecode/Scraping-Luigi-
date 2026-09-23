@@ -1,10 +1,16 @@
+export type TipologiaPersonale = "ATA" | "DOCENTE";
+export type TipoPosto = "comune" | "sostegno";
+
 export interface NominaContrattoItem {
   id?: string;
   nome_istituto: string;
   codice_meccanografico: string;
+  tipologia_personale: TipologiaPersonale;
   profilo_lavorativo: string;
-  classe_di_concorso: string;
-  punteggio: string;
+  classe_concorso_area_lab: string;
+  tipo_posto: TipoPosto;
+  classe_di_concorso?: string;
+  punteggio: number | null;
   posizione_graduatoria: string;
   fascia: string;
   ore_settimanali: string;
@@ -19,11 +25,14 @@ export interface AlboPretorioContract {
   titolo_bando: string;
   data_pubblicazione?: string;
   pdf_url?: string;
-  graduatoria_fascia: string;
-  punteggio?: string;
-  posizione_graduatoria?: string;
+  tipologia_personale?: TipologiaPersonale;
   profilo_professionale: string;
-  classe_di_concorso: string;
+  classe_concorso_area_lab?: string;
+  classe_di_concorso?: string;
+  tipo_posto?: TipoPosto;
+  graduatoria_fascia: string;
+  punteggio?: number | null;
+  posizione_graduatoria?: string;
   ore_settimanali: string;
   decorrenza_da: string;
   decorrenza_a: string;
@@ -48,9 +57,14 @@ export interface ExtractionData {
   pensionamenti_cuoco: number;
   pensionamenti_assistente_agrario: number;
 
+  // Nuovi campi ATA + Docenti
+  tipologia_personale?: TipologiaPersonale;
+  classe_concorso_area_lab?: string;
+  tipo_posto?: TipoPosto;
+
   // Retrocompatibilità & campi singoli
   graduatoria_fascia?: string;
-  punteggio?: string;
+  punteggio?: number | null;
   posizione_graduatoria?: string;
   profilo_professionale?: string;
   classe_di_concorso?: string;
