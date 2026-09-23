@@ -162,21 +162,25 @@ export function extractPunteggioHeuristic(
   const cleanText = text.replace(/\s+/g, ' ');
 
   // 1. Se è specificato un profilo (es. Assistente Amministrativo, Collaboratore Scolastico),
-  // cerca prima nelle vicinanze della menzione del profilo (finestra di +/- 250 caratteri)
+  // cerca prima nelle vicinanze della menzione del profilo (finestra mirata successiva alla menzione)
   if (context?.profilo) {
-    const profKeyword = context.profilo
-      .toLowerCase()
-      .replace(/collaboratore scolastico/g, 'collaborator')
-      .replace(/assistente amministrativo/g, 'amministrativ')
-      .replace(/assistente tecnico/g, 'tecnico')
-      .slice(0, 12);
+    const profLower = context.profilo.toLowerCase();
+    const candidateKeywords = [];
+    if (profLower.includes('amministrativ') || profLower.includes(' aa')) candidateKeywords.push('amministrativ', ' aa ');
+    if (profLower.includes('collaborator') || profLower.includes(' cs')) candidateKeywords.push('collaborator', ' cs ');
+    if (profLower.includes('tecnico') || profLower.includes(' at')) candidateKeywords.push('tecnico', ' at ');
+    if (profLower.includes('docent') || profLower.includes('insegnant') || profLower.includes('maestr')) candidateKeywords.push('docent', 'insegnant', 'posto comune', 'sostegno');
+    if (candidateKeywords.length === 0) candidateKeywords.push(profLower.slice(0, 10));
 
-    const profIdx = cleanText.toLowerCase().indexOf(profKeyword);
-    if (profIdx !== -1) {
-      const windowSnippet = cleanText.slice(Math.max(0, profIdx - 150), Math.min(cleanText.length, profIdx + 300));
-      const scopedMatch = findScoreInSnippet(windowSnippet);
-      if (scopedMatch.punteggio !== null) {
-        return scopedMatch;
+    for (const kw of candidateKeywords) {
+      const profIdx = cleanText.toLowerCase().indexOf(kw.trim());
+      if (profIdx !== -1) {
+        // Finestra specifica che parte dalla menzione del profilo e prosegue fino alla menzione successiva o 300 caratteri
+        const windowSnippet = cleanText.slice(profIdx, Math.min(cleanText.length, profIdx + 300));
+        const scopedMatch = findScoreInSnippet(windowSnippet);
+        if (scopedMatch.punteggio !== null) {
+          return scopedMatch;
+        }
       }
     }
   }
