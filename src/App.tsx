@@ -45,6 +45,9 @@ import {
   GRADUATORIA_EXTRACTION_SYSTEM_PROMPT,
   isNameMatch,
   isClassMatch,
+  isValidCodiceMeccanografico,
+  extractCodiceMeccanograficoFromText,
+  normalizeCodiceMeccanografico,
 } from "./services/graduatorieService";
 
 export { GRADUATORIA_EXTRACTION_SYSTEM_PROMPT };
@@ -320,7 +323,12 @@ export default function App() {
   const EXTRACTION_SYSTEM_PROMPT = `Sei un assistente specializzato nell'analisi di documenti scolastici, delibere, circolari, atti dell'Albo Pretorio, avvisi di interpello, convocazioni e contratti/nomine di supplenza per le scuole italiane, sia per il personale ATA che per il personale DOCENTE.
 Leggi attentamente il testo ed estrai con la massima precisione:
 1. "nome_istituto": denominazione ufficiale dell'istituto scolastico (es. "IC Ripa Teatina–Miglianico", "IIS Schiaparelli", "Liceo Cavour"), se deducibile.
-2. "codice_meccanografico": codice meccanografico della scuola (es. "CHIC81000A", "MIPC01000C", ecc.), se presente o deducibile.
+2. "codice_meccanografico": codice meccanografico univoco della scuola statale (es. "CHIC81000A", "MIPC01000C", "RMIS00100B", ecc.).
+   ⚠️ RICERCA PRIORITARIA E APPROFONDITA DEL CODICE MECCANOGRAFICO:
+   - È composto da esattamente 10 caratteri alfanumerici (2 lettere provincia + 2 lettere tipo scuola come IC, IS, PC, PS, TF, TD, RH, EE, MM + 5 cifre numeriche o caratteri + 1 lettera di controllo finale).
+   - Cercalo ovunque: intestazione del documento, accanto a "C.M.", "Cod. Mecc.", "Codice Scuola", "Codice Univoco Ufficio", nel piè di pagina (footer) o nei contatti.
+   - CERCA NELLE EMAIL O PEC ISTITUZIONALI: in Italia la casella di posta ministeriale della scuola contiene sempre il codice meccanografico nella forma "{codice}@istruzione.it" oppure "{codice}@pec.istruzione.it" (es. "chic81000a@istruzione.it" indica chiaramente il codice "CHIC81000A").
+   - Se menzionato nell'URL (es. "chic81000a.edu.it") o nel nome del file, estrailo come codice meccanografico ufficiale.
 3. CONTEGGIO GENERALE:
    - "convocazioni_collaboratore_scolastico", "convocazioni_assistente_amministrativo", "convocazioni_docenti", "convocazioni_assistente_tecnico", "convocazioni_cuoco", "convocazioni_assistente_agrario" (numero)
    - "pensionamenti_collaboratore_scolastico", "pensionamenti_assistente_amministrativo", "pensionamenti_docenti", "pensionamenti_assistente_tecnico", "pensionamenti_cuoco", "pensionamenti_assistente_agrario" (numero)
@@ -389,7 +397,11 @@ Analizza il documento PDF del contratto o delibera ed estrai con la massima prec
 
 CAMPI DA ESTRARRE:
 - "nome_istituto": denominazione della scuola (es. "IC Ripa Teatina–Miglianico").
-- "codice_meccanografico": codice meccanografico della scuola se presente (es. "CHIC81000A").
+- "codice_meccanografico": codice meccanografico della scuola statale (es. "CHIC81000A", "MIPC01000C").
+  ⚠️ RICERCA DEL CODICE MECCANOGRAFICO:
+  - Formato: 10 caratteri alfanumerici (2 lettere provincia + 2 lettere tipo scuola + 5 cifre + 1 lettera controllo).
+  - Cerca nell'intestazione/carta intestata, accanto a "C.M.", "Cod. Mecc.", "Codice Scuola", "C.F.", nel piè di pagina o timbro.
+  - Cerca anche nelle caselle di posta: es. "chic81000a@istruzione.it" o "@pec.istruzione.it" -> codice: "CHIC81000A".
 - "tipologia_personale": "ATA" oppure "DOCENTE".
 - "profilo_lavorativo": profilo completo e tipologia (es. "Collaboratore scolastico TD — fino al 30 giugno", "Assistente Tecnico Area Laboratorio AR02", "Docente secondaria II grado posto comune TD", "Docente sostegno secondaria I grado ADMM").
 - "classe_concorso_area_lab": per il personale DOCENTE il codice della Classe di Concorso CDC (es. "A-12", "A-22", "A-28", "ADMM", "ADSS", "EEEE", "AAAA"); per Assistente Tecnico ATA il codice Area di Laboratorio (es. "AR01", "AR02", "AR08", "AR20"); per gli altri profili ATA dove non applicabile scrivi "Non applicabile".
@@ -1225,7 +1237,7 @@ async function scrapeWebsite(
                       log(`Invio PDF via URL/fallback base64: ${pdfResolved}`);
                       const pdfResJson = await extractPdfWithOpenRouter(
                         pdfResolved,
-                        "Estrai con precisione da questo atto/PDF i dati relativi a: convocazioni, contratti e interpelli per personale ATA (collaboratore scolastico, assistente amministrativo, tecnico con relativa area laboratorio es. AR01, AR02, AR08, cuoco, agrario) e DOCENTI (infanzia, primaria, secondaria, cattedre comuni e sostegno con relativa classe di concorso CDC es. A-12, A-22, A-28, ADMM, ADSS), graduatorie, tipologia_personale, classe_concorso_area_lab, tipo_posto, ore e decorrenza. Se il punteggio manca, restituisci RIGOROSAMENTE null (MAI 0). Rispondi in JSON.",
+                        "Estrai con precisione da questo atto/PDF i dati relativi a: codice_meccanografico univoco della scuola (es. CHIC81000A, MIIS00100B, cerca nell'intestazione o email @istruzione.it), convocazioni, contratti e interpelli per personale ATA (collaboratore scolastico, assistente amministrativo, tecnico con relativa area laboratorio es. AR01, AR02, AR08, cuoco, agrario) e DOCENTI (infanzia, primaria, secondaria, cattedre comuni e sostegno con relativa classe di concorso CDC es. A-12, A-22, A-28, ADMM, ADSS), graduatorie, tipologia_personale, classe_concorso_area_lab, tipo_posto, ore e decorrenza. Se il punteggio manca, restituisci RIGOROSAMENTE null (MAI 0). Rispondi in JSON.",
                         apiKey,
                         false,
                         customProxyUrl,
@@ -1362,6 +1374,74 @@ const executeClientSideExtract = async (
         } catch {
           extractedData.nome_istituto = targetUrl;
         }
+      }
+
+      // -------------------------------------------------------------
+      // Rinforzo Codice Meccanografico (Scansione approfondita)
+      // -------------------------------------------------------------
+      if (isValidCodiceMeccanografico(extractedData.codice_meccanografico)) {
+        extractedData.codice_meccanografico = normalizeCodiceMeccanografico(extractedData.codice_meccanografico);
+      } else {
+        // Tentativo 1: ricerca nel testo completo o nei log/URL
+        let candidate = extractCodiceMeccanograficoFromText(
+          (res.fullText || "") + "\n" + (res.content || ""),
+          res.navigatedUrl || targetUrl
+        );
+
+        // Tentativo 2: Se presente in una delle nomine estratte dal modello
+        if (!candidate && Array.isArray(extractedData.nomine_contratti)) {
+          for (const item of extractedData.nomine_contratti) {
+            if (item.codice_meccanografico && isValidCodiceMeccanografico(item.codice_meccanografico)) {
+              candidate = normalizeCodiceMeccanografico(item.codice_meccanografico);
+              break;
+            }
+          }
+        }
+
+        // Tentativo 3: Se ancora assente, recupera la homepage o /contatti della scuola
+        // (nel footer di quasi tutte le scuole statali italiane sono riportati C.M. e PEC/email @istruzione.it)
+        if (!candidate) {
+          try {
+            const rootUrl = new URL(res.navigatedUrl || targetUrl).origin;
+            const currentUrlObj = new URL(res.navigatedUrl || targetUrl);
+            const isSubpage = currentUrlObj.pathname.length > 2 || (targetUrl && targetUrl.length > rootUrl.length + 2);
+            if (isSubpage) {
+              res.logs.push(`🔍 Ricerca codice meccanografico nella homepage della scuola (${rootUrl})...`);
+              const homeRes = await fetchWithProxy(rootUrl, false, undefined, customProxy, failedProxiesByDomain);
+              if (homeRes?.data) {
+                candidate = extractCodiceMeccanograficoFromText(String(homeRes.data), rootUrl);
+              }
+            }
+            if (!candidate) {
+              const contattiUrl = `${rootUrl}/contatti`;
+              try {
+                const contattiRes = await fetchWithProxy(contattiUrl, false, undefined, customProxy, failedProxiesByDomain);
+                if (contattiRes?.data) {
+                  candidate = extractCodiceMeccanograficoFromText(String(contattiRes.data), contattiUrl);
+                }
+              } catch {
+                // ignorato se /contatti non risponde
+              }
+            }
+          } catch (netErr: any) {
+            res.logs.push(`Avviso ricerca homepage per codice meccanografico: ${netErr.message}`);
+          }
+        }
+
+        if (candidate && isValidCodiceMeccanografico(candidate)) {
+          extractedData.codice_meccanografico = normalizeCodiceMeccanografico(candidate);
+          res.logs.push(`🏫 Codice meccanografico individuato: ${extractedData.codice_meccanografico}`);
+        }
+      }
+
+      // Propaga il codice meccanografico a tutte le nomine del contratto
+      if (extractedData.codice_meccanografico && Array.isArray(extractedData.nomine_contratti)) {
+        extractedData.nomine_contratti = extractedData.nomine_contratti.map((item: any) => ({
+          ...item,
+          codice_meccanografico: (item.codice_meccanografico && isValidCodiceMeccanografico(item.codice_meccanografico))
+            ? normalizeCodiceMeccanografico(item.codice_meccanografico)
+            : extractedData.codice_meccanografico
+        }));
       }
 
       // Calculate duration for top-level if present
@@ -1748,6 +1828,16 @@ const executeClientSideExtract = async (
 
       const content = respData?.choices?.[0]?.message?.content || "{}";
       const extracted = JSON.parse(content);
+
+      // Rinforzo codice meccanografico per il PDF
+      if (!isValidCodiceMeccanografico(extracted.codice_meccanografico)) {
+        const found = extractCodiceMeccanograficoFromText(content, selectedPdfFile.name);
+        if (found) {
+          extracted.codice_meccanografico = found;
+        }
+      } else {
+        extracted.codice_meccanografico = normalizeCodiceMeccanografico(extracted.codice_meccanografico);
+      }
 
       const duration = calculateContractDuration(
         extracted.decorrenza_contratto || "",
@@ -3206,11 +3296,29 @@ const executeClientSideExtract = async (
 
                           return (
                             <tr key={idx} className="hover:bg-slate-800/40 transition-colors">
-                              <td className="p-4 font-medium text-slate-200 max-w-xs truncate">
-                                <a href={r.url} target="_blank" rel="noreferrer" className="hover:text-indigo-400 flex items-center gap-1.5">
-                                  <span className="truncate">{r.url}</span>
-                                  <ExternalLink className="w-3 h-3 shrink-0 text-slate-500" />
-                                </a>
+                              <td className="p-4 font-medium text-slate-200 max-w-xs">
+                                <div className="flex flex-col gap-1">
+                                  <a href={r.url} target="_blank" rel="noreferrer" className="hover:text-indigo-400 flex items-center gap-1.5 truncate">
+                                    <span className="truncate">{r.url}</span>
+                                    <ExternalLink className="w-3 h-3 shrink-0 text-slate-500" />
+                                  </a>
+                                  <div className="flex items-center gap-1.5 text-[11px] flex-wrap">
+                                    {r.data.codice_meccanografico ? (
+                                      <span className="px-1.5 py-0.5 bg-indigo-500/20 text-indigo-300 font-mono font-semibold rounded border border-indigo-500/30 text-[10px] tracking-wide" title="Codice Meccanografico Ministeriale">
+                                        {r.data.codice_meccanografico}
+                                      </span>
+                                    ) : (
+                                      <span className="px-1.5 py-0.5 bg-slate-800 text-slate-500 font-mono rounded text-[10px]" title="Codice Meccanografico non rilevato">
+                                        C.M. assente
+                                      </span>
+                                    )}
+                                    {r.data.nome_istituto && (
+                                      <span className="text-slate-400 truncate max-w-[170px]" title={r.data.nome_istituto}>
+                                        {r.data.nome_istituto}
+                                      </span>
+                                    )}
+                                  </div>
+                                </div>
                               </td>
                               <td className="p-4">
                                 {r.status === "success" ? (
@@ -3403,6 +3511,36 @@ const executeClientSideExtract = async (
                       <Download className="w-4 h-4" />
                       <span>Scarica CSV Risultato Singolo</span>
                     </button>
+                  </div>
+
+                  {/* Scuola & Codice Meccanografico Header */}
+                  <div className="bg-slate-950/70 border border-slate-800 rounded-xl p-4 flex flex-col sm:flex-row items-start sm:items-center justify-between gap-3">
+                    <div className="space-y-1">
+                      <span className="text-[11px] uppercase tracking-wider text-slate-400 font-semibold block">Istituto Scolastico Rilevato</span>
+                      <div className="text-base font-bold text-white flex items-center gap-2">
+                        <span>{singleResult.data.nome_istituto || "Istituto Scolastico"}</span>
+                      </div>
+                    </div>
+                    <div className="flex items-center gap-3 flex-wrap">
+                      <div className="bg-slate-900 border border-slate-700/80 px-3.5 py-2 rounded-xl flex flex-col items-start">
+                        <span className="text-[10px] uppercase font-bold text-slate-400">Codice Meccanografico (C.M.)</span>
+                        {singleResult.data.codice_meccanografico ? (
+                          <span className="text-sm font-mono font-bold text-indigo-300">
+                            {singleResult.data.codice_meccanografico}
+                          </span>
+                        ) : (
+                          <span className="text-xs text-slate-500 font-mono">Non individuato</span>
+                        )}
+                      </div>
+                      {singleResult.data.nominativo && (
+                        <div className="bg-slate-900 border border-slate-700/80 px-3.5 py-2 rounded-xl flex flex-col items-start">
+                          <span className="text-[10px] uppercase font-bold text-slate-400">Nominativo</span>
+                          <span className="text-sm font-bold text-amber-300">
+                            {singleResult.data.nominativo}
+                          </span>
+                        </div>
+                      )}
+                    </div>
                   </div>
 
                   <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">

@@ -71,6 +71,149 @@ export function normalizeCodiceMeccanografico(codice?: string): string {
   return codice.trim().toUpperCase().replace(/[^A-Z0-9]/g, "");
 }
 
+// Tutte le 107 province italiane ufficiali (sigla a 2 lettere)
+export const ITALIAN_PROVINCES = new Set([
+  "AG", "AL", "AN", "AO", "AP", "AQ", "AR", "AT", "AV", "BA", "BG", "BI", "BL", "BN", "BO", "BR", "BS", "BT", "BZ",
+  "CA", "CB", "CE", "CH", "CI", "CL", "CN", "CO", "CR", "CS", "CT", "CZ", "EN", "FC", "FE", "FG", "FI", "FM", "FR",
+  "GE", "GO", "GR", "IM", "IS", "KR", "LC", "LE", "LI", "LO", "LT", "LU", "MB", "MC", "ME", "MI", "MN", "MO", "MS",
+  "MT", "NA", "NO", "NU", "OR", "PA", "PC", "PD", "PE", "PG", "PI", "PN", "PO", "PR", "PT", "PU", "PV", "PZ", "RA",
+  "RC", "RE", "RG", "RI", "RM", "RN", "RO", "SA", "SI", "SO", "SP", "SR", "SS", "SU", "SV", "TA", "TE", "TN", "TO",
+  "TP", "TR", "TS", "TV", "UD", "VA", "VB", "VC", "VE", "VI", "VR", "VT", "VV"
+]);
+
+// Tipologie ministeriali di istituto scolastico (caratteri 3-4 del codice meccanografico)
+export const SCHOOL_TYPE_CODES = new Set([
+  "IC", // Istituto Comprensivo
+  "IS", // Istituto Superiore
+  "PC", // Liceo Classico
+  "PS", // Liceo Scientifico
+  "PM", // Istituto Magistrale / Scienze Umane
+  "PL", // Liceo Linguistico
+  "SL", // Liceo Artistico
+  "TD", // Tecnico Economico / Commerciale
+  "TF", // Tecnico Tecnologico / Industriale
+  "TL", // Tecnico Costruzioni Ambiente e Territorio (Geometri)
+  "TN", // Tecnico Trasporti e Logistica (Nautico)
+  "TA", // Tecnico Agrario
+  "TT", // Tecnico Turismo
+  "RH", // Professionale Enogastronomia e Ospitalità Alberghiera
+  "RC", // Professionale Servizi Commerciali
+  "RI", // Professionale Industria e Artigianato
+  "RA", // Professionale Agricoltura
+  "EE", // Circolo Didattico / Primaria
+  "MM", // Scuola Media / Secondaria I grado
+  "AA", // Scuola dell'Infanzia
+  "CT", // Centro Territoriale
+  "SS", // Scuola Speciale / Convitto
+  "VC", // Convitto / Educandato
+  "SD", // Istituto Statale d'Arte
+  "1D", "1A", "1B"
+]);
+
+/**
+ * Valida un codice meccanografico secondo lo standard MIUR/MIM:
+ * Esattamente 10 caratteri alfanumerici:
+ * - 2 lettere di provincia valide (es. RM, MI, NA, CH, TO, ...)
+ * - 2 lettere/cifre di tipologia scuola (es. IC, IS, PC, PS, TF, TD, EE, MM, ...)
+ * - 5 cifre numeriche o alfanumeriche (solitamente con cifre come 81000, 00100)
+ * - 1 lettera o cifra di controllo finale
+ */
+export function isValidCodiceMeccanografico(codice?: string): boolean {
+  if (!codice) return false;
+  const clean = codice.trim().toUpperCase().replace(/[^A-Z0-9]/g, "");
+  if (clean.length !== 10) return false;
+
+  const prov = clean.slice(0, 2);
+  if (!ITALIAN_PROVINCES.has(prov)) return false;
+
+  const typeCode = clean.slice(2, 4);
+  const isValidType = SCHOOL_TYPE_CODES.has(typeCode) || /^[A-Z0-9]{2}$/.test(typeCode);
+  if (!isValidType) return false;
+
+  // Caratteri 5-9: contengono cifre numeriche
+  const middle = clean.slice(4, 9);
+  if (!/[0-9]/.test(middle)) return false;
+
+  return true;
+}
+
+/**
+ * Estrae e rinforza la ricerca del codice meccanografico da un testo libero, HTML, email istituzionali o URL.
+ * Applica molteplici euristiche in ordine di precisione:
+ * 1. Email o PEC istituzionale MIUR/MIM (@istruzione.it o @pec.istruzione.it)
+ * 2. Etichette esplicite (C.M., Cod. Mecc., Codice Scuola, ecc.)
+ * 3. Analisi del dominio e percorso URL
+ * 4. Pattern con tipologie scolastiche riconosciute (IC, IS, PC, PS, TF, TD, RH, EE, MM)
+ * 5. Scansione generica di stringhe a 10 caratteri con validazione della provincia
+ */
+export function extractCodiceMeccanograficoFromText(text?: string, url?: string): string | null {
+  const content = text || "";
+
+  // 1. Email o PEC istituzionale ministeriale (massima certezza: chic81000a@istruzione.it -> CHIC81000A)
+  const emailRegex = /\b([a-zA-Z]{2}[a-zA-Z0-9]{2}[0-9a-zA-Z]{5}[a-zA-Z0-9])@(istruzione|pec\.istruzione)\.it\b/gi;
+  let match: RegExpExecArray | null;
+  while ((match = emailRegex.exec(content)) !== null) {
+    const candidate = match[1].toUpperCase();
+    if (isValidCodiceMeccanografico(candidate)) {
+      return candidate;
+    }
+  }
+
+  // 2. Diciture ed etichette esplicite: "C.M.: ...", "Cod. Mecc.: ...", "Codice Meccanografico: ...", "Cod. Scuola: ..."
+  const labelRegex = /(?:cod(?:ice)?\.?\s*mecc(?:anografico)?|c\.?\s*m\.?|cod\.?\s*scuola|codice\s+istituto|codice\s+ministeriale|codice\s+univoco\s+ufficio)\s*[:\-\s]\s*([a-zA-Z0-9]{10})\b/gi;
+  while ((match = labelRegex.exec(content)) !== null) {
+    const candidate = match[1].toUpperCase();
+    if (isValidCodiceMeccanografico(candidate)) {
+      return candidate;
+    }
+  }
+
+  // 3. Verifica nel dominio o percorso URL (es: "www.chic81000a.edu.it", "/chic81000a/")
+  if (url) {
+    try {
+      const parsedUrl = new URL(url.startsWith("http") ? url : `https://${url}`);
+      const hostParts = parsedUrl.hostname.split(".");
+      for (const part of hostParts) {
+        const candidate = part.toUpperCase();
+        if (isValidCodiceMeccanografico(candidate)) {
+          return candidate;
+        }
+      }
+      const pathSegments = parsedUrl.pathname.split(/[\/\-_]/);
+      for (const seg of pathSegments) {
+        const candidate = seg.toUpperCase();
+        if (isValidCodiceMeccanografico(candidate)) {
+          return candidate;
+        }
+      }
+    } catch {
+      // Ignora errori di parsing URL
+    }
+  }
+
+  // 4. Pattern mirato con tipologie scolastiche standard (es: CHIC81000A, RMIS00100B, MIPC01000C)
+  const schoolTypeRegex = /\b([A-Z]{2}(?:IC|IS|PC|PS|PM|PL|SL|TD|TF|TL|TN|TA|TT|RH|RC|RI|RA|EE|MM|AA|CT|SS|VC|SD)[0-9][0-9A-Z]{4}[A-Z0-9])\b/gi;
+  while ((match = schoolTypeRegex.exec(content)) !== null) {
+    const candidate = match[1].toUpperCase();
+    if (isValidCodiceMeccanografico(candidate)) {
+      return candidate;
+    }
+  }
+
+  // 5. Pattern generico 10 caratteri con provincia italiana valida
+  const genericCandidates = content.match(/\b([A-Za-z]{2}[A-Za-z0-9]{2}[0-9A-Za-z]{5}[A-Za-z0-9])\b/g);
+  if (genericCandidates) {
+    for (const raw of genericCandidates) {
+      const candidate = raw.toUpperCase();
+      if (isValidCodiceMeccanografico(candidate)) {
+        return candidate;
+      }
+    }
+  }
+
+  return null;
+}
+
 /**
  * Estrae un numero intero di posizione da stringhe come "313", "Pos. 42", "n. 15"
  */
@@ -238,10 +381,11 @@ export function crossReferenceNomina<T extends NominaContrattoItem | AlboPretori
     const nomeGrad = match.graduatoriaMatched?.nome_istituto || match.graduatoriaMatched?.codice_meccanografico || "Graduatoria d'Istituto";
     return {
       ...item,
+      codice_meccanografico: (item as any).codice_meccanografico || match.graduatoriaMatched?.codice_meccanografico || "",
       punteggio: match.punteggio,
       origine_punteggio: "Incrociato",
       note_cross_reference: `Punteggio incrociato con ${nomeGrad} (${match.graduatoriaMatched?.profilo_o_cdc}, Fascia ${match.graduatoriaMatched?.fascia}): pos. ${posNum} = ${match.punteggio.toFixed(2)} pt${match.entry?.cognome_nome ? ` [${match.entry.cognome_nome}]` : ""}`,
-    };
+    } as any;
   }
 
   return {
