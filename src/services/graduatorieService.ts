@@ -153,7 +153,9 @@ export function lookupPunteggioGraduatoria(
   }
 
   const normProfilo = normalizeProfiloOrCdc(criteri.profilo_o_cdc || "");
-  const normFascia = normalizeFascia(criteri.fascia || "");
+  const normFascia = criteri.fascia && !isFasciaMissing(criteri.fascia)
+    ? normalizeFascia(criteri.fascia)
+    : "";
 
   // Filtriamo le graduatorie candidate
   const candidateGrad = graduatorie.filter(g => {
@@ -202,6 +204,12 @@ export function lookupPunteggioGraduatoria(
 
   // 1. Cerca per posizione se specificata
   if (criteri.posizione && criteri.posizione > 0) {
+    const matched: Array<{
+      punteggio: number;
+      entry: GraduatoriaIstitutoEntry;
+      graduatoriaMatched: GraduatoriaIstituto;
+    }> = [];
+
     for (const g of candidateGrad) {
       const entry = g.graduatoria.find(e => e.posizione === criteri.posizione);
       if (entry && typeof entry.punteggio === "number" && !isNaN(entry.punteggio)) {
@@ -211,26 +219,54 @@ export function lookupPunteggioGraduatoria(
             continue;
           }
         }
-        return {
+        matched.push({
           punteggio: Number(entry.punteggio.toFixed(2)),
           entry,
           graduatoriaMatched: g,
-        };
+        });
       }
+    }
+
+    if (matched.length > 0) {
+      // TASK 1-bis/1: Se fascia non è nei criteri e più graduatorie candidate hanno la posizione con punteggi diversi -> return null (mai la prima)
+      if (!normFascia) {
+        const distinctScores = Array.from(new Set(matched.map(m => m.punteggio)));
+        if (distinctScores.length > 1) {
+          return null;
+        }
+      }
+      return matched[0];
     }
   }
 
   // 2. Cerca per nominativo se specificato
   if (criteri.nominativo && criteri.nominativo.trim().length >= 3) {
+    const matched: Array<{
+      punteggio: number;
+      entry: GraduatoriaIstitutoEntry;
+      graduatoriaMatched: GraduatoriaIstituto;
+    }> = [];
+
     for (const g of candidateGrad) {
       const entry = g.graduatoria.find(e => e.cognome_nome && isNameMatch(criteri.nominativo!, e.cognome_nome));
       if (entry && typeof entry.punteggio === "number" && !isNaN(entry.punteggio)) {
-        return {
+        matched.push({
           punteggio: Number(entry.punteggio.toFixed(2)),
           entry,
           graduatoriaMatched: g,
-        };
+        });
       }
+    }
+
+    if (matched.length > 0) {
+      // TASK 1-bis/1: Se fascia non è nei criteri e più graduatorie candidate hanno il nominativo con punteggi diversi -> return null (mai la prima)
+      if (!normFascia) {
+        const distinctScores = Array.from(new Set(matched.map(m => m.punteggio)));
+        if (distinctScores.length > 1) {
+          return null;
+        }
+      }
+      return matched[0];
     }
   }
 
@@ -1691,6 +1727,106 @@ export function doesItemNeedGraduatoriaResolution(item: {
   return isPunteggioMissing(item.punteggio) || isFasciaMissing(f);
 }
 
+/**
+ * TASK 5-quater — Verifica se una specifica nomina ha almeno una entry compatibile in collectedEntries:
+ * - isNameMatch tra nominativo della nomina ed entry
+ * - entry con classe non vuota (mai match per classe vuota)
+ * - isClassMatch tra la classe/profilo della nomina e quella dell'entry
+ * - eventuale coerenza di tipologia personale se specificata in entrambi
+ * - punteggio numerico valido
+ * - fascia valida (o fascia del contratto già valida)
+ */
+export function isNominaSatisfiedInEntries(
+  nomina: {
+    nominativo?: string;
+    tipologia_personale?: any;
+    profilo_lavorativo?: string;
+    profilo_professionale?: string;
+    classe_concorso_area_lab?: string;
+    classe_di_concorso?: string;
+    fascia?: string;
+    graduatoria_fascia?: string;
+    punteggio?: any;
+    posizione_graduatoria?: any;
+  },
+  collectedEntries: GraduatoriaCollectedEntry[],
+  fallbackContext?: {
+    classe_concorso_area_lab?: string;
+    classe_di_concorso?: string;
+    profilo_lavorativo?: string;
+    profilo_professionale?: string;
+    tipologia_personale?: any;
+  }
+): boolean {
+  if (!doesItemNeedGraduatoriaResolution(nomina)) {
+    return true;
+  }
+
+  const nom = (nomina.nominativo || "").trim();
+  if (!nom) return true;
+
+  let rawClassCandidates = [
+    nomina.classe_concorso_area_lab,
+    nomina.classe_di_concorso,
+    nomina.profilo_lavorativo,
+    nomina.profilo_professionale,
+  ].filter(c => !isClassEmpty(c)) as string[];
+
+  if (rawClassCandidates.length === 0 && fallbackContext) {
+    rawClassCandidates = [
+      fallbackContext.classe_concorso_area_lab,
+      fallbackContext.classe_di_concorso,
+      fallbackContext.profilo_lavorativo,
+      fallbackContext.profilo_professionale,
+    ].filter(c => !isClassEmpty(c)) as string[];
+  }
+
+  const currentFascia = nomina.fascia !== undefined ? nomina.fascia : (nomina as any).graduatoria_fascia;
+  const hasValidContractFascia = !isFasciaMissing(currentFascia);
+  const contractNormFascia = hasValidContractFascia ? normalizeFascia(currentFascia) : null;
+  const tipologia = nomina.tipologia_personale || fallbackContext?.tipologia_personale;
+
+  return collectedEntries.some(e => {
+    // 1) isNameMatch con il nominativo della nomina
+    if (!isNameMatch(e.nominativo, nom)) return false;
+
+    // 2) entry con classe non vuota (mai match per classe vuota)
+    if (isClassEmpty(e.classe)) return false;
+
+    // 3) isClassMatch con la sua classe/profilo
+    if (rawClassCandidates.length > 0) {
+      const matchClass = rawClassCandidates.some(c => isClassMatch(e.classe, c));
+      if (!matchClass) return false;
+    } else {
+      return false;
+    }
+
+    // Tipologia personale coerente se entrambe note
+    if (tipologia && e.tipologia) {
+      if (String(tipologia).toUpperCase() !== String(e.tipologia).toUpperCase()) {
+        return false;
+      }
+    }
+
+    // 4) Punteggio numerico valido
+    if (e.punteggio === null || e.punteggio === undefined || isNaN(Number(e.punteggio))) {
+      return false;
+    }
+
+    // 5) Fascia numerica/valida (o fascia del contratto già valida)
+    if (hasValidContractFascia && contractNormFascia) {
+      // Se il contratto ha già fascia valida: entry senza fascia non contraddice, entry con fascia diversa scartata
+      if (isFasciaMissing(e.fascia)) {
+        return true;
+      }
+      return normalizeFascia(e.fascia || "") === contractNormFascia;
+    } else {
+      // Se il contratto non ha fascia valida, l'entry deve avere una fascia valida
+      return !isFasciaMissing(e.fascia);
+    }
+  });
+}
+
 function resolveSingleTarget<T extends {
   nominativo?: string;
   tipologia_personale?: any;
@@ -1853,7 +1989,7 @@ function resolveSingleTarget<T extends {
     updated.punteggio = "Da verificare manualmente";
     updated.origine_punteggio = "Non disponibile";
     if (isPosizioneMissing(updated.posizione_graduatoria)) {
-      updated.posizione_graduatoria = "Da verificare manualmente";
+      updated.posizione_graduatoria = "Non disponibile";
     }
     if (isFasciaMissing(currentFascia)) {
       const distinctFasce = Array.from(
@@ -2010,16 +2146,26 @@ export async function resolveFromGraduatorie<T extends ExtractionData>(
   if (options.collectedEntries && options.collectedEntries.length > 0) {
     collectedEntries.push(...options.collectedEntries);
   } else {
-    // Determina tutti i nominativi da cercare
-    const targetNamesSet = new Set<string>();
-    if (data.nominativo && data.nominativo.trim()) {
-      targetNamesSet.add(data.nominativo.trim());
-    }
-    if (Array.isArray(data.nomine_contratti)) {
+    // Costruisci l'elenco delle nomine da verificare e i nominativi per il prompt AI
+    const nomineToCheck: any[] = [];
+    if (Array.isArray(data.nomine_contratti) && data.nomine_contratti.length > 0) {
       for (const n of data.nomine_contratti) {
         if (n.nominativo && n.nominativo.trim()) {
-          targetNamesSet.add(n.nominativo.trim());
+          nomineToCheck.push(n);
         }
+      }
+    }
+    if (data.nominativo && data.nominativo.trim()) {
+      const alreadyIncluded = nomineToCheck.some(n => isNameMatch(n.nominativo, data.nominativo));
+      if (!alreadyIncluded) {
+        nomineToCheck.push(data);
+      }
+    }
+
+    const targetNamesSet = new Set<string>();
+    for (const n of nomineToCheck) {
+      if (n.nominativo && n.nominativo.trim()) {
+        targetNamesSet.add(n.nominativo.trim());
       }
     }
     const targetNamesToSearch = Array.from(targetNamesSet);
@@ -2046,18 +2192,12 @@ export async function resolveFromGraduatorie<T extends ExtractionData>(
 
     data.pagine_graduatoria_esplorate = exploredPages.map(p => p.url);
 
-    // Funzione di verifica early exit: esci dal ciclo pagine/PDF appena ogni nominativo cercato ha ≥1 match con punteggio numerico e fascia
+    // TASK 5-quater — Funzione di verifica early exit:
+    // valuta per ogni NOMINA (nominativo + sua classe/profilo, con isNameMatch + isClassMatch, entry con classe non vuota),
+    // non per solo nome. Esci solo se ogni nomina ha ≥1 entry compatibile con punteggio numerico e fascia (o fascia del contratto già valida).
     const checkAllNamesSatisfied = (): boolean => {
-      if (targetNamesToSearch.length === 0) return false;
-      return targetNamesToSearch.every(name =>
-        collectedEntries.some(e =>
-          isNameMatch(e.nominativo, name) &&
-          e.punteggio !== null &&
-          e.punteggio !== undefined &&
-          !isNaN(Number(e.punteggio)) &&
-          !isFasciaMissing(e.fascia)
-        )
-      );
+      if (nomineToCheck.length === 0) return false;
+      return nomineToCheck.every(nomina => isNominaSatisfiedInEntries(nomina, collectedEntries, data));
     };
 
     if (exploredPages.length > 0 && options.fetchAiFn) {

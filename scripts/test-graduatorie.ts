@@ -15,6 +15,7 @@ import {
   resolveFromGraduatorie,
   GraduatoriaCollectedEntry
 } from "../src/services/graduatorieService";
+import { extractPunteggioHeuristic } from "../src/services/pdfService";
 import { GraduatoriaIstituto, ExtractionData } from "../src/types";
 
 let passedCount = 0;
@@ -171,6 +172,85 @@ async function runTests() {
     posizione: 1
   });
   assert(resNoSchool === null, 'Lookup senza scuola -> null (vietato match per sola posizione)', resNoSchool);
+
+  // TASK 1-bis/1: 2 graduatorie stessa scuola/profilo, fasce 2 e 3, pos. 5
+  const mockGraduatorieFasceMulti: GraduatoriaIstituto[] = [
+    {
+      id: "grad-fascia-2",
+      codice_meccanografico: "MIRC010008",
+      nome_istituto: "IIS Severi Correnti Milano",
+      tipologia_personale: "DOCENTE",
+      profilo_o_cdc: "A-22",
+      fascia: "2",
+      graduatoria: [
+        { posizione: 5, punteggio: 48.00, cognome_nome: "Galli Roberto" },
+      ],
+    },
+    {
+      id: "grad-fascia-3",
+      codice_meccanografico: "MIRC010008",
+      nome_istituto: "IIS Severi Correnti Milano",
+      tipologia_personale: "DOCENTE",
+      profilo_o_cdc: "A-22",
+      fascia: "3",
+      graduatoria: [
+        { posizione: 5, punteggio: 65.50, cognome_nome: "Galli Roberto" },
+      ],
+    },
+  ];
+
+  // 3.9 Se fascia non è nei criteri e più graduatorie candidate hanno la posizione con punteggi diversi → return null (mai la prima)
+  const resNoFasciaPos5 = lookupPunteggioGraduatoria(mockGraduatorieFasceMulti, {
+    codice_meccanografico: "MIRC010008",
+    tipologia_personale: "DOCENTE",
+    profilo_o_cdc: "A-22",
+    posizione: 5,
+  });
+  assert(
+    resNoFasciaPos5 === null,
+    '3.9 2 graduatorie stessa scuola/profilo, fasce 2 e 3, pos. 5 senza fascia -> null',
+    resNoFasciaPos5
+  );
+
+  // 3.10 Con fascia "3" specificata nei criteri → punteggio di fascia 3 (65.50 pt)
+  const resFascia3Pos5 = lookupPunteggioGraduatoria(mockGraduatorieFasceMulti, {
+    codice_meccanografico: "MIRC010008",
+    tipologia_personale: "DOCENTE",
+    profilo_o_cdc: "A-22",
+    fascia: "3",
+    posizione: 5,
+  });
+  assert(
+    resFascia3Pos5 !== null && resFascia3Pos5.punteggio === 65.50,
+    '3.10 Con fascia "3" -> punteggio di fascia 3 (65.50 pt)',
+    resFascia3Pos5
+  );
+
+  // 3.11 Stesso test per nominativo: senza fascia nei criteri con punteggi discordanti -> null, con fascia -> punteggio
+  const resNoFasciaNom = lookupPunteggioGraduatoria(mockGraduatorieFasceMulti, {
+    codice_meccanografico: "MIRC010008",
+    tipologia_personale: "DOCENTE",
+    profilo_o_cdc: "A-22",
+    nominativo: "Galli Roberto",
+  });
+  assert(
+    resNoFasciaNom === null,
+    '3.11 2 graduatorie stessa scuola/profilo, fasce 2 e 3, per nominativo senza fascia -> null',
+    resNoFasciaNom
+  );
+
+  const resFascia2Nom = lookupPunteggioGraduatoria(mockGraduatorieFasceMulti, {
+    codice_meccanografico: "MIRC010008",
+    tipologia_personale: "DOCENTE",
+    profilo_o_cdc: "A-22",
+    fascia: "2",
+    nominativo: "Galli Roberto",
+  });
+  assert(
+    resFascia2Nom !== null && resFascia2Nom.punteggio === 48.00,
+    '3.12 Con fascia "2" -> punteggio di fascia 2 per nominativo (48.00 pt)',
+    resFascia2Nom
+  );
 
   console.log("\n==========================================");
   console.log(" 🧪 TEST 4: resolveFromGraduatorie");
@@ -864,6 +944,320 @@ async function runTests() {
     nExp.fascia === "Prima fascia",
     "6.3 Fascia ricavata con etichetta estesa del contratto ('Prima fascia')",
     nExp.fascia
+  );
+
+  console.log("\n==========================================");
+  console.log(" 🧪 TEST 7: TASK 5-quater");
+  console.log("==========================================");
+
+  // 7.1 Ramo "punteggi discordanti": posizione_graduatoria = "Non disponibile" (solo punteggio "Da verificare manualmente")
+  const mockDataDiscordanti: ExtractionData = {
+    nomine_contratti: [
+      {
+        nome_istituto: "IC Manzoni",
+        codice_meccanografico: "MIIC81000A",
+        nominativo: "Galli Roberto",
+        tipologia_personale: "ATA",
+        profilo_lavorativo: "Collaboratore Scolastico",
+        classe_concorso_area_lab: "Non applicabile",
+        tipo_posto: "comune",
+        punteggio: null,
+        posizione_graduatoria: "Non disponibile",
+        fascia: "1",
+        ore_settimanali: "36",
+        decorrenza_contratto: "01/09/2024",
+        durata_contratto_mesi: "10",
+        durata_contratto_giorni: "0",
+        link_del_documento: "http://example.com/doc",
+      },
+    ],
+    convocazioni_collaboratore_scolastico: 0,
+    convocazioni_assistente_amministrativo: 0,
+    convocazioni_docenti: 0,
+    convocazioni_assistente_tecnico: 0,
+    convocazioni_cuoco: 0,
+    convocazioni_assistente_agrario: 0,
+    pensionamenti_collaboratore_scolastico: 0,
+    pensionamenti_assistente_amministrativo: 0,
+    pensionamenti_docenti: 0,
+    pensionamenti_assistente_tecnico: 0,
+    pensionamenti_cuoco: 0,
+    pensionamenti_assistente_agrario: 0,
+  };
+
+  const mockCollectedDiscordanti: GraduatoriaCollectedEntry[] = [
+    {
+      nominativo: "Galli Roberto",
+      punteggio: 42.00,
+      posizione: 3,
+      fascia: "1",
+      classe: "CS",
+      anno: null,
+      url: "http://example.com/grad_1.pdf",
+      tipologia: "ATA",
+    },
+    {
+      nominativo: "Galli Roberto",
+      punteggio: 56.50,
+      posizione: 1,
+      fascia: "1",
+      classe: "CS",
+      anno: null,
+      url: "http://example.com/grad_2.pdf",
+      tipologia: "ATA",
+    },
+  ];
+
+  const resDiscordanti = await resolveFromGraduatorie(mockDataDiscordanti, {
+    collectedEntries: mockCollectedDiscordanti,
+  });
+  const nDiscordanti = resDiscordanti.nomine_contratti![0];
+
+  assert(
+    nDiscordanti.punteggio === "Da verificare manualmente" &&
+    nDiscordanti.posizione_graduatoria === "Non disponibile" &&
+    nDiscordanti.origine_punteggio === "Non disponibile",
+    "7.1 Ramo punteggi discordanti: posizione_graduatoria = 'Non disponibile' e solo punteggio 'Da verificare manualmente'",
+    nDiscordanti
+  );
+
+  // 7.2 Stesso nome in CS (pagina 1) e AA (pagina 2), contratto AA:
+  // la ricerca legge anche pagina 2 e restituisce il punteggio AA
+  const pagesReadAA: string[] = [];
+  const mockPagesExplored: Array<{
+    url: string;
+    title: string;
+    keywordMatched: string;
+    content: string;
+    format: "html";
+    pdfLinks: string[];
+  }> = [
+    {
+      url: "http://scuola.edu.it/graduatorie-cs",
+      title: "Graduatoria d'Istituto ATA CS Collaboratore Scolastico",
+      keywordMatched: "graduatoria/e",
+      content: "GRADUATORIA D'ISTITUTO ATA PROFILO CS COLLABORATORE SCOLASTICO ANNO 2024/2025\n1 45.00 ROSSI MARIO",
+      format: "html",
+      pdfLinks: [],
+    },
+    {
+      url: "http://scuola.edu.it/graduatorie-aa",
+      title: "Graduatoria d'Istituto ATA AA Assistente Amministrativo",
+      keywordMatched: "graduatoria/e",
+      content: "GRADUATORIA D'ISTITUTO ATA PROFILO AA ASSISTENTE AMMINISTRATIVO ANNO 2024/2025\n2 60.00 ROSSI MARIO",
+      format: "html",
+      pdfLinks: [],
+    },
+  ];
+
+  const mockFetchAiMultiPage = (pagesTracker: string[]) => async (promptText: string) => {
+    if (promptText.includes("CS") || promptText.includes("Collaboratore") || promptText.includes("COLLABORATORE")) {
+      pagesTracker.push("page_1_CS");
+      return {
+        choices: [
+          {
+            message: {
+              content: JSON.stringify({
+                meta: {
+                  tipologia_personale: "ATA",
+                  fascia: "1",
+                  profilo_o_cdc: "CS",
+                  anno_scolastico: "2024/2025",
+                },
+                graduatoria_entries: [
+                  {
+                    nominativo: "Rossi Mario",
+                    punteggio: 45.0,
+                    posizione: 1,
+                    classe_concorso: "CS",
+                    fascia: "1",
+                  },
+                ],
+              }),
+            },
+          },
+        ],
+      };
+    }
+    if (promptText.includes("AA") || promptText.includes("Amministrativo") || promptText.includes("AMMINISTRATIVO")) {
+      pagesTracker.push("page_2_AA");
+      return {
+        choices: [
+          {
+            message: {
+              content: JSON.stringify({
+                meta: {
+                  tipologia_personale: "ATA",
+                  fascia: "1",
+                  profilo_o_cdc: "AA",
+                  anno_scolastico: "2024/2025",
+                },
+                graduatoria_entries: [
+                  {
+                    nominativo: "Rossi Mario",
+                    punteggio: 60.0,
+                    posizione: 2,
+                    classe_concorso: "AA",
+                    fascia: "1",
+                  },
+                ],
+              }),
+            },
+          },
+        ],
+      };
+    }
+    return { choices: [{ message: { content: "{}" } }] };
+  };
+
+  const mockDataContrattoAA: ExtractionData = {
+    nome_istituto: "IC Manzoni",
+    nomine_contratti: [
+      {
+        nome_istituto: "IC Manzoni",
+        codice_meccanografico: "MIIC81000A",
+        nominativo: "Rossi Mario",
+        tipologia_personale: "ATA",
+        profilo_lavorativo: "Assistente Amministrativo",
+        classe_concorso_area_lab: "Non applicabile",
+        tipo_posto: "comune",
+        punteggio: null,
+        posizione_graduatoria: "Non disponibile",
+        fascia: "1",
+        ore_settimanali: "36",
+        decorrenza_contratto: "01/09/2024",
+        durata_contratto_mesi: "10",
+        durata_contratto_giorni: "0",
+        link_del_documento: "http://example.com/doc_aa",
+      },
+    ],
+    convocazioni_collaboratore_scolastico: 0,
+    convocazioni_assistente_amministrativo: 0,
+    convocazioni_docenti: 0,
+    convocazioni_assistente_tecnico: 0,
+    convocazioni_cuoco: 0,
+    convocazioni_assistente_agrario: 0,
+    pensionamenti_collaboratore_scolastico: 0,
+    pensionamenti_assistente_amministrativo: 0,
+    pensionamenti_docenti: 0,
+    pensionamenti_assistente_tecnico: 0,
+    pensionamenti_cuoco: 0,
+    pensionamenti_assistente_agrario: 0,
+  };
+
+  const resContrattoAA = await resolveFromGraduatorie(mockDataContrattoAA, {
+    exploredPages: mockPagesExplored,
+    fetchAiFn: mockFetchAiMultiPage(pagesReadAA),
+  });
+  const nResAA = resContrattoAA.nomine_contratti![0];
+
+  assert(
+    pagesReadAA.includes("page_1_CS") &&
+    pagesReadAA.includes("page_2_AA"),
+    "7.2 Contratto AA: la ricerca legge anche la pagina 2 (pagine lette: CS e AA)",
+    pagesReadAA
+  );
+
+  assert(
+    nResAA.punteggio === 60.00 &&
+    nResAA.posizione_graduatoria === "2" &&
+    nResAA.origine_punteggio === "Incrociato",
+    "7.2 Contratto AA: restituisce il punteggio AA (60.00 pt, pos. 2)",
+    nResAA
+  );
+
+  // 7.3 Stesso nome in CS (pagina 1) e AA (pagina 2), contratto CS:
+  // la ricerca si ferma alla pagina 1
+  const pagesReadCS: string[] = [];
+
+  const mockDataContrattoCS: ExtractionData = {
+    nome_istituto: "IC Manzoni",
+    nomine_contratti: [
+      {
+        nome_istituto: "IC Manzoni",
+        codice_meccanografico: "MIIC81000A",
+        nominativo: "Rossi Mario",
+        tipologia_personale: "ATA",
+        profilo_lavorativo: "Collaboratore Scolastico",
+        classe_concorso_area_lab: "Non applicabile",
+        tipo_posto: "comune",
+        punteggio: null,
+        posizione_graduatoria: "Non disponibile",
+        fascia: "1",
+        ore_settimanali: "36",
+        decorrenza_contratto: "01/09/2024",
+        durata_contratto_mesi: "10",
+        durata_contratto_giorni: "0",
+        link_del_documento: "http://example.com/doc_cs",
+      },
+    ],
+    convocazioni_collaboratore_scolastico: 0,
+    convocazioni_assistente_amministrativo: 0,
+    convocazioni_docenti: 0,
+    convocazioni_assistente_tecnico: 0,
+    convocazioni_cuoco: 0,
+    convocazioni_assistente_agrario: 0,
+    pensionamenti_collaboratore_scolastico: 0,
+    pensionamenti_assistente_amministrativo: 0,
+    pensionamenti_docenti: 0,
+    pensionamenti_assistente_tecnico: 0,
+    pensionamenti_cuoco: 0,
+    pensionamenti_assistente_agrario: 0,
+  };
+
+  const resContrattoCS = await resolveFromGraduatorie(mockDataContrattoCS, {
+    exploredPages: mockPagesExplored,
+    fetchAiFn: mockFetchAiMultiPage(pagesReadCS),
+  });
+  const nResCS = resContrattoCS.nomine_contratti![0];
+
+  assert(
+    pagesReadCS.includes("page_1_CS") &&
+    !pagesReadCS.includes("page_2_AA"),
+    "7.3 Contratto CS: si ferma alla pagina 1 (pagina 2 AA non viene letta)",
+    pagesReadCS
+  );
+
+  assert(
+    nResCS.punteggio === 45.00 &&
+    nResCS.posizione_graduatoria === "1" &&
+    nResCS.origine_punteggio === "Incrociato",
+    "7.3 Contratto CS: restituisce il punteggio CS (45.00 pt, pos. 1)",
+    nResCS
+  );
+
+  console.log("\n==========================================");
+  console.log(" 🧪 TEST 8: TASK 6-bis/6 (extractPunteggioHeuristic)");
+  console.log("==========================================");
+
+  // Test: "BIANCHI LUCA punti 40,50. ROSSI MARIO punti 54,00. VERDI ANNA punti 33,00" → Rossi = 54; Bianchi = 40.5
+  const multiCandidateText = "BIANCHI LUCA punti 40,50. ROSSI MARIO punti 54,00. VERDI ANNA punti 33,00";
+
+  const resRossi = extractPunteggioHeuristic(multiCandidateText, {
+    nominativo: "Rossi Mario",
+  });
+  assert(
+    resRossi.punteggio === 54,
+    '8.1 extractPunteggioHeuristic: Rossi = 54',
+    resRossi
+  );
+
+  const resBianchi = extractPunteggioHeuristic(multiCandidateText, {
+    nominativo: "Bianchi Luca",
+  });
+  assert(
+    resBianchi.punteggio === 40.5,
+    '8.2 extractPunteggioHeuristic: Bianchi = 40.5',
+    resBianchi
+  );
+
+  const resVerdi = extractPunteggioHeuristic(multiCandidateText, {
+    nominativo: "Verdi Anna",
+  });
+  assert(
+    resVerdi.punteggio === 33,
+    '8.3 extractPunteggioHeuristic: Verdi = 33',
+    resVerdi
   );
 
   console.log("\n==========================================");

@@ -174,12 +174,85 @@ export function findThresholdInText(text: string): { soglia: number | null; sour
 }
 
 /**
+ * Lista di coppie di parole maiuscole standard che non rappresentano un nominativo di candidato
+ * (es. profili ATA, gradi scolastici, dizioni formali).
+ */
+const EXCLUDED_UPPERCASE_PAIRS = new Set([
+  "COLLABORATORE SCOLASTICO",
+  "COLLABORATRICE SCOLASTICA",
+  "ASSISTENTE AMMINISTRATIVO",
+  "ASSISTENTE AMMINISTRATIVA",
+  "ASSISTENTE TECNICO",
+  "ASSISTENTE TECNICA",
+  "OPERATORE SCOLASTICO",
+  "OPERATRICE SCOLASTICA",
+  "PRIMA FASCIA",
+  "SECONDA FASCIA",
+  "TERZA FASCIA",
+  "FASCIA GRADUATORIA",
+  "GRADUATORIA ISTITUTO",
+  "GRADUATORIA PROVINCIALE",
+  "POSTO COMUNE",
+  "POSTO SOSTEGNO",
+  "TEMPO DETERMINATO",
+  "TEMPO INDETERMINATO",
+  "SCUOLA PRIMARIA",
+  "SCUOLA SECONDARIA",
+  "SCUOLA INFANZIA",
+  "DOCENTE SCUOLA",
+  "PERSONALE ATA",
+  "PERSONALE DOCENTE",
+  "DECRETO PUBBLICAZIONE",
+  "CODICE MECCANOGRAFICO",
+]);
+
+function escapeRegExp(str: string): string {
+  return str.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+}
+
+function makeAccentInsensitivePattern(word: string): string {
+  return word
+    .normalize("NFD")
+    .replace(/[\u0300-\u036f]/g, "")
+    .split("")
+    .map(c => {
+      const lower = c.toLowerCase();
+      switch (lower) {
+        case "a": return "[aàáâäãåAÀÁÂÄÃÅ]";
+        case "e": return "[eèéêëEÈÉÊË]";
+        case "i": return "[iìíîïIÌÍÎÏ]";
+        case "o": return "[oòóôöõOÒÓÔÖÕ]";
+        case "u": return "[uùúûüUÙÚÛÜ]";
+        case "c": return "[cçCÇ]";
+        default: return escapeRegExp(c);
+      }
+    })
+    .join("");
+}
+
+function isSameCandidateWords(foundText: string, candidateWords: string[]): boolean {
+  const foundWords = foundText
+    .normalize("NFD")
+    .replace(/[\u0300-\u036f]/g, "")
+    .toLowerCase()
+    .split(/\s+/);
+  const candWords = candidateWords.map(w =>
+    w.normalize("NFD").replace(/[\u0300-\u036f]/g, "").toLowerCase()
+  );
+  if (foundWords.length === candWords.length) {
+    return candWords.every(cw => foundWords.includes(cw));
+  }
+  return false;
+}
+
+/**
  * Estrae un punteggio mediante analisi euristica e regex dal testo di un atto o contratto.
- * TASK 6/7:
- * - Rimosso il fallback su tutto il testo: l'euristica vale SOLO con nominativo trovato nel testo (finestra ±250 caratteri).
+ * TASK 6-bis/6:
+ * - La finestra parte dalla FINE del nominativo e arriva a max 120 caratteri o a fine riga
+ *   (usa le righe originali del testo, non il testo appiattito) — mai prima del nome.
+ * - Se nella finestra compare un altro nominativo (2 parole maiuscole consecutive), tronca lì.
  * - Le soglie ("fino a punteggio 12", "fino a punti 11") NON vanno in punteggio: lasciano punteggio=null
  *   e finiscono in note_cross_reference come "Soglia convocazione: N".
- * - Se il punteggio reale del candidato manca, il TASK 5 si attiva per ricercarlo nelle graduatorie.
  */
 export function extractPunteggioHeuristic(
   text: string,
@@ -189,10 +262,8 @@ export function extractPunteggioHeuristic(
     return { punteggio: null, sogliaConvocazione: null };
   }
 
-  const cleanText = text.replace(/\s+/g, ' ');
-
   // Rileva eventuale soglia di convocazione presente nel documento (es. "fino a punteggio 12", "fino a punti 11")
-  const thResult = findThresholdInText(cleanText);
+  const thResult = findThresholdInText(text);
   const sogliaConvocazione = thResult.soglia;
   const sogliaPhrase = thResult.sourcePhrase;
 
@@ -202,54 +273,65 @@ export function extractPunteggioHeuristic(
     return { punteggio: null, sogliaConvocazione, sogliaPhrase };
   }
 
-  // Normalizzazione caratteri/accenti per il matching del nominativo
-  const normClean = cleanText.normalize("NFD").replace(/[\u0300-\u036f]/g, "").toLowerCase();
-  const normNom = nom.normalize("NFD").replace(/[\u0300-\u036f]/g, "").toLowerCase();
-
-  const occurrences: { index: number; length: number }[] = [];
-
-  let idx = normClean.indexOf(normNom);
-  while (idx !== -1 && occurrences.length < 10) {
-    occurrences.push({ index: idx, length: normNom.length });
-    idx = normClean.indexOf(normNom, idx + 1);
-  }
-
-  // Prova anche cognome e nome invertiti se composti da 2 parole (es. "Mario Rossi" vs "Rossi Mario")
-  const parts = normNom.split(/\s+/).filter(Boolean);
-  if (parts.length === 2) {
-    const reversed = `${parts[1]} ${parts[0]}`;
-    let revIdx = normClean.indexOf(reversed);
-    while (revIdx !== -1 && occurrences.length < 10) {
-      if (!occurrences.some(o => Math.abs(o.index - revIdx) < 5)) {
-        occurrences.push({ index: revIdx, length: reversed.length });
-      }
-      revIdx = normClean.indexOf(reversed, revIdx + 1);
-    }
-  }
-
-  // Se il nominativo non compare nel testo, nessun fallback su tutto il testo
-  if (occurrences.length === 0) {
+  const cleanNom = nom.replace(/[,.]/g, ' ').trim();
+  const words = cleanNom.split(/\s+/).filter(w => w.length > 0);
+  if (words.length === 0) {
     return { punteggio: null, sogliaConvocazione, sogliaPhrase };
   }
 
-  // Analisi mirata sulla finestra ±250 caratteri attorno a ciascuna occorrenza del nominativo
-  for (const occ of occurrences) {
-    const start = Math.max(0, occ.index - 250);
-    const end = Math.min(cleanText.length, occ.index + occ.length + 250);
-    const windowSnippet = cleanText.slice(start, end);
+  // Costruisci la regex per identificare il nominativo nel testo originale
+  let nameRegexStr: string;
+  if (words.length === 2) {
+    const w0 = makeAccentInsensitivePattern(words[0]);
+    const w1 = makeAccentInsensitivePattern(words[1]);
+    nameRegexStr = `\\b(?:${w0}\\s+${w1}|${w1}\\s+${w0})\\b`;
+  } else {
+    nameRegexStr = `\\b${words.map(w => makeAccentInsensitivePattern(w)).join("\\s+")}\\b`;
+  }
 
-    const scoreMatch = findCandidateScoreInSnippet(windowSnippet);
-    if (scoreMatch.punteggio !== null) {
-      return {
-        punteggio: scoreMatch.punteggio,
-        sourcePhrase: scoreMatch.sourcePhrase,
-        sogliaConvocazione,
-        sogliaPhrase,
-      };
+  // TASK 6-bis/6: Usa le righe originali del testo (non il testo appiattito)
+  const lines = text.split(/\r?\n/);
+
+  for (const line of lines) {
+    const nameRegex = new RegExp(nameRegexStr, "gi");
+    let match: RegExpExecArray | null;
+
+    while ((match = nameRegex.exec(line)) !== null) {
+      // La finestra deve partire dalla FINE del nominativo — mai prima del nome
+      const windowStart = match.index + match[0].length;
+      // Arriva a max 120 caratteri o a fine riga (della riga originale)
+      let windowSnippet = line.slice(windowStart, windowStart + 120);
+
+      // Se nella finestra compare un altro nominativo (2 parole maiuscole consecutive), tronca lì
+      const anotherNameRegex = /\b([A-ZÀ-ÖØ-Þ]{2,}(?:'[A-ZÀ-ÖØ-Þ]+)?\s+[A-ZÀ-ÖØ-Þ]{2,})\b/g;
+      let anotherMatch: RegExpExecArray | null;
+
+      while ((anotherMatch = anotherNameRegex.exec(windowSnippet)) !== null) {
+        const candidateFound = anotherMatch[1].replace(/\s+/g, ' ').toUpperCase();
+        if (EXCLUDED_UPPERCASE_PAIRS.has(candidateFound)) {
+          continue;
+        }
+        if (isSameCandidateWords(candidateFound, words)) {
+          continue;
+        }
+        // È un altro nominativo: tronca la finestra prima di questo nominativo
+        windowSnippet = windowSnippet.slice(0, anotherMatch.index);
+        break;
+      }
+
+      const scoreMatch = findCandidateScoreInSnippet(windowSnippet);
+      if (scoreMatch.punteggio !== null) {
+        return {
+          punteggio: scoreMatch.punteggio,
+          sourcePhrase: scoreMatch.sourcePhrase,
+          sogliaConvocazione,
+          sogliaPhrase,
+        };
+      }
     }
   }
 
-  // Nessun punteggio reale trovato nella finestra del nominativo -> punteggio = null (nessun fallback su tutto il testo)
+  // Nessun punteggio reale trovato nella finestra del nominativo -> punteggio = null
   return { punteggio: null, sogliaConvocazione, sogliaPhrase };
 }
 
