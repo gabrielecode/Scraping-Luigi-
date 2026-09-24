@@ -1490,8 +1490,8 @@ async function scrapeWebsite(
       const discoveredLinks = findRelevantSchoolLinks(rawHome, currentUrl, homeDoc);
       log(`Trovati ${discoveredLinks.length} link di sezioni d'interesse (Albo Online / Amministrazione Trasparente).`);
 
-      // Take top 10 highest priority links to crawl deeply
-      const topLinksToFetch = discoveredLinks.slice(0, 10);
+      // Take top 25 highest priority links to crawl deeply (increased from 10)
+      const topLinksToFetch = discoveredLinks.slice(0, 25);
       for (const link of topLinksToFetch) {
         log(`Scansione approfondita sezione: "${link.title}" (${link.url})`);
         try {
@@ -1508,11 +1508,37 @@ async function scrapeWebsite(
           }
           allTexts.push(`=== SOTTOPAGINA (${link.title}) ===\n${subText}`);
 
+          // Controllo file di testo puro collegati nella sottopagina (es. .txt, .csv)
+          if (subDoc) {
+            const allAnchors = Array.from(subDoc.querySelectorAll("a"));
+            for (const anc of allAnchors) {
+              const ah = anc.getAttribute("href") || "";
+              if (ah) {
+                try {
+                  const aResolved = new URL(ah, link.url).href;
+                  const aLower = aResolved.toLowerCase();
+                  const isTextFile = aLower.endsWith(".txt") || aLower.endsWith(".csv") || aLower.endsWith(".rtf") || aLower.includes("text/plain");
+                  if (isTextFile) {
+                    log(`Trovato file di testo puro collegato nella sezione: ${aResolved}`);
+                    const txtRes = await fetchWithProxy(aResolved, false, log, customProxyUrl, failedProxiesByDomain);
+                    if (txtRes?.data) {
+                      const tContent = typeof txtRes.data === "string" ? txtRes.data : String(txtRes.data);
+                      if (tContent && tContent.trim().length > 10) {
+                        log(`Estratti ${tContent.length} caratteri dal file di testo puro ${aResolved}`);
+                        allTexts.push(`=== FILE DI TESTO PURO ALLEGATO (${aResolved}) ===\n${tContent}`);
+                      }
+                    }
+                  }
+                } catch {}
+              }
+            }
+          }
+
           // Scansione e download dei PDF / Documenti trovati direttamente nella tabella o lista della sezione
           const subPagePdfs = extractPdfsFromHtml(rawSub, link.url);
           if (subPagePdfs.length > 0) {
             log(`Trovati ${subPagePdfs.length} documenti/allegati diretti nella sezione "${link.title}".`);
-            const topSubPdfs = subPagePdfs.slice(0, 15);
+            const topSubPdfs = subPagePdfs.slice(0, 20);
             for (const pdfItem of topSubPdfs) {
               log(`Analisi allegato diretto di sezione: "${pdfItem.title}" (${pdfItem.url})`);
               try {
@@ -1530,7 +1556,7 @@ async function scrapeWebsite(
             }
           }
 
-          // TASK 2: Extract individual acts (up to 25 acts) and iterate over them
+          // TASK 2: Extract individual acts (up to 30 acts) and iterate over them
           const actLinks = findActLinks(rawSub, link.url, subDoc);
           if (actLinks.length > 0) {
             log(`Trovati ${actLinks.length} atti`);
@@ -1549,10 +1575,29 @@ async function scrapeWebsite(
                     const ph = pa.getAttribute("href") || "";
                     if (ph) {
                       const textLabel = pa.textContent || pa.getAttribute("title") || "";
+                      const pdfResolved = new URL(ph, act.url).href;
+                      const pLower = pdfResolved.toLowerCase();
+                      const isTextFile = pLower.endsWith(".txt") || pLower.endsWith(".csv") || pLower.endsWith(".rtf") || pLower.includes("text/plain");
+
+                      if (isTextFile) {
+                        log(`File di testo puro trovato nell'atto: ${pdfResolved}`);
+                        try {
+                          const actTxtRes = await fetchWithProxy(pdfResolved, false, log, customProxyUrl, failedProxiesByDomain);
+                          if (actTxtRes?.data) {
+                            const actTxtContent = typeof actTxtRes.data === "string" ? actTxtRes.data : String(actTxtRes.data);
+                            if (actTxtContent && actTxtContent.trim().length > 10) {
+                              log(`Estratti ${actTxtContent.length} caratteri dal file di testo dell'atto ${act.id}`);
+                              allTexts.push(`=== ATTO ${act.id} TESTO PURO ALLEGATO (${pdfResolved}) ===\n${actTxtContent}`);
+                            }
+                          }
+                        } catch (actTxtErr: any) {
+                          log(`Avviso lettura file di testo atto ${act.id}: ${actTxtErr.message}`);
+                        }
+                      }
+
                       const isPdf = isDocumentOrPdfLink(ph, textLabel);
 
                       if (isPdf) {
-                        const pdfResolved = new URL(ph, act.url).href;
                         log(`Documento allegato trovato nell'atto: ${pdfResolved}`);
 
                         // Estrai il testo completo del PDF dell'atto
