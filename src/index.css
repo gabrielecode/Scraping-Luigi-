@@ -4,13 +4,50 @@
   --font-sans: "Inter", ui-sans-serif, system-ui, sans-serif;
 }
 
+:root {
+  color-scheme: dark;
+}
+
 body {
-  background-color: #020617;
-  color: #f1f5f9;
+  background-color: var(--color-slate-950);
+  color: var(--color-slate-100);
   font-family: var(--font-sans);
   min-height: 100vh;
   margin: 0;
   -webkit-font-smoothing: antialiased;
+  transition: background-color 0.15s ease, color 0.15s ease;
+}
+
+/* Light Theme Variables Override */
+html.light,
+.light {
+  color-scheme: light;
+  --color-slate-950: #f8fafc;
+  --color-slate-900: #ffffff;
+  --color-slate-800: #e2e8f0;
+  --color-slate-700: #cbd5e1;
+  --color-slate-600: #94a3b8;
+  --color-slate-500: #64748b;
+  --color-slate-400: #475569;
+  --color-slate-300: #334155;
+  --color-slate-200: #1e293b;
+  --color-slate-100: #0f172a;
+
+  /* Contrast-optimized semantic accents for light mode (WCAG AA compliant) */
+  --color-blue-500: #2563eb;
+  --color-blue-400: #1d4ed8;
+  --color-blue-300: #1e40af;
+  --color-emerald-500: #059669;
+  --color-emerald-400: #047857;
+  --color-amber-500: #d97706;
+  --color-amber-400: #b45309;
+  --color-rose-500: #e11d48;
+  --color-rose-400: #be123c;
+}
+
+/* Dimming modal backdrop overlay in light mode */
+html.light .fixed.inset-0.bg-slate-950\/80 {
+  background-color: rgba(15, 23, 42, 0.45);
 }
 
 @media (prefers-reduced-motion: reduce) {

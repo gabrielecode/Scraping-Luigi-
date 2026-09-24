@@ -1,4 +1,4 @@
-import React, { useState } from "react";
+import React, { useState, useEffect } from "react";
 import { 
   FileSpreadsheet, 
   Search, 
@@ -33,7 +33,9 @@ import {
   EyeOff,
   Check,
   X,
-  AlertTriangle
+  AlertTriangle,
+  Sun,
+  Moon
 } from "lucide-react";
 import { ExtractionResult, ExtractionData, BatchHistoryItem, NominaContrattoItem, GraduatoriaIstituto, OriginePunteggio } from "./types";
 import { GraduatorieManager } from "./components/GraduatorieManager";
@@ -72,6 +74,36 @@ export default function App() {
   const [activeTab, setActiveTab] = useState<"batch" | "single" | "albo" | "search" | "history" | "guide" | "graduatorie">("batch");
   const [graduatorie, setGraduatorie] = useState<GraduatoriaIstituto[]>(() => getStoredGraduatorie());
   const [singleNominativo, setSingleNominativo] = useState("");
+  
+  // Theme state (Dark / Light) with LocalStorage and system preference support
+  const [theme, setTheme] = useState<"dark" | "light">(() => {
+    if (typeof window !== "undefined") {
+      const saved = localStorage.getItem("scuola_theme");
+      if (saved === "light" || saved === "dark") return saved;
+      if (window.matchMedia("(prefers-color-scheme: light)").matches) {
+        return "light";
+      }
+    }
+    return "dark";
+  });
+
+  useEffect(() => {
+    if (typeof document !== "undefined") {
+      const root = document.documentElement;
+      if (theme === "light") {
+        root.classList.remove("dark");
+        root.classList.add("light");
+      } else {
+        root.classList.remove("light");
+        root.classList.add("dark");
+      }
+      localStorage.setItem("scuola_theme", theme);
+    }
+  }, [theme]);
+
+  const toggleTheme = () => {
+    setTheme(prev => (prev === "dark" ? "light" : "dark"));
+  };
   
   // Configuration & LocalStorage state
   const [openRouterApiKey, setOpenRouterApiKey] = useState(() => {
@@ -2607,6 +2639,21 @@ const executeClientSideExtract = async (
           </div>
 
           <div className="flex items-center gap-2 shrink-0">
+            {/* Light / Dark Mode Toggle Button */}
+            <button
+              type="button"
+              onClick={toggleTheme}
+              aria-label={theme === "dark" ? "Passa a tema chiaro (Light mode)" : "Passa a tema scuro (Dark mode)"}
+              title={theme === "dark" ? "Passa a tema chiaro (Light mode)" : "Passa a tema scuro (Dark mode)"}
+              className="size-10 rounded-md border border-slate-800 bg-slate-900 hover:bg-slate-800 hover:border-slate-700 text-slate-300 flex items-center justify-center transition-colors duration-150 cursor-pointer focus-visible:ring-2 ring-blue-500 ring-offset-2 ring-offset-slate-950 shrink-0"
+            >
+              {theme === "dark" ? (
+                <Sun className="size-[18px] text-amber-400" />
+              ) : (
+                <Moon className="size-[18px] text-blue-500" />
+              )}
+            </button>
+
             <button
               type="button"
               onClick={() => setIsSettingsOpen(true)}
@@ -2872,6 +2919,51 @@ const executeClientSideExtract = async (
                       </div>
                     )}
                   </div>
+                </div>
+              </div>
+
+              {/* SECTION: Tema & Aspetto (Light / Dark) */}
+              <div className="border-t border-slate-800 pt-5 space-y-3">
+                <div className="flex items-center justify-between">
+                  <h4 className="text-xs font-semibold uppercase tracking-wider text-slate-400 flex items-center gap-1.5">
+                    {theme === "dark" ? (
+                      <Moon className="w-3.5 h-3.5 text-blue-400" />
+                    ) : (
+                      <Sun className="w-3.5 h-3.5 text-amber-400" />
+                    )}
+                    <span>Aspetto & Tema Grafico</span>
+                  </h4>
+                  <span className="text-[10px] text-slate-400 font-medium">
+                    {theme === "dark" ? "Tema Scuro attivo" : "Tema Chiaro attivo"}
+                  </span>
+                </div>
+
+                <div className="grid grid-cols-2 gap-3">
+                  <button
+                    type="button"
+                    onClick={() => setTheme("dark")}
+                    className={`h-11 px-4 rounded-md border flex items-center justify-center gap-2 text-xs font-semibold transition-colors cursor-pointer focus-visible:ring-2 ring-blue-500 ring-offset-2 ring-offset-slate-950 ${
+                      theme === "dark"
+                        ? "bg-blue-500/10 border-blue-500 text-blue-400"
+                        : "bg-slate-950 border-slate-800 text-slate-400 hover:text-slate-200 hover:border-slate-700"
+                    }`}
+                  >
+                    <Moon className="size-4 text-blue-400" />
+                    <span>Tema Scuro (Dark)</span>
+                  </button>
+
+                  <button
+                    type="button"
+                    onClick={() => setTheme("light")}
+                    className={`h-11 px-4 rounded-md border flex items-center justify-center gap-2 text-xs font-semibold transition-colors cursor-pointer focus-visible:ring-2 ring-blue-500 ring-offset-2 ring-offset-slate-950 ${
+                      theme === "light"
+                        ? "bg-blue-500/10 border-blue-500 text-blue-400"
+                        : "bg-slate-950 border-slate-800 text-slate-400 hover:text-slate-200 hover:border-slate-700"
+                    }`}
+                  >
+                    <Sun className="size-4 text-amber-400" />
+                    <span>Tema Chiaro (Light)</span>
+                  </button>
                 </div>
               </div>
 
