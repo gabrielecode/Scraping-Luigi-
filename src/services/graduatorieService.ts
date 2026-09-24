@@ -1,4 +1,4 @@
-import { GraduatoriaIstituto, GraduatoriaIstitutoEntry, NominaContrattoItem, AlboPretorioContract, OriginePunteggio } from "../types";
+import { GraduatoriaIstituto, GraduatoriaIstitutoEntry, NominaContrattoItem, AlboPretorioContract, OriginePunteggio, ExtractionData } from "../types";
 
 const STORAGE_KEY = "scuola_graduatorie_istituto";
 
@@ -1182,6 +1182,7 @@ export interface GraduatoriaExtractedEntry {
   punteggio: number | null;
   posizione?: number | null;
   classe_concorso?: string;
+  fascia?: string | null;
 }
 
 export interface GraduatoriaExtractionResult {
@@ -1204,7 +1205,8 @@ SCHEMA JSON OBBLIGATORIO:
       "nominativo": "COGNOME NOME o NOME COGNOME",
       "punteggio": number | null,
       "posizione": number | null,
-      "classe_concorso": string
+      "classe_concorso": string,
+      "fascia": string | null
     }
   ]
 }
@@ -1223,14 +1225,15 @@ REGOLE CRITICHE:
    - "punteggio": Deve essere un valore numerico valido con eventuali decimali (es. 54.5, 88.0, 112.5). Se il punteggio non è presente o non è riportato, imposta RIGOROSAMENTE null. MAI restituire 0 se il punteggio è assente.
    - "posizione": Numero intero della posizione in graduatoria se presente, altrimenti null.
    - "classe_concorso": Codice classe di concorso o profilo ATA della riga/graduatoria.
+   - "fascia": Fascia della graduatoria per questa specifica riga/candidato (es. "1", "2", "3", "Prima fascia", "Permanente", ecc., string | null) ricavata dalla sezione o intestazione a cui appartiene. Se non determinabile a livello di riga/sezione, imposta null.
 3. Rispondi RIGOROSAMENTE ed ESCLUSIVAMENTE con l'oggetto JSON richiesto, senza blocchi markdown esterni o testo addizionale.`;
 
 /**
  * Prefiltra il testo di una pagina o documento di graduatoria:
- * - Intestazione (primi 1500 caratteri di ogni pagina/sezione)
- * - Righe contenenti i cognomi/nomi cercati ± 3 righe di contesto
+ * - Intestazione completa (primi 1500 caratteri) SOLO per la prima pagina/sezione;
+ *   per le altre sezioni SOLO le righe con i cognomi cercati (±3 righe di contesto, oppure 0 per il retry).
  */
-export function prefilterGraduatoriaText(text: string, targetNames: string[]): string {
+export function prefilterGraduatoriaText(text: string, targetNames: string[], contextLines: number = 3): string {
   if (!text) return "";
   const cleanedNames = targetNames
     .map(n => n.trim())
@@ -1256,22 +1259,26 @@ export function prefilterGraduatoriaText(text: string, targetNames: string[]): s
   const pageSections = text.split(/(?=\n--- PAGINA \d+)/i);
   const resultBlocks: string[] = [];
 
-  for (const section of pageSections) {
+  for (let sIdx = 0; sIdx < pageSections.length; sIdx++) {
+    const section = pageSections[sIdx];
     const lines = section.split("\n");
     let headerText = "";
     let headerLineCount = 0;
 
-    for (let i = 0; i < lines.length; i++) {
-      if (headerText.length + lines[i].length <= 1500) {
-        headerText += lines[i] + "\n";
-        headerLineCount = i + 1;
-      } else {
-        break;
+    // Intestazione completa (1500 car.) SOLO per la prima pagina/sezione
+    if (sIdx === 0) {
+      for (let i = 0; i < lines.length; i++) {
+        if (headerText.length + lines[i].length <= 1500) {
+          headerText += lines[i] + "\n";
+          headerLineCount = i + 1;
+        } else {
+          break;
+        }
       }
     }
 
     const matchedLineIndices = new Set<number>();
-    for (let i = headerLineCount; i < lines.length; i++) {
+    for (let i = 0; i < lines.length; i++) {
       const lineLower = lines[i].toLowerCase();
       let matched = false;
       for (const tok of searchTokens) {
@@ -1282,8 +1289,21 @@ export function prefilterGraduatoriaText(text: string, targetNames: string[]): s
         }
       }
       if (matched) {
-        for (let j = Math.max(headerLineCount, i - 3); j <= Math.min(lines.length - 1, i + 3); j++) {
-          matchedLineIndices.add(j);
+        if (contextLines > 0) {
+          const minJ = Math.max(0, i - contextLines);
+          const maxJ = Math.min(lines.length - 1, i + contextLines);
+          for (let j = minJ; j <= maxJ; j++) {
+            if (sIdx === 0 && j < headerLineCount) {
+              // già nell'intestazione della prima pagina
+              continue;
+            }
+            matchedLineIndices.add(j);
+          }
+        } else {
+          // Senza contesto ±3 (solo righe matchate)
+          if (!(sIdx === 0 && i < headerLineCount)) {
+            matchedLineIndices.add(i);
+          }
         }
       }
     }
@@ -1291,7 +1311,9 @@ export function prefilterGraduatoriaText(text: string, targetNames: string[]): s
     let block = headerText.trim();
     const sortedIndices = Array.from(matchedLineIndices).sort((a, b) => a - b);
     if (sortedIndices.length > 0) {
-      block += "\n\n... [RIGHE CON CANDIDATI CERCATI] ...\n";
+      if (block) {
+        block += "\n\n... [RIGHE CON CANDIDATI CERCATI] ...\n";
+      }
       let prevIdx = -1;
       for (const idx of sortedIndices) {
         if (prevIdx !== -1 && idx > prevIdx + 1) {
@@ -1301,7 +1323,10 @@ export function prefilterGraduatoriaText(text: string, targetNames: string[]): s
         prevIdx = idx;
       }
     }
-    resultBlocks.push(block.trim());
+
+    if (block.trim()) {
+      resultBlocks.push(block.trim());
+    }
   }
 
   return resultBlocks.filter(Boolean).join("\n\n");
@@ -1317,8 +1342,10 @@ export function buildGraduatoriaUserPrompt(filteredText: string, targetNames: st
 }
 
 /**
- * Esegue il parsing del JSON della graduatoria con ritentativo (1 volta con testo dimezzato)
- * se il modello non restituisce un JSON valido, loggando eventuali errori.
+ * Esegue il parsing del JSON della graduatoria con ritentativo:
+ * - Tentativo 1: prefiltro con intestazione pagina 1 + righe matchate (±3 righe di contesto)
+ * - Tentativo 2 (Retry): non dimezza il testo. Ripete con intestazione pagina 1 + solo righe matchate (senza contesto ±3)
+ * - Aggiunge "fascia" per ogni riga (con meta.fascia come fallback se la riga non la specifica)
  */
 export async function extractGraduatoriaWithRetry(
   text: string,
@@ -1327,11 +1354,26 @@ export async function extractGraduatoriaWithRetry(
   fetchFn: (promptText: string, sysPrompt: string) => Promise<any>,
   onLog?: (msg: string) => void
 ): Promise<GraduatoriaExtractionResult | null> {
-  const filtered = prefilterGraduatoriaText(text, targetNames);
+  const filtered = prefilterGraduatoriaText(text, targetNames, 3);
   if (!filtered || filtered.trim().length < 20) {
     onLog?.("Nessun testo utile dopo il pre-filtraggio per i nominativi cercati.");
     return null;
   }
+
+  const mapEntriesWithFasciaFallback = (entries: any[], metaFascia: string | null): GraduatoriaExtractedEntry[] => {
+    if (!Array.isArray(entries)) return [];
+    return entries.map(entry => {
+      const rawFascia = entry?.fascia;
+      const entryFascia = (rawFascia !== undefined && rawFascia !== null && String(rawFascia).trim() !== "" && String(rawFascia).toLowerCase() !== "null")
+        ? String(rawFascia).trim()
+        : (metaFascia || null);
+
+      return {
+        ...entry,
+        fascia: entryFascia,
+      };
+    });
+  };
 
   const prompt1 = buildGraduatoriaUserPrompt(filtered, targetNames);
 
@@ -1340,36 +1382,38 @@ export async function extractGraduatoriaWithRetry(
     const content1 = rawRes1?.choices?.[0]?.message?.content || "";
     const parsed1 = JSON.parse(content1);
     if (parsed1 && typeof parsed1 === "object") {
+      const meta: GraduatoriaMeta = parsed1.meta || {
+        tipologia_personale: null,
+        fascia: null,
+        profilo_o_cdc: null,
+        anno_scolastico: null,
+      };
       return {
-        meta: parsed1.meta || {
-          tipologia_personale: null,
-          fascia: null,
-          profilo_o_cdc: null,
-          anno_scolastico: null,
-        },
-        graduatoria_entries: Array.isArray(parsed1.graduatoria_entries) ? parsed1.graduatoria_entries : [],
+        meta,
+        graduatoria_entries: mapEntriesWithFasciaFallback(parsed1.graduatoria_entries, meta.fascia),
       };
     }
   } catch (err1: any) {
-    onLog?.(`Risposta non in formato JSON valido (${err1.message}). Nuovo tentativo con testo dimezzato...`);
+    onLog?.(`Risposta non in formato JSON valido (${err1.message}). Nuovo tentativo con intestazione pagina 1 + solo righe matchate...`);
   }
 
-  // Tentativo 2: testo dimezzato
+  // Tentativo 2: non dimezzare il testo. Ripeti con intestazione pagina 1 + solo righe matchate (senza contesto ±3)
   try {
-    const halvedText = filtered.slice(0, Math.floor(filtered.length / 2));
-    const prompt2 = buildGraduatoriaUserPrompt(halvedText, targetNames);
+    const retryFiltered = prefilterGraduatoriaText(text, targetNames, 0);
+    const prompt2 = buildGraduatoriaUserPrompt(retryFiltered, targetNames);
     const rawRes2 = await fetchFn(prompt2, GRADUATORIA_EXTRACTION_SYSTEM_PROMPT);
     const content2 = rawRes2?.choices?.[0]?.message?.content || "";
     const parsed2 = JSON.parse(content2);
     if (parsed2 && typeof parsed2 === "object") {
+      const meta: GraduatoriaMeta = parsed2.meta || {
+        tipologia_personale: null,
+        fascia: null,
+        profilo_o_cdc: null,
+        anno_scolastico: null,
+      };
       return {
-        meta: parsed2.meta || {
-          tipologia_personale: null,
-          fascia: null,
-          profilo_o_cdc: null,
-          anno_scolastico: null,
-        },
-        graduatoria_entries: Array.isArray(parsed2.graduatoria_entries) ? parsed2.graduatoria_entries : [],
+        meta,
+        graduatoria_entries: mapEntriesWithFasciaFallback(parsed2.graduatoria_entries, meta.fascia),
       };
     }
   } catch (err2: any) {
@@ -1499,6 +1543,500 @@ export function isClassMatch(classA?: string, classB?: string): boolean {
 
   // SOLO uguaglianza dei valori canonici. Elimina ogni includes().
   return normA === normB;
+}
+
+// -------------------------------------------------------------
+// TASK 5 — resolveFromGraduatorie
+// -------------------------------------------------------------
+
+export interface GraduatoriaCollectedEntry {
+  nominativo: string;
+  punteggio: number | null;
+  posizione: number | null;
+  fascia: string | null;
+  classe: string;
+  url: string;
+  tipologia?: "ATA" | "DOCENTE" | null;
+}
+
+export interface ResolveGraduatorieOptions {
+  apiKey?: string;
+  targetUrl?: string;
+  customProxy?: string;
+  failedProxiesByDomain?: Map<string, Set<string>>;
+  exploredPages?: ExploredGraduatoriaPage[];
+  collectedEntries?: GraduatoriaCollectedEntry[];
+  fetchAiFn?: (promptText: string, sysPrompt: string) => Promise<any>;
+  fetchProxyFn?: (
+    url: string,
+    asArrayBuffer?: boolean,
+    onLog?: (msg: string) => void
+  ) => Promise<{ data: any; method?: string; format: "html" | "markdown" | "buffer" }>;
+  pdfTextExtractor?: (buffer: ArrayBuffer, maxPages?: number) => Promise<{ text: string; numPages: number }>;
+  pdfAiFallbackFn?: (pdfUrl: string, sysPrompt: string) => Promise<any>;
+  onLog?: (msg: string) => void;
+  initialContent?: string;
+  initialDoc?: Document;
+}
+
+export function isPunteggioMissing(val: any): boolean {
+  if (val === null || val === undefined) return true;
+  if (typeof val === "number") return isNaN(val);
+  const s = String(val).trim().toLowerCase();
+  if (
+    !s ||
+    s === "non disponibile" ||
+    s === "da verificare manualmente" ||
+    s === "null" ||
+    s === "undefined" ||
+    s === "n/d" ||
+    s === "nd" ||
+    s === "-"
+  ) {
+    return true;
+  }
+  return normalizePunteggio(val) === null;
+}
+
+export function isFasciaMissing(val: any): boolean {
+  if (val === null || val === undefined) return true;
+  const s = String(val).trim().toLowerCase();
+  if (
+    !s ||
+    s === "non disponibile" ||
+    s === "da verificare manualmente" ||
+    s === "null" ||
+    s === "undefined" ||
+    s === "n/d" ||
+    s === "nd" ||
+    s === "-"
+  ) {
+    return true;
+  }
+  return false;
+}
+
+export function isPosizioneMissing(val: any): boolean {
+  if (val === null || val === undefined) return true;
+  const s = String(val).trim().toLowerCase();
+  if (
+    !s ||
+    s === "non disponibile" ||
+    s === "da verificare manualmente" ||
+    s === "null" ||
+    s === "undefined" ||
+    s === "n/d" ||
+    s === "nd" ||
+    s === "-"
+  ) {
+    return true;
+  }
+  return parsePosizioneNumber(val) === null;
+}
+
+export function doesItemNeedGraduatoriaResolution(item: {
+  nominativo?: string;
+  punteggio?: any;
+  fascia?: any;
+  graduatoria_fascia?: any;
+  posizione_graduatoria?: any;
+}): boolean {
+  const nom = (item.nominativo || "").trim();
+  if (!nom) return false;
+  const f = item.fascia !== undefined ? item.fascia : item.graduatoria_fascia;
+  return isPunteggioMissing(item.punteggio) || isFasciaMissing(f) || isPosizioneMissing(item.posizione_graduatoria);
+}
+
+function resolveSingleTarget<T extends {
+  nominativo?: string;
+  tipologia_personale?: any;
+  profilo_lavorativo?: string;
+  profilo_professionale?: string;
+  classe_concorso_area_lab?: string;
+  classe_di_concorso?: string;
+  fascia?: string;
+  graduatoria_fascia?: string;
+  punteggio?: number | null | string;
+  origine_punteggio?: OriginePunteggio;
+  posizione_graduatoria?: string;
+  note_cross_reference?: string;
+}>(
+  item: T,
+  collectedEntries: GraduatoriaCollectedEntry[],
+  onLog?: (msg: string) => void,
+  isTopLevel: boolean = false
+): T {
+  const nom = (item.nominativo || "").trim();
+  if (!nom) {
+    return item;
+  }
+
+  // Estrai i candidati validi per classe/profilo della nomina escludendo placeholder
+  const rawClassCandidates = [
+    item.classe_concorso_area_lab,
+    item.classe_di_concorso,
+    item.profilo_lavorativo,
+    item.profilo_professionale,
+  ].filter(c => {
+    if (!c || typeof c !== "string") return false;
+    const s = c.trim().toLowerCase();
+    return s !== "" &&
+           s !== "non applicabile" &&
+           s !== "non disponibile" &&
+           s !== "n/a" &&
+           s !== "n.a." &&
+           s !== "n/d" &&
+           s !== "-";
+  }) as string[];
+
+  const itemClass = rawClassCandidates[0] || "";
+
+  const itemTipologia = item.tipologia_personale;
+  const currentFascia = item.fascia !== undefined ? item.fascia : item.graduatoria_fascia;
+  const hasValidContractFascia = !isFasciaMissing(currentFascia);
+  const contractNormFascia = hasValidContractFascia ? normalizeFascia(currentFascia) : null;
+
+  // 3) Match: isNameMatch con IL SUO nominativo + isClassMatch con LA SUA classe/profilo (+ tipologia coerente se nota)
+  let matchedEntries = collectedEntries.filter(entry => {
+    if (!isNameMatch(entry.nominativo, nom)) return false;
+    if (entry.classe && rawClassCandidates.length > 0) {
+      const matchAnyClass = rawClassCandidates.some(c => isClassMatch(entry.classe, c));
+      if (!matchAnyClass) return false;
+    }
+    if (itemTipologia && entry.tipologia) {
+      if (itemTipologia.toUpperCase() !== entry.tipologia.toUpperCase()) return false;
+    }
+    return true;
+  });
+
+  // 4) Se il contratto ha già una fascia valida NON toccarla e considera solo entries della stessa fascia
+  if (hasValidContractFascia && contractNormFascia) {
+    matchedEntries = matchedEntries.filter(entry => {
+      const entryNormFascia = normalizeFascia(entry.fascia || "");
+      return entryNormFascia === contractNormFascia;
+    });
+  }
+
+  const existingNotes = item.note_cross_reference || "";
+  const existingSoglia = existingNotes.includes("Soglia convocazione:")
+    ? ` | ${existingNotes.split("|").find((s: string) => s.includes("Soglia convocazione:"))?.trim() || ""}`
+    : "";
+
+  const label = isTopLevel ? `Top-level "${nom}"` : `Nomina "${nom}"`;
+
+  // 5) Nessun match → "Da verificare manualmente" solo sui campi ancora mancanti
+  if (matchedEntries.length === 0) {
+    const updated = { ...item };
+    if (isPunteggioMissing(updated.punteggio)) {
+      updated.punteggio = "Da verificare manualmente";
+      updated.origine_punteggio = "Non disponibile";
+    }
+    if (isPosizioneMissing(updated.posizione_graduatoria)) {
+      updated.posizione_graduatoria = "Da verificare manualmente";
+    }
+    if (isFasciaMissing(currentFascia)) {
+      if (isTopLevel) {
+        (updated as any).graduatoria_fascia = "Da verificare manualmente";
+      } else {
+        (updated as any).fascia = "Da verificare manualmente";
+      }
+    }
+    onLog?.(`⚠️ ${label} (${itemClass || "N/D"}): nessun riscontro in graduatoria, campi mancanti segnati per verifica manuale`);
+    return updated;
+  }
+
+  // 5) Più match con fasce diverse e fascia contratto assente → fascia e punteggio "Da verificare manualmente"
+  if (!hasValidContractFascia) {
+    const distinctFasce = Array.from(
+      new Set(matchedEntries.map(e => normalizeFascia(e.fascia || "")).filter(Boolean))
+    );
+    if (distinctFasce.length > 1) {
+      const updated = { ...item };
+      updated.punteggio = "Da verificare manualmente";
+      updated.origine_punteggio = "Non disponibile";
+      if (isTopLevel) {
+        (updated as any).graduatoria_fascia = "Da verificare manualmente";
+      } else {
+        (updated as any).fascia = "Da verificare manualmente";
+      }
+      if (isPosizioneMissing(updated.posizione_graduatoria)) {
+        updated.posizione_graduatoria = "Da verificare manualmente";
+      }
+      updated.note_cross_reference = `Ambiguità: rilevati riscontri in fasce diverse (${distinctFasce.join(", ")}). Da verificare manualmente.${existingSoglia}`;
+      onLog?.(`⚠️ ${label} (${itemClass || "N/D"}): ambiguità fasce diverse (${distinctFasce.join(", ")}), segnato per verifica manuale`);
+      return updated;
+    }
+  }
+
+  // Match univoco o coerente per fascia: seleziona la miglior entry
+  // Preferisci l'entry con punteggio numerico valido
+  const bestEntry =
+    matchedEntries.find(e => e.punteggio !== null && e.punteggio !== undefined && !isNaN(Number(e.punteggio))) ||
+    matchedEntries[0];
+
+  const updated = { ...item };
+  let fasciaRicavata = false;
+
+  // Compila SOLO i campi mancanti:
+  // - punteggio (origine_punteggio "Incrociato")
+  if (isPunteggioMissing(updated.punteggio)) {
+    if (bestEntry.punteggio !== null && bestEntry.punteggio !== undefined && !isNaN(Number(bestEntry.punteggio))) {
+      updated.punteggio = Number(Number(bestEntry.punteggio).toFixed(2));
+      updated.origine_punteggio = "Incrociato";
+    } else {
+      updated.punteggio = "Da verificare manualmente";
+      updated.origine_punteggio = "Non disponibile";
+    }
+  }
+
+  // - posizione_graduatoria
+  if (isPosizioneMissing(updated.posizione_graduatoria)) {
+    if (bestEntry.posizione !== null && bestEntry.posizione !== undefined) {
+      updated.posizione_graduatoria = String(bestEntry.posizione);
+    } else {
+      updated.posizione_graduatoria = "Da verificare manualmente";
+    }
+  }
+
+  // - fascia (normalizeFascia). Se il contratto ha già una fascia valida NON toccarla
+  if (isFasciaMissing(currentFascia)) {
+    const rawFascia = bestEntry.fascia;
+    if (rawFascia && rawFascia.trim()) {
+      const normF = normalizeFascia(rawFascia);
+      if (isTopLevel) {
+        (updated as any).graduatoria_fascia = normF;
+      } else {
+        (updated as any).fascia = normF;
+      }
+      fasciaRicavata = true;
+    } else {
+      if (isTopLevel) {
+        (updated as any).graduatoria_fascia = "Da verificare manualmente";
+      } else {
+        (updated as any).fascia = "Da verificare manualmente";
+      }
+    }
+  }
+
+  // 6) note_cross_reference: URL fonte + "fascia da graduatoria" se ricavata. Log di 1 riga per nomina.
+  const fasciaSuffix = fasciaRicavata ? " (fascia da graduatoria)" : "";
+  const resolvedFascia = isTopLevel ? (updated as any).graduatoria_fascia : (updated as any).fascia;
+  updated.note_cross_reference = `Punteggio incrociato da graduatoria (${bestEntry.url}): pos. ${updated.posizione_graduatoria} = ${updated.punteggio} pt${fasciaSuffix}${existingSoglia}`;
+
+  onLog?.(`✅ ${label} (${itemClass || "N/D"}): punteggio ${updated.punteggio}, pos. ${updated.posizione_graduatoria}, fascia ${resolvedFascia}`);
+
+  return updated;
+}
+
+/**
+ * TASK 5 — Risolve i campi mancanti (punteggio, posizione, fascia) incrociando le graduatorie scolastiche.
+ * Usata da App.tsx sia in modalità singola che batch.
+ */
+export async function resolveFromGraduatorie<T extends ExtractionData>(
+  data: T,
+  options: ResolveGraduatorieOptions
+): Promise<T> {
+  // 1) Trigger: top-level e ogni nomina con nominativo, se manca punteggio OPPURE fascia ("Non disponibile"/vuota) OPPURE posizione_graduatoria.
+  const topNeeds = doesItemNeedGraduatoriaResolution({
+    nominativo: data.nominativo,
+    punteggio: data.punteggio,
+    fascia: data.graduatoria_fascia,
+    posizione_graduatoria: data.posizione_graduatoria,
+  });
+
+  const anyNominaNeeds =
+    Array.isArray(data.nomine_contratti) &&
+    data.nomine_contratti.some(n => doesItemNeedGraduatoriaResolution(n));
+
+  const shouldTrigger = topNeeds || anyNominaNeeds;
+
+  if (!shouldTrigger && (!options.collectedEntries || options.collectedEntries.length === 0)) {
+    return data;
+  }
+
+  // 2) Raccogli le entries da TUTTE le pagine/PDF esplorati (nessun break al primo match)
+  const collectedEntries: GraduatoriaCollectedEntry[] = [];
+
+  if (options.collectedEntries && options.collectedEntries.length > 0) {
+    collectedEntries.push(...options.collectedEntries);
+  } else {
+    // Determina tutti i nominativi da cercare
+    const targetNamesSet = new Set<string>();
+    if (data.nominativo && data.nominativo.trim()) {
+      targetNamesSet.add(data.nominativo.trim());
+    }
+    if (Array.isArray(data.nomine_contratti)) {
+      for (const n of data.nomine_contratti) {
+        if (n.nominativo && n.nominativo.trim()) {
+          targetNamesSet.add(n.nominativo.trim());
+        }
+      }
+    }
+    const targetNamesToSearch = Array.from(targetNamesSet);
+
+    if (targetNamesToSearch.length === 0) {
+      return data;
+    }
+
+    let exploredPages = options.exploredPages || [];
+    if (exploredPages.length === 0 && options.fetchProxyFn && options.targetUrl) {
+      options.onLog?.("🔎 Cerco in graduatoria...");
+      try {
+        exploredPages = await searchGraduatoriaPages(
+          options.targetUrl,
+          options.fetchProxyFn,
+          options.onLog,
+          options.initialContent,
+          options.initialDoc
+        );
+      } catch (err: any) {
+        options.onLog?.(`Avviso ricerca pagine graduatoria: ${err.message}`);
+      }
+    }
+
+    data.pagine_graduatoria_esplorate = exploredPages.map(p => p.url);
+
+    if (exploredPages.length > 0 && options.fetchAiFn) {
+      for (const page of exploredPages) {
+        // Analisi testo HTML / markdown della pagina
+        const pageContent = (page.content || "").trim();
+        if (pageContent.length > 50) {
+          options.onLog?.(`Estrazione dati graduatoria da: "${page.title}" (${page.url})`);
+          try {
+            const extractionResult = await extractGraduatoriaWithRetry(
+              pageContent,
+              targetNamesToSearch,
+              options.apiKey || "",
+              options.fetchAiFn,
+              options.onLog
+            );
+            const entries = extractionResult?.graduatoria_entries || [];
+            for (const entry of entries) {
+              if (!entry || !entry.nominativo) continue;
+              collectedEntries.push({
+                nominativo: entry.nominativo,
+                punteggio: entry.punteggio !== undefined ? entry.punteggio : null,
+                posizione: entry.posizione !== undefined ? entry.posizione : null,
+                fascia: entry.fascia || extractionResult?.meta?.fascia || null,
+                classe: entry.classe_concorso || extractionResult?.meta?.profilo_o_cdc || "",
+                tipologia: extractionResult?.meta?.tipologia_personale || null,
+                url: page.url,
+              });
+            }
+          } catch (pageErr: any) {
+            options.onLog?.(`Avviso estrazione pagina graduatoria ${page.url}: ${pageErr.message}`);
+          }
+        }
+
+        // Analisi PDF allegati
+        if (Array.isArray(page.pdfLinks) && page.pdfLinks.length > 0 && options.fetchProxyFn) {
+          const pdfsToScan = page.pdfLinks.slice(0, 3);
+          for (const pdfUrl of pdfsToScan) {
+            options.onLog?.(`Estrazione da PDF graduatoria allegato: ${pdfUrl}`);
+            try {
+              let pdfText = "";
+              try {
+                const fetchRes = await options.fetchProxyFn(pdfUrl, true, options.onLog);
+                if (fetchRes?.data && options.pdfTextExtractor) {
+                  const { text } = await options.pdfTextExtractor(fetchRes.data as ArrayBuffer, 300);
+                  pdfText = text || "";
+                }
+              } catch (pdfFetchErr: any) {
+                options.onLog?.(`Download diretto PDF fallito (${pdfFetchErr.message}), provo fallback AI...`);
+              }
+
+              let pdfRes: GraduatoriaExtractionResult | null = null;
+              if (pdfText && pdfText.trim().length > 30) {
+                pdfRes = await extractGraduatoriaWithRetry(
+                  pdfText,
+                  targetNamesToSearch,
+                  options.apiKey || "",
+                  options.fetchAiFn,
+                  options.onLog
+                );
+              } else if (options.pdfAiFallbackFn) {
+                const fallbackResult = await options.pdfAiFallbackFn(pdfUrl, GRADUATORIA_EXTRACTION_SYSTEM_PROMPT);
+                try {
+                  pdfRes = JSON.parse(fallbackResult?.choices?.[0]?.message?.content || "null");
+                } catch {}
+              }
+
+              const entries = pdfRes?.graduatoria_entries || [];
+              for (const entry of entries) {
+                if (!entry || !entry.nominativo) continue;
+                collectedEntries.push({
+                  nominativo: entry.nominativo,
+                  punteggio: entry.punteggio !== undefined ? entry.punteggio : null,
+                  posizione: entry.posizione !== undefined ? entry.posizione : null,
+                  fascia: entry.fascia || pdfRes?.meta?.fascia || null,
+                  classe: entry.classe_concorso || pdfRes?.meta?.profilo_o_cdc || "",
+                  tipologia: pdfRes?.meta?.tipologia_personale || null,
+                  url: pdfUrl,
+                });
+              }
+            } catch (pdfErr: any) {
+              options.onLog?.(`Avviso estrazione PDF ${pdfUrl}: ${pdfErr.message}`);
+            }
+          }
+        }
+      }
+    }
+  }
+
+  // 3, 4, 5, 6) Risoluzione per ogni nomina
+  if (Array.isArray(data.nomine_contratti)) {
+    data.nomine_contratti = data.nomine_contratti.map(nomina => {
+      if (!nomina.nominativo || !nomina.nominativo.trim()) {
+        return nomina;
+      }
+      return resolveSingleTarget(nomina, collectedEntries, options.onLog, false);
+    });
+  }
+
+  // Risoluzione per top-level
+  if (data.nominativo && data.nominativo.trim()) {
+    // Se c'è una nomina in nomine_contratti che corrisponde a data.nominativo
+    const matchingNomina = Array.isArray(data.nomine_contratti)
+      ? data.nomine_contratti.find(n => isNameMatch(n.nominativo, data.nominativo))
+      : undefined;
+
+    if (matchingNomina) {
+      if (isPunteggioMissing(data.punteggio)) {
+        data.punteggio = matchingNomina.punteggio;
+        data.origine_punteggio = matchingNomina.origine_punteggio || "Incrociato";
+      }
+      if (isPosizioneMissing(data.posizione_graduatoria)) {
+        data.posizione_graduatoria = matchingNomina.posizione_graduatoria;
+      }
+      if (isFasciaMissing(data.graduatoria_fascia)) {
+        data.graduatoria_fascia = matchingNomina.fascia;
+      }
+      if (matchingNomina.note_cross_reference) {
+        data.note_cross_reference = matchingNomina.note_cross_reference;
+      }
+    } else {
+      const topResolved = resolveSingleTarget(data, collectedEntries, options.onLog, true);
+      data.punteggio = topResolved.punteggio;
+      data.origine_punteggio = topResolved.origine_punteggio;
+      data.posizione_graduatoria = topResolved.posizione_graduatoria;
+      data.graduatoria_fascia = topResolved.graduatoria_fascia;
+      data.note_cross_reference = topResolved.note_cross_reference;
+    }
+  } else if (!data.nominativo && Array.isArray(data.nomine_contratti) && data.nomine_contratti.length === 1) {
+    const single = data.nomine_contratti[0];
+    if (isPunteggioMissing(data.punteggio)) {
+      data.punteggio = single.punteggio;
+      data.origine_punteggio = single.origine_punteggio;
+    }
+    if (isPosizioneMissing(data.posizione_graduatoria)) {
+      data.posizione_graduatoria = single.posizione_graduatoria;
+    }
+    if (isFasciaMissing(data.graduatoria_fascia)) {
+      data.graduatoria_fascia = single.fascia;
+    }
+  }
+
+  return data;
 }
 
 /**

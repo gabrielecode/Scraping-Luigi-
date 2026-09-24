@@ -42,6 +42,7 @@ import {
   saveStoredGraduatorie,
   crossReferenceNomina,
   searchGraduatoriaPages,
+  resolveFromGraduatorie,
   GRADUATORIA_EXTRACTION_SYSTEM_PROMPT,
   extractGraduatoriaWithRetry,
   prefilterGraduatoriaText,
@@ -1693,315 +1694,35 @@ const executeClientSideExtract = async (
       }
 
       // -------------------------------------------------------------
-      // TASK 5.1 — Trigger + ricerca pagina graduatoria
-      // Se PUNTEGGIO manca ma NOMINATIVO è presente → avvia ricerca
+      // TASK 5 — Risoluzione da graduatorie (resolveFromGraduatorie)
       // -------------------------------------------------------------
-      const topPunteggioMancante =
-        extractedData.punteggio === null ||
-        extractedData.punteggio === undefined ||
-        extractedData.punteggio === "";
-      const topNominativoPresente = !!(extractedData.nominativo && extractedData.nominativo.trim());
-
-      const hasNominaNeedingSearch =
-        Array.isArray(extractedData.nomine_contratti) &&
-        extractedData.nomine_contratti.some(
-          (n: any) =>
-            (n.punteggio === null || n.punteggio === undefined || n.punteggio === "") &&
-            !!(n.nominativo && n.nominativo.trim())
-        );
-
-      if ((topPunteggioMancante && topNominativoPresente) || hasNominaNeedingSearch) {
-        res.logs.push("🔎 Cerco in graduatoria...");
-
-        try {
-          const exploredPages = await searchGraduatoriaPages(
-            targetUrl,
-            (url, asBuf, onLog) =>
-              fetchWithProxy(url, asBuf, onLog, customProxy, failedProxiesByDomain),
-            (logMsg) => res.logs.push(logMsg)
+      extractedData = await resolveFromGraduatorie(extractedData, {
+        apiKey,
+        targetUrl,
+        customProxy,
+        failedProxiesByDomain,
+        fetchAiFn: async (promptText, sysPrompt) => {
+          return await extractWithOpenRouter(promptText, apiKey, sysPrompt);
+        },
+        fetchProxyFn: (url, asBuf, onLog) =>
+          fetchWithProxy(url, asBuf, onLog, customProxy, failedProxiesByDomain),
+        pdfTextExtractor: async (buf, maxP) => {
+          const { text, numPages } = await extractTextFromPdfBuffer(buf, maxP || 300);
+          return { text: text || "", numPages: numPages || 0 };
+        },
+        pdfAiFallbackFn: async (pdfUrl, sysPrompt) => {
+          return await extractPdfWithOpenRouter(
+            pdfUrl,
+            sysPrompt,
+            apiKey,
+            false,
+            customProxy,
+            failedProxiesByDomain,
+            300
           );
-          extractedData.pagine_graduatoria_esplorate = exploredPages.map((p) => p.url);
-          res.logs.push(
-            `Completata ricerca sezioni graduatorie: ${exploredPages.length} pagine esplorate sul dominio.`
-          );
-
-          // -------------------------------------------------------------
-          // TASK 5.2 & 5.3 — Estrazione + matching + fallback
-          // -------------------------------------------------------------
-          let matchedScore: number | null = null;
-          let matchedEntry: { nominativo: string; punteggio: number; classe_concorso?: string; sourceUrl: string } | null = null;
-
-          if (exploredPages.length > 0) {
-            const targetNom = (extractedData.nominativo || "").trim();
-            const targetCdc = (
-              extractedData.classe_concorso_area_lab ||
-              extractedData.classe_di_concorso ||
-              extractedData.profilo_lavorativo ||
-              ""
-            ).trim();
-
-            // Lista di tutti i nominativi cercati per il pre-filtraggio e il prompt
-            const targetNamesToSearch: string[] = [];
-            if (targetNom) targetNamesToSearch.push(targetNom);
-            if (Array.isArray(extractedData.nomine_contratti)) {
-              for (const n of extractedData.nomine_contratti) {
-                if (n.nominativo && n.nominativo.trim() && !targetNamesToSearch.includes(n.nominativo.trim())) {
-                  targetNamesToSearch.push(n.nominativo.trim());
-                }
-              }
-            }
-
-            for (const page of exploredPages) {
-              if (matchedEntry) break;
-
-              // 1. Analisi testo HTML / markdown della pagina
-              const pageContent = (page.content || "").trim();
-              if (pageContent.length > 50) {
-                res.logs.push(`Estrazione dati graduatoria da: "${page.title}" (${page.url})`);
-                try {
-                  const extractionResult = await extractGraduatoriaWithRetry(
-                    pageContent,
-                    targetNamesToSearch,
-                    apiKey,
-                    async (promptText, sysPrompt) => {
-                      return await extractWithOpenRouter(promptText, apiKey, sysPrompt);
-                    },
-                    (logMsg) => res.logs.push(logMsg)
-                  );
-
-                  const entries = extractionResult?.graduatoria_entries || [];
-
-                  for (const entry of entries) {
-                    if (
-                      entry &&
-                      entry.punteggio !== null &&
-                      entry.punteggio !== undefined &&
-                      !isNaN(parseFloat(String(entry.punteggio)))
-                    ) {
-                      const scoreNum = Number(parseFloat(String(entry.punteggio)).toFixed(2));
-                      // Verifica corrispondenza nome E classe di concorso
-                      const nameMatches = isNameMatch(entry.nominativo, targetNom) ||
-                        (Array.isArray(extractedData.nomine_contratti) &&
-                          extractedData.nomine_contratti.some((n: any) => isNameMatch(entry.nominativo, n.nominativo)));
-
-                      const classMatches = isClassMatch(entry.classe_concorso, targetCdc) ||
-                        (Array.isArray(extractedData.nomine_contratti) &&
-                          extractedData.nomine_contratti.some((n: any) =>
-                            isClassMatch(
-                              entry.classe_concorso,
-                              n.classe_concorso_area_lab || n.classe_di_concorso || n.profilo_lavorativo
-                            )
-                          ));
-
-                      if (nameMatches && classMatches) {
-                        matchedScore = scoreNum;
-                        matchedEntry = {
-                          nominativo: entry.nominativo,
-                          punteggio: scoreNum,
-                          classe_concorso: entry.classe_concorso || targetCdc,
-                          sourceUrl: page.url,
-                        };
-                        break;
-                      }
-                    }
-                  }
-                } catch (pageErr: any) {
-                  res.logs.push(`Avviso estrazione pagina graduatoria: ${pageErr.message}`);
-                }
-              }
-
-              // 2. Analisi PDF allegati alla pagina se non ancora trovato
-              if (!matchedEntry && Array.isArray(page.pdfLinks) && page.pdfLinks.length > 0) {
-                const pdfsToScan = page.pdfLinks.slice(0, 3);
-                for (const pdfUrl of pdfsToScan) {
-                  if (matchedEntry) break;
-                  res.logs.push(`Estrazione da PDF graduatoria allegato: ${pdfUrl}`);
-                  try {
-                    // Per le graduatorie usa maxPages=300
-                    let pdfText = "";
-                    try {
-                      const fetchRes = await fetchWithProxy(pdfUrl, true, undefined, customProxy, failedProxiesByDomain);
-                      if (fetchRes?.data) {
-                        const { text: extractedPdfText } = await extractTextFromPdfBuffer(fetchRes.data as ArrayBuffer, 300);
-                        pdfText = extractedPdfText || "";
-                      }
-                    } catch (pdfFetchErr: any) {
-                      res.logs.push(`Download diretto PDF fallito (${pdfFetchErr.message}), provo fallback OpenRouter...`);
-                    }
-
-                    let entries: any[] = [];
-
-                    if (pdfText && pdfText.trim().length > 30) {
-                      const extractionResult = await extractGraduatoriaWithRetry(
-                        pdfText,
-                        targetNamesToSearch,
-                        apiKey,
-                        async (promptText, sysPrompt) => {
-                          return await extractWithOpenRouter(promptText, apiKey, sysPrompt);
-                        },
-                        (logMsg) => res.logs.push(logMsg)
-                      );
-                      entries = extractionResult?.graduatoria_entries || [];
-                    } else {
-                      // Fallback: se pdfjs non ha estratto testo, invia con fallback OpenRouter (maxPages=300)
-                      const pdfResult = await extractPdfWithOpenRouter(
-                        pdfUrl,
-                        GRADUATORIA_EXTRACTION_SYSTEM_PROMPT,
-                        apiKey,
-                        false,
-                        customProxy,
-                        failedProxiesByDomain,
-                        300
-                      );
-                      let parsedPdf: any = null;
-                      try {
-                        parsedPdf = JSON.parse(pdfResult?.choices?.[0]?.message?.content || "{}");
-                      } catch {
-                        // Ritenta 1 volta con testo dimezzato
-                        const rawContent = pdfResult?.choices?.[0]?.message?.content || "";
-                        if (rawContent) {
-                          try {
-                            const halvedContent = rawContent.slice(0, Math.floor(rawContent.length / 2));
-                            const retryRes = await extractWithOpenRouter(halvedContent, apiKey, GRADUATORIA_EXTRACTION_SYSTEM_PROMPT);
-                            parsedPdf = JSON.parse(retryRes?.choices?.[0]?.message?.content || "{}");
-                          } catch (retryErr: any) {
-                            console.error("Errore fallback parsing PDF graduatoria:", retryErr);
-                          }
-                        }
-                      }
-                      entries = Array.isArray(parsedPdf?.graduatoria_entries) ? parsedPdf.graduatoria_entries : [];
-                    }
-
-                    for (const entry of entries) {
-                      if (
-                        entry &&
-                        entry.punteggio !== null &&
-                        entry.punteggio !== undefined &&
-                        !isNaN(parseFloat(String(entry.punteggio)))
-                      ) {
-                        const scoreNum = Number(parseFloat(String(entry.punteggio)).toFixed(2));
-                        const nameMatches = isNameMatch(entry.nominativo, targetNom) ||
-                          (Array.isArray(extractedData.nomine_contratti) &&
-                            extractedData.nomine_contratti.some((n: any) => isNameMatch(entry.nominativo, n.nominativo)));
-
-                        const classMatches = isClassMatch(entry.classe_concorso, targetCdc) ||
-                          (Array.isArray(extractedData.nomine_contratti) &&
-                            extractedData.nomine_contratti.some((n: any) =>
-                              isClassMatch(
-                                entry.classe_concorso,
-                                n.classe_concorso_area_lab || n.classe_di_concorso || n.profilo_lavorativo
-                              )
-                            ));
-
-                        if (nameMatches && classMatches) {
-                          matchedScore = scoreNum;
-                          matchedEntry = {
-                            nominativo: entry.nominativo,
-                            punteggio: scoreNum,
-                            classe_concorso: entry.classe_concorso || targetCdc,
-                            sourceUrl: pdfUrl,
-                          };
-                          break;
-                        }
-                      }
-                    }
-                  } catch (pdfErr: any) {
-                    res.logs.push(`Avviso estrazione PDF: ${pdfErr.message}`);
-                  }
-                }
-              }
-            }
-          }
-
-          // Se match → compila PUNTEGGIO con valore trovato
-          if (matchedEntry && matchedScore !== null) {
-            res.logs.push(`✅ Trovato: ${matchedScore}`);
-            extractedData.punteggio = matchedScore;
-            extractedData.origine_punteggio = "Incrociato";
-            const existingSoglia = extractedData.note_cross_reference?.includes("Soglia convocazione:")
-              ? ` | ${extractedData.note_cross_reference.split("|").find((s: string) => s.includes("Soglia convocazione:"))?.trim() || ""}`
-              : "";
-            extractedData.note_cross_reference = `Punteggio incrociato da graduatoria (${matchedEntry.sourceUrl}): ${matchedEntry.nominativo} [${matchedEntry.classe_concorso}] = ${matchedScore} pt${existingSoglia}`;
-
-            // Aggiorna anche le nomine nei contratti
-            if (Array.isArray(extractedData.nomine_contratti)) {
-              extractedData.nomine_contratti = extractedData.nomine_contratti.map((n: any) => {
-                if (
-                  isNameMatch(n.nominativo, matchedEntry!.nominativo) &&
-                  isClassMatch(
-                    n.classe_concorso_area_lab || n.classe_di_concorso || n.profilo_lavorativo,
-                    matchedEntry!.classe_concorso
-                  )
-                ) {
-                  const existingSogliaNom = n.note_cross_reference?.includes("Soglia convocazione:")
-                    ? ` | ${n.note_cross_reference.split("|").find((s: string) => s.includes("Soglia convocazione:"))?.trim() || ""}`
-                    : "";
-                  return {
-                    ...n,
-                    punteggio: matchedScore,
-                    origine_punteggio: "Incrociato",
-                    note_cross_reference: `Punteggio incrociato da graduatoria (${matchedEntry!.sourceUrl}): ${matchedEntry!.nominativo} = ${matchedScore} pt${existingSogliaNom}`,
-                  };
-                } else if (
-                  (n.punteggio === null || n.punteggio === undefined || n.punteggio === "") &&
-                  !!(n.nominativo && n.nominativo.trim())
-                ) {
-                  return {
-                    ...n,
-                    punteggio: "Da verificare manualmente",
-                    origine_punteggio: "Non disponibile",
-                  };
-                }
-                return n;
-              });
-            }
-          } else {
-            // TASK 5.3: Nessuna graduatoria trovata O nessun match valido → PUNTEGGIO = "Da verificare manualmente"
-            res.logs.push("⚠️ Non trovato, segnato per verifica");
-            if (topPunteggioMancante && topNominativoPresente) {
-              extractedData.punteggio = "Da verificare manualmente";
-              extractedData.origine_punteggio = "Non disponibile";
-            }
-            if (Array.isArray(extractedData.nomine_contratti)) {
-              extractedData.nomine_contratti = extractedData.nomine_contratti.map((n: any) => {
-                if (
-                  (n.punteggio === null || n.punteggio === undefined || n.punteggio === "") &&
-                  !!(n.nominativo && n.nominativo.trim())
-                ) {
-                  return {
-                    ...n,
-                    punteggio: "Da verificare manualmente",
-                    origine_punteggio: "Non disponibile",
-                  };
-                }
-                return n;
-              });
-            }
-          }
-        } catch (searchErr: any) {
-          res.logs.push(`Avviso ricerca pagine graduatoria: ${searchErr.message}`);
-          res.logs.push("⚠️ Non trovato, segnato per verifica");
-          if (topPunteggioMancante && topNominativoPresente) {
-            extractedData.punteggio = "Da verificare manualmente";
-            extractedData.origine_punteggio = "Non disponibile";
-          }
-          if (Array.isArray(extractedData.nomine_contratti)) {
-            extractedData.nomine_contratti = extractedData.nomine_contratti.map((n: any) => {
-              if (
-                (n.punteggio === null || n.punteggio === undefined || n.punteggio === "") &&
-                !!(n.nominativo && n.nominativo.trim())
-              ) {
-                return {
-                  ...n,
-                  punteggio: "Da verificare manualmente",
-                  origine_punteggio: "Non disponibile",
-                };
-              }
-              return n;
-            });
-          }
-        }
-      }
+        },
+        onLog: (logMsg) => res.logs.push(logMsg),
+      });
     } catch (err: any) {
       const errMsg = err?.message || String(err);
       res.logs.push(`❌ Errore durante la post-elaborazione: ${errMsg}`);
