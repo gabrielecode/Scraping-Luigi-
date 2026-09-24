@@ -2387,4 +2387,125 @@ export async function resolveFromGraduatorie<T extends ExtractionData>(
  * Eseguibile tramite: `npm run test:graduatorie` (oppure `npx tsx scripts/test-graduatorie.ts`)
  */
 
+/**
+ * Filtra un documento o testo scolastico in base ai criteri rigorosi richiesti:
+ * - Almeno 1 parola chiave positiva
+ * - Almeno 1 frase esatta obbligatoria
+ * - Nessuna parola chiave o frase negativa (esclusione)
+ */
+export function filterSchoolDocument(textOrTitle: string): {
+  included: boolean;
+  reason: string;
+  matchedPositive?: string;
+  matchedExact?: string;
+} {
+  const norm = (textOrTitle || "").toLowerCase().replace(/[\s_-]+/g, " ").trim();
+
+  // 1. Negative terms (escludere se presente)
+  const negativeTerms = [
+    "assegnazione ai plessi",
+    "assenze",
+    "direttiva ds",
+    "informativa sindacale",
+    "diritto allo studio",
+    "permessi",
+    "graduatoria provvisoria",
+    "sciopero",
+    "assemblea",
+    "part-time",
+    "circolare interna",
+    "assemblea sindacale",
+    "assegno di ricerca",
+    "borsa di studio",
+    "pon",
+    "pnrr"
+  ];
+
+  for (const neg of negativeTerms) {
+    if (norm.includes(neg)) {
+      return {
+        included: false,
+        reason: `Escluso: contiene termine negativo "${neg}"`
+      };
+    }
+  }
+
+  // 2. Positive keywords (almeno 1)
+  const positiveKeywords = [
+    "convocazione",
+    "nomina",
+    "supplenza",
+    "interpello",
+    "graduatoria",
+    "pensionamento",
+    "collocamento",
+    "cessazione",
+    "ata",
+    "decreto di individuazione",
+    "conferimento incarico",
+    "scorrimento graduatoria",
+    "assegnazione sede",
+    "classe di concorso",
+    "provvedimento di individuazione",
+    "atto di nomina",
+    "avviso di selezione",
+    "avviso di reclutamento",
+    "procedura di reclutamento",
+    "supplenza breve e saltuaria",
+    "proroga",
+    "individuazione destinatario",
+    "immissione in ruolo",
+    "graduatoria di istituto"
+  ];
+
+  let matchedPositive: string | undefined = undefined;
+  for (const pos of positiveKeywords) {
+    if (norm.includes(pos)) {
+      matchedPositive = pos;
+      break;
+    }
+  }
+
+  if (!matchedPositive) {
+    return {
+      included: false,
+      reason: "Non contiene alcuna parola chiave positiva richiesta."
+    };
+  }
+
+  // 3. Mandatory exact phrases (almeno 1)
+  const mandatoryExactPhrases = [
+    "contratto di supplenza",
+    "contratto a tempo determinato",
+    "provvedimento di individuazione del destinatario di contratto di lavoro a tempo determinato",
+    "individuazione destinatario di proposta di contratto",
+    "decreto di individuazione tramite interpello",
+    "conferimento di supplenza",
+    "avviso per l'individuazione e il reclutamento di personale docente"
+  ];
+
+  let matchedExact: string | undefined = undefined;
+  for (const exact of mandatoryExactPhrases) {
+    if (norm.includes(exact)) {
+      matchedExact = exact;
+      break;
+    }
+  }
+
+  if (!matchedExact) {
+    return {
+      included: false,
+      reason: "Non contiene alcuna frase esatta obbligatoria richiesta."
+    };
+  }
+
+  return {
+    included: true,
+    reason: `Positiva: "${matchedPositive}" + Frase esatta: "${matchedExact}"`,
+    matchedPositive,
+    matchedExact
+  };
+}
+
+
 
