@@ -106,8 +106,27 @@ export function extractPdfsFromHtml(
 
       // Check if it is likely a PDF or document download
       const isPdfExtension = lowerHref.endsWith('.pdf') || lowerHref.includes('.pdf?') || lowerHref.includes('.pdf/');
-      const isDownloadUrl = lowerHref.includes('download') || lowerHref.includes('allegat') || lowerHref.includes('attachment') || lowerHref.includes('document') || lowerHref.includes('visualizza') || lowerHref.includes('getfile') || lowerHref.includes('uploads');
-      const hasDocKeyword = lowerText.includes('pdf') || lowerText.includes('allegato') || lowerText.includes('scarica') || lowerText.includes('graduatori') || lowerText.includes('convocazion') || lowerText.includes('supplenz') || lowerText.includes('contratto') || lowerText.includes('nomina') || lowerText.includes('avviso');
+      const isDownloadUrl = lowerHref.includes('download') || 
+                            lowerHref.includes('allegat') || 
+                            lowerHref.includes('attachment') || 
+                            lowerHref.includes('document') || 
+                            lowerHref.includes('visualizza') || 
+                            lowerHref.includes('getfile') || 
+                            lowerHref.includes('uploads') ||
+                            lowerHref.includes('/sdg/') ||
+                            lowerHref.includes('spaggiari') ||
+                            lowerHref.includes('argo') ||
+                            lowerHref.includes('axios');
+      const hasDocKeyword = lowerText.includes('pdf') || 
+                            lowerText.includes('allegato') || 
+                            lowerText.includes('scarica') || 
+                            lowerText.includes('visualizza') ||
+                            lowerText.includes('graduatori') || 
+                            lowerText.includes('convocazion') || 
+                            lowerText.includes('supplenz') || 
+                            lowerText.includes('contratto') || 
+                            lowerText.includes('nomina') || 
+                            lowerText.includes('avviso');
 
       // Exclude non-PDF extensions to avoid false positives
       const isExcluded = lowerHref.endsWith('.zip') || lowerHref.endsWith('.png') || lowerHref.endsWith('.jpg') || lowerHref.endsWith('.jpeg') || lowerHref.endsWith('.doc') || lowerHref.endsWith('.docx') || lowerHref.endsWith('.xls') || lowerHref.endsWith('.xlsx') || lowerHref.endsWith('.mp4') || lowerHref.endsWith('.css') || lowerHref.endsWith('.js');

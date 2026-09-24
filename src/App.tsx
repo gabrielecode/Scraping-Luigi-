@@ -713,6 +713,52 @@ function isSelfAppHtml(html: string): boolean {
   );
 }
 
+function isDocumentOrPdfLink(href: string, text: string): boolean {
+  if (!href) return false;
+  const lowerH = href.toLowerCase();
+  const lowerT = text.toLowerCase();
+  const combined = `${lowerH} ${lowerT}`;
+
+  const isPdfExtension = lowerH.endsWith(".pdf") || lowerH.includes(".pdf?") || lowerH.includes(".pdf/");
+  const isDownloadUrl = lowerH.includes("download") || 
+                        lowerH.includes("allegat") || 
+                        lowerH.includes("attachment") || 
+                        lowerH.includes("document") || 
+                        lowerH.includes("visualizza") || 
+                        lowerH.includes("getfile") || 
+                        lowerH.includes("uploads") ||
+                        lowerH.includes("/sdg/") ||
+                        lowerH.includes("spaggiari") ||
+                        lowerH.includes("argo") ||
+                        lowerH.includes("axios");
+  
+  const hasDocKeyword = lowerT.includes("pdf") || 
+                        lowerT.includes("allegato") || 
+                        lowerT.includes("scarica") || 
+                        lowerT.includes("visualizza") ||
+                        lowerT.includes("graduatori") || 
+                        lowerT.includes("convocazion") || 
+                        lowerT.includes("supplenz") || 
+                        lowerT.includes("contratto") || 
+                        lowerT.includes("nomina") || 
+                        lowerT.includes("avviso");
+
+  // Exclude non-document files to avoid false positives
+  const isExcluded = lowerH.endsWith(".zip") || 
+                     lowerH.endsWith(".png") || 
+                     lowerH.endsWith(".jpg") || 
+                     lowerH.endsWith(".jpeg") || 
+                     lowerH.endsWith(".doc") || 
+                     lowerH.endsWith(".docx") || 
+                     lowerH.endsWith(".xls") || 
+                     lowerH.endsWith(".xlsx") || 
+                     lowerH.endsWith(".mp4") || 
+                     lowerH.endsWith(".css") || 
+                     lowerH.endsWith(".js");
+
+  return (isPdfExtension || isDownloadUrl || hasDocKeyword) && !isExcluded;
+}
+
 interface DiscoveredSchoolLink {
   url: string;
   title: string;
@@ -777,13 +823,19 @@ function findRelevantSchoolLinks(rawContent: string, baseUrl: string, doc?: Docu
     addLink(match[1], "Piattaforma Albo / Atti Istituzionali");
   }
 
-  // 3. Extract from HTML anchors if DOM document is available
+  // 3. Extract from HTML anchors and iframes if DOM document is available
   if (doc) {
     const anchors = Array.from(doc.querySelectorAll("a"));
     for (const a of anchors) {
       const href = a.getAttribute("href") || "";
       const text = a.textContent || a.getAttribute("title") || "";
       addLink(href, text);
+    }
+
+    const iframes = Array.from(doc.querySelectorAll("iframe"));
+    for (const iframe of iframes) {
+      const src = iframe.getAttribute("src") || "";
+      addLink(src, "Sezione Albo / Trasparenza Integrata (Iframe)");
     }
   }
 
@@ -1296,15 +1348,16 @@ async function scrapeWebsite(
   let allTexts: string[] = [];
 
   try {
-    // 1. Verifica se l'URL target è un file PDF diretto
+    // 1. Verifica se l'URL target è un file PDF o documento diretto
     const isDirectPdf =
       currentUrl.toLowerCase().endsWith(".pdf") ||
       currentUrl.toLowerCase().includes(".pdf?") ||
       (currentUrl.toLowerCase().includes("/uploads/") && currentUrl.toLowerCase().includes(".pdf")) ||
-      (currentUrl.toLowerCase().includes("/system/files/") && currentUrl.toLowerCase().includes(".pdf"));
+      (currentUrl.toLowerCase().includes("/system/files/") && currentUrl.toLowerCase().includes(".pdf")) ||
+      isDocumentOrPdfLink(currentUrl, "");
 
     if (isDirectPdf) {
-      log(`L'URL specificato è un documento PDF diretto: ${currentUrl}`);
+      log(`L'URL specificato è identificato come documento o download diretto: ${currentUrl}`);
       try {
         const pdfBufRes = await fetchWithProxy(currentUrl, true, log, customProxyUrl, failedProxiesByDomain);
         if (pdfBufRes?.data) {
@@ -1386,6 +1439,39 @@ async function scrapeWebsite(
           }
           allTexts.push(`=== SOTTOPAGINA (${link.title}) ===\n${subText}`);
 
+          // Scansione e download dei PDF / Documenti trovati direttamente nella tabella o lista della sezione
+          const subPagePdfs = extractPdfsFromHtml(rawSub, link.url);
+          if (subPagePdfs.length > 0) {
+            log(`Trovati ${subPagePdfs.length} documenti/allegati diretti nella sezione "${link.title}".`);
+            // Prendiamo fino a 8 allegati prioritari
+            const topSubPdfs = subPagePdfs.slice(0, 8);
+            for (const pdfItem of topSubPdfs) {
+              log(`Analisi allegato diretto di sezione: "${pdfItem.title}" (${pdfItem.url})`);
+              try {
+                const pBufRes = await fetchWithProxy(pdfItem.url, true, log, customProxyUrl, failedProxiesByDomain);
+                if (pBufRes?.data) {
+                  const { text: pText } = await extractTextFromPdfBuffer(pBufRes.data as ArrayBuffer);
+                  if (pText && pText.trim().length > 30) {
+                    log(`Estratti ${pText.length} caratteri da allegato di sezione "${pdfItem.title}"`);
+                    
+                    if (inputNominativo && inputNominativo.trim()) {
+                      if (textContainsName(pText, inputNominativo)) {
+                        log(`🎯 Nominativo cercato "${inputNominativo}" individuato nell'allegato diretto: ${pdfItem.url}`);
+                        allTexts.push(`=== DOCUMENTO/GRADUATORIA SEZIONE ALLEGATA "${pdfItem.title}" (${pdfItem.url}) ===\n${pText}`);
+                      } else {
+                        log(`Filtro: nominativo "${inputNominativo}" non presente nell'allegato di sezione.`);
+                      }
+                    } else {
+                      allTexts.push(`=== DOCUMENTO/GRADUATORIA SEZIONE ALLEGATA "${pdfItem.title}" (${pdfItem.url}) ===\n${pText}`);
+                    }
+                  }
+                }
+              } catch (pErr: any) {
+                log(`Avviso lettura allegato di sezione ${pdfItem.title}: ${pErr.message}`);
+              }
+            }
+          }
+
           // TASK 2: Extract individual acts (max 8-10 acts) and iterate over them
           const actLinks = findActLinks(rawSub, link.url, subDoc);
           if (actLinks.length > 0) {
@@ -1404,18 +1490,12 @@ async function scrapeWebsite(
                   for (const pa of pdfAnchors) {
                     const ph = pa.getAttribute("href") || "";
                     if (ph) {
-                      const lowerH = ph.toLowerCase();
-                      const lowerT = (pa.textContent || pa.getAttribute("title") || "").toLowerCase();
-                      
-                      const isPdf = lowerH.endsWith(".pdf") || lowerH.includes(".pdf?") || lowerH.includes(".pdf/") ||
-                                    lowerH.includes("download") || lowerH.includes("allegat") || lowerH.includes("attachment") ||
-                                    lowerT.includes("pdf") || lowerT.includes("allegato") || lowerT.includes("scarica") || lowerT.includes("visualizza");
-                      
-                      const isExcluded = lowerH.endsWith(".zip") || lowerH.endsWith(".png") || lowerH.endsWith(".jpg") || lowerH.endsWith(".jpeg") || lowerH.endsWith(".doc") || lowerH.endsWith(".docx") || lowerH.endsWith(".xls") || lowerH.endsWith(".xlsx");
+                      const textLabel = pa.textContent || pa.getAttribute("title") || "";
+                      const isPdf = isDocumentOrPdfLink(ph, textLabel);
 
-                      if (isPdf && !isExcluded) {
+                      if (isPdf) {
                         const pdfResolved = new URL(ph, act.url).href;
-                        log(`Documento allegato trovato: ${pdfResolved}`);
+                        log(`Documento allegato trovato nell'atto: ${pdfResolved}`);
 
                         // Estrai il testo completo del PDF dell'atto
                         try {
