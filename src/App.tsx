@@ -43,6 +43,7 @@ import {
   crossReferenceNomina,
   searchGraduatoriaPages,
   resolveFromGraduatorie,
+  buildGraduatoriaUserPrompt,
   GRADUATORIA_EXTRACTION_SYSTEM_PROMPT,
   extractGraduatoriaWithRetry,
   prefilterGraduatoriaText,
@@ -1710,10 +1711,14 @@ const executeClientSideExtract = async (
           const { text, numPages } = await extractTextFromPdfBuffer(buf, maxP || 300);
           return { text: text || "", numPages: numPages || 0 };
         },
-        pdfAiFallbackFn: async (pdfUrl, sysPrompt) => {
+        pdfAiFallbackFn: async (pdfUrl, sysPrompt, targetNames) => {
+          const userPrompt = buildGraduatoriaUserPrompt(
+            "Documento PDF graduatoria allegato.",
+            targetNames || []
+          );
           return await extractPdfWithOpenRouter(
             pdfUrl,
-            sysPrompt,
+            `${sysPrompt}\n\n${userPrompt}`,
             apiKey,
             false,
             customProxy,

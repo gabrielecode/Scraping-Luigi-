@@ -596,6 +596,20 @@ export function normalizeFascia(val: string): string {
 }
 
 /**
+ * Mappa il valore normalizzato di una fascia ("1", "2", "3", "GI")
+ * all'etichetta contrattuale standard ("Prima fascia", "Seconda fascia", "Terza fascia", "Graduatoria d'Istituto").
+ */
+export function formatFasciaLabel(normFascia: string): string {
+  if (!normFascia) return "";
+  const norm = normalizeFascia(normFascia);
+  if (norm === "1") return "Prima fascia";
+  if (norm === "2") return "Seconda fascia";
+  if (norm === "3") return "Terza fascia";
+  if (norm === "GI") return "Graduatoria d'Istituto";
+  return normFascia;
+}
+
+/**
  * Normalizza codice meccanografico
  */
 export function normalizeCodiceMeccanografico(codice?: string): string {
@@ -1555,6 +1569,7 @@ export interface GraduatoriaCollectedEntry {
   posizione: number | null;
   fascia: string | null;
   classe: string;
+  anno?: string | null;
   url: string;
   tipologia?: "ATA" | "DOCENTE" | null;
 }
@@ -1573,10 +1588,38 @@ export interface ResolveGraduatorieOptions {
     onLog?: (msg: string) => void
   ) => Promise<{ data: any; method?: string; format: "html" | "markdown" | "buffer" }>;
   pdfTextExtractor?: (buffer: ArrayBuffer, maxPages?: number) => Promise<{ text: string; numPages: number }>;
-  pdfAiFallbackFn?: (pdfUrl: string, sysPrompt: string) => Promise<any>;
+  pdfAiFallbackFn?: (pdfUrl: string, sysPrompt: string, targetNames?: string[]) => Promise<any>;
   onLog?: (msg: string) => void;
   initialContent?: string;
   initialDoc?: Document;
+}
+
+export function parseAnnoNumber(anno?: string | null): number | null {
+  if (!anno || typeof anno !== "string") return null;
+  const trimmed = anno.trim();
+  const m4 = trimmed.match(/\b(19\d\d|20\d\d)\b/);
+  if (m4) return parseInt(m4[1], 10);
+  const m2 = trimmed.match(/\b(\d{2})\/(\d{2})\b/);
+  if (m2) {
+    const yr = parseInt(m2[1], 10);
+    return yr < 50 ? 2000 + yr : 1900 + yr;
+  }
+  return null;
+}
+
+export function isClassEmpty(cls?: string | null): boolean {
+  if (!cls || typeof cls !== "string") return true;
+  const s = cls.trim().toLowerCase();
+  return (
+    s === "" ||
+    s === "non applicabile" ||
+    s === "non disponibile" ||
+    s === "n/a" ||
+    s === "n.a." ||
+    s === "n/d" ||
+    s === "nd" ||
+    s === "-"
+  );
 }
 
 export function isPunteggioMissing(val: any): boolean {
@@ -1644,7 +1687,8 @@ export function doesItemNeedGraduatoriaResolution(item: {
   const nom = (item.nominativo || "").trim();
   if (!nom) return false;
   const f = item.fascia !== undefined ? item.fascia : item.graduatoria_fascia;
-  return isPunteggioMissing(item.punteggio) || isFasciaMissing(f) || isPosizioneMissing(item.posizione_graduatoria);
+  // Solo punteggio o fascia mancanti avviano la ricerca (la posizione da sola NON avvia la ricerca; se la ricerca parte, viene comunque compilata)
+  return isPunteggioMissing(item.punteggio) || isFasciaMissing(f);
 }
 
 function resolveSingleTarget<T extends {
@@ -1677,17 +1721,7 @@ function resolveSingleTarget<T extends {
     item.classe_di_concorso,
     item.profilo_lavorativo,
     item.profilo_professionale,
-  ].filter(c => {
-    if (!c || typeof c !== "string") return false;
-    const s = c.trim().toLowerCase();
-    return s !== "" &&
-           s !== "non applicabile" &&
-           s !== "non disponibile" &&
-           s !== "n/a" &&
-           s !== "n.a." &&
-           s !== "n/d" &&
-           s !== "-";
-  }) as string[];
+  ].filter(c => !isClassEmpty(c)) as string[];
 
   const itemClass = rawClassCandidates[0] || "";
 
@@ -1696,26 +1730,60 @@ function resolveSingleTarget<T extends {
   const hasValidContractFascia = !isFasciaMissing(currentFascia);
   const contractNormFascia = hasValidContractFascia ? normalizeFascia(currentFascia) : null;
 
-  // 3) Match: isNameMatch con IL SUO nominativo + isClassMatch con LA SUA classe/profilo (+ tipologia coerente se nota)
+  // 1) Match: isNameMatch con IL SUO nominativo + isClassMatch con LA SUA classe/profilo (+ tipologia coerente se nota)
+  // Entry con classe vuota → esclusa dal match (mai match per solo nome).
   let matchedEntries = collectedEntries.filter(entry => {
     if (!isNameMatch(entry.nominativo, nom)) return false;
-    if (entry.classe && rawClassCandidates.length > 0) {
-      const matchAnyClass = rawClassCandidates.some(c => isClassMatch(entry.classe, c));
-      if (!matchAnyClass) return false;
-    }
+    if (isClassEmpty(entry.classe)) return false;
+    if (rawClassCandidates.length === 0) return false;
+    const matchAnyClass = rawClassCandidates.some(c => isClassMatch(entry.classe, c));
+    if (!matchAnyClass) return false;
     if (itemTipologia && entry.tipologia) {
       if (itemTipologia.toUpperCase() !== entry.tipologia.toUpperCase()) return false;
     }
     return true;
   });
 
-  // 4) Se il contratto ha già una fascia valida NON toccarla e considera solo entries della stessa fascia
+  // 3) Contratto con fascia valida: entry con fascia null NON vengono scartate (non contraddicono);
+  // scarta solo quelle con fascia diversa.
   if (hasValidContractFascia && contractNormFascia) {
     matchedEntries = matchedEntries.filter(entry => {
+      if (isFasciaMissing(entry.fascia)) {
+        return true; // NON scartare: non contraddice
+      }
       const entryNormFascia = normalizeFascia(entry.fascia || "");
       return entryNormFascia === contractNormFascia;
     });
   }
+
+  // 2) Tra i match dello stesso nome+classe(+fascia) tieni solo quelli con anno più recente.
+  const groupsByFascia = new Map<string, GraduatoriaCollectedEntry[]>();
+  for (const entry of matchedEntries) {
+    const fKey = !isFasciaMissing(entry.fascia) ? normalizeFascia(entry.fascia || "") : "__NONE__";
+    if (!groupsByFascia.has(fKey)) {
+      groupsByFascia.set(fKey, []);
+    }
+    groupsByFascia.get(fKey)!.push(entry);
+  }
+
+  const filteredByYearEntries: GraduatoriaCollectedEntry[] = [];
+  for (const group of groupsByFascia.values()) {
+    const years = group
+      .map(e => parseAnnoNumber(e.anno))
+      .filter((y): y is number => y !== null);
+    if (years.length > 0) {
+      const maxYear = Math.max(...years);
+      const mostRecent = group.filter(e => {
+        const y = parseAnnoNumber(e.anno);
+        return y === maxYear;
+      });
+      filteredByYearEntries.push(...mostRecent);
+    } else {
+      filteredByYearEntries.push(...group);
+    }
+  }
+
+  matchedEntries = filteredByYearEntries;
 
   const existingNotes = item.note_cross_reference || "";
   const existingSoglia = existingNotes.includes("Soglia convocazione:")
@@ -1724,7 +1792,7 @@ function resolveSingleTarget<T extends {
 
   const label = isTopLevel ? `Top-level "${nom}"` : `Nomina "${nom}"`;
 
-  // 5) Nessun match → "Da verificare manualmente" solo sui campi ancora mancanti
+  // 5) Nessun match → "Non disponibile" per posizione/fascia mancanti, "Da verificare manualmente" solo sul punteggio se mancante
   if (matchedEntries.length === 0) {
     const updated = { ...item };
     if (isPunteggioMissing(updated.punteggio)) {
@@ -1732,13 +1800,13 @@ function resolveSingleTarget<T extends {
       updated.origine_punteggio = "Non disponibile";
     }
     if (isPosizioneMissing(updated.posizione_graduatoria)) {
-      updated.posizione_graduatoria = "Da verificare manualmente";
+      updated.posizione_graduatoria = "Non disponibile";
     }
     if (isFasciaMissing(currentFascia)) {
       if (isTopLevel) {
-        (updated as any).graduatoria_fascia = "Da verificare manualmente";
+        (updated as any).graduatoria_fascia = "Non disponibile";
       } else {
-        (updated as any).fascia = "Da verificare manualmente";
+        (updated as any).fascia = "Non disponibile";
       }
     }
     onLog?.(`⚠️ ${label} (${itemClass || "N/D"}): nessun riscontro in graduatoria, campi mancanti segnati per verifica manuale`);
@@ -1748,7 +1816,12 @@ function resolveSingleTarget<T extends {
   // 5) Più match con fasce diverse e fascia contratto assente → fascia e punteggio "Da verificare manualmente"
   if (!hasValidContractFascia) {
     const distinctFasce = Array.from(
-      new Set(matchedEntries.map(e => normalizeFascia(e.fascia || "")).filter(Boolean))
+      new Set(
+        matchedEntries
+          .filter(e => !isFasciaMissing(e.fascia))
+          .map(e => normalizeFascia(e.fascia || ""))
+          .filter(Boolean)
+      )
     );
     if (distinctFasce.length > 1) {
       const updated = { ...item };
@@ -1768,14 +1841,58 @@ function resolveSingleTarget<T extends {
     }
   }
 
-  // Match univoco o coerente per fascia: seleziona la miglior entry
-  // Preferisci l'entry con punteggio numerico valido
+  // 2) Se restano punteggi diversi → punteggio "Da verificare manualmente" e nota "punteggi discordanti tra graduatorie"
+  const numericScores = matchedEntries
+    .map(e => (e.punteggio !== null && e.punteggio !== undefined ? Number(e.punteggio) : null))
+    .filter((s): s is number => s !== null && !isNaN(s));
+
+  const distinctScores = Array.from(new Set(numericScores.map(s => Number(s.toFixed(2)))));
+
+  if (distinctScores.length > 1) {
+    const updated = { ...item };
+    updated.punteggio = "Da verificare manualmente";
+    updated.origine_punteggio = "Non disponibile";
+    if (isPosizioneMissing(updated.posizione_graduatoria)) {
+      updated.posizione_graduatoria = "Da verificare manualmente";
+    }
+    if (isFasciaMissing(currentFascia)) {
+      const distinctFasce = Array.from(
+        new Set(
+          matchedEntries
+            .filter(e => !isFasciaMissing(e.fascia))
+            .map(e => normalizeFascia(e.fascia || ""))
+            .filter(Boolean)
+        )
+      );
+      if (distinctFasce.length === 1) {
+        const formattedF = formatFasciaLabel(distinctFasce[0]);
+        if (isTopLevel) {
+          (updated as any).graduatoria_fascia = formattedF;
+        } else {
+          (updated as any).fascia = formattedF;
+        }
+      } else {
+        if (isTopLevel) {
+          (updated as any).graduatoria_fascia = "Da verificare manualmente";
+        } else {
+          (updated as any).fascia = "Da verificare manualmente";
+        }
+      }
+    }
+    updated.note_cross_reference = `Da verificare: punteggi discordanti tra graduatorie (${distinctScores.join(" pt vs ")} pt).${existingSoglia}`;
+    onLog?.(`⚠️ ${label} (${itemClass || "N/D"}): punteggi discordanti tra graduatorie (${distinctScores.join(" vs ")} pt), segnato per verifica manuale`);
+    return updated;
+  }
+
+  // Match univoco o coerente: seleziona la miglior entry
   const bestEntry =
     matchedEntries.find(e => e.punteggio !== null && e.punteggio !== undefined && !isNaN(Number(e.punteggio))) ||
     matchedEntries[0];
 
   const updated = { ...item };
-  let fasciaRicavata = false;
+  let punteggioCompilato = false;
+  let posizioneCompilata = false;
+  let fasciaCompilata = false;
 
   // Compila SOLO i campi mancanti:
   // - punteggio (origine_punteggio "Incrociato")
@@ -1783,6 +1900,7 @@ function resolveSingleTarget<T extends {
     if (bestEntry.punteggio !== null && bestEntry.punteggio !== undefined && !isNaN(Number(bestEntry.punteggio))) {
       updated.punteggio = Number(Number(bestEntry.punteggio).toFixed(2));
       updated.origine_punteggio = "Incrociato";
+      punteggioCompilato = true;
     } else {
       updated.punteggio = "Da verificare manualmente";
       updated.origine_punteggio = "Non disponibile";
@@ -1793,35 +1911,67 @@ function resolveSingleTarget<T extends {
   if (isPosizioneMissing(updated.posizione_graduatoria)) {
     if (bestEntry.posizione !== null && bestEntry.posizione !== undefined) {
       updated.posizione_graduatoria = String(bestEntry.posizione);
+      posizioneCompilata = true;
     } else {
-      updated.posizione_graduatoria = "Da verificare manualmente";
+      updated.posizione_graduatoria = "Non disponibile";
     }
   }
 
-  // - fascia (normalizeFascia). Se il contratto ha già una fascia valida NON toccarla
+  // - fascia (stessa etichetta del contratto es. "Prima fascia", "Seconda fascia", etc.). Se il contratto ha già una fascia valida NON toccarla
   if (isFasciaMissing(currentFascia)) {
     const rawFascia = bestEntry.fascia;
     if (rawFascia && rawFascia.trim()) {
-      const normF = normalizeFascia(rawFascia);
+      const formattedF = formatFasciaLabel(rawFascia);
       if (isTopLevel) {
-        (updated as any).graduatoria_fascia = normF;
+        (updated as any).graduatoria_fascia = formattedF;
       } else {
-        (updated as any).fascia = normF;
+        (updated as any).fascia = formattedF;
       }
-      fasciaRicavata = true;
+      fasciaCompilata = true;
     } else {
       if (isTopLevel) {
-        (updated as any).graduatoria_fascia = "Da verificare manualmente";
+        (updated as any).graduatoria_fascia = "Non disponibile";
       } else {
-        (updated as any).fascia = "Da verificare manualmente";
+        (updated as any).fascia = "Non disponibile";
       }
     }
   }
 
-  // 6) note_cross_reference: URL fonte + "fascia da graduatoria" se ricavata. Log di 1 riga per nomina.
-  const fasciaSuffix = fasciaRicavata ? " (fascia da graduatoria)" : "";
+  // 6) note_cross_reference: elenca solo i campi effettivamente compilati da graduatoria
+  // Se il punteggio era esplicito non scrivere "Punteggio incrociato"
+  const compiledParts: string[] = [];
+  if (punteggioCompilato) {
+    compiledParts.push(`Punteggio (${updated.punteggio} pt)`);
+  }
+  if (posizioneCompilata) {
+    compiledParts.push(`posizione (pos. ${updated.posizione_graduatoria})`);
+  }
+  if (fasciaCompilata) {
+    compiledParts.push("fascia");
+  }
+
+  let noteDesc = "";
+  if (compiledParts.length > 0) {
+    // Es. "Punteggio (45.20 pt), posizione (pos. 1) e fascia da graduatoria (URL)"
+    if (compiledParts.length === 1) {
+      noteDesc = `${compiledParts[0]} da graduatoria (${bestEntry.url})`;
+    } else if (compiledParts.length === 2) {
+      noteDesc = `${compiledParts[0]} e ${compiledParts[1]} da graduatoria (${bestEntry.url})`;
+    } else {
+      const last = compiledParts.pop();
+      noteDesc = `${compiledParts.join(", ")} e ${last} da graduatoria (${bestEntry.url})`;
+    }
+  } else {
+    noteDesc = `Riscontro in graduatoria (${bestEntry.url})`;
+  }
+
+  let fasciaSuffix = "";
+  if (hasValidContractFascia && isFasciaMissing(bestEntry.fascia)) {
+    fasciaSuffix = " (fascia graduatoria non indicata)";
+  }
+
   const resolvedFascia = isTopLevel ? (updated as any).graduatoria_fascia : (updated as any).fascia;
-  updated.note_cross_reference = `Punteggio incrociato da graduatoria (${bestEntry.url}): pos. ${updated.posizione_graduatoria} = ${updated.punteggio} pt${fasciaSuffix}${existingSoglia}`;
+  updated.note_cross_reference = `${noteDesc}${fasciaSuffix}${existingSoglia}`;
 
   onLog?.(`✅ ${label} (${itemClass || "N/D"}): punteggio ${updated.punteggio}, pos. ${updated.posizione_graduatoria}, fascia ${resolvedFascia}`);
 
@@ -1896,8 +2046,22 @@ export async function resolveFromGraduatorie<T extends ExtractionData>(
 
     data.pagine_graduatoria_esplorate = exploredPages.map(p => p.url);
 
+    // Funzione di verifica early exit: esci dal ciclo pagine/PDF appena ogni nominativo cercato ha ≥1 match con punteggio numerico e fascia
+    const checkAllNamesSatisfied = (): boolean => {
+      if (targetNamesToSearch.length === 0) return false;
+      return targetNamesToSearch.every(name =>
+        collectedEntries.some(e =>
+          isNameMatch(e.nominativo, name) &&
+          e.punteggio !== null &&
+          e.punteggio !== undefined &&
+          !isNaN(Number(e.punteggio)) &&
+          !isFasciaMissing(e.fascia)
+        )
+      );
+    };
+
     if (exploredPages.length > 0 && options.fetchAiFn) {
-      for (const page of exploredPages) {
+      pageLoop: for (const page of exploredPages) {
         // Analisi testo HTML / markdown della pagina
         const pageContent = (page.content || "").trim();
         if (pageContent.length > 50) {
@@ -1919,9 +2083,15 @@ export async function resolveFromGraduatorie<T extends ExtractionData>(
                 posizione: entry.posizione !== undefined ? entry.posizione : null,
                 fascia: entry.fascia || extractionResult?.meta?.fascia || null,
                 classe: entry.classe_concorso || extractionResult?.meta?.profilo_o_cdc || "",
+                anno: extractionResult?.meta?.anno_scolastico || null,
                 tipologia: extractionResult?.meta?.tipologia_personale || null,
                 url: page.url,
               });
+            }
+
+            if (checkAllNamesSatisfied()) {
+              options.onLog?.("Tutti i nominativi cercati hanno riscontro completo con punteggio e fascia. Interruzione anticipata ricerca graduatorie.");
+              break pageLoop;
             }
           } catch (pageErr: any) {
             options.onLog?.(`Avviso estrazione pagina graduatoria ${page.url}: ${pageErr.message}`);
@@ -1955,7 +2125,11 @@ export async function resolveFromGraduatorie<T extends ExtractionData>(
                   options.onLog
                 );
               } else if (options.pdfAiFallbackFn) {
-                const fallbackResult = await options.pdfAiFallbackFn(pdfUrl, GRADUATORIA_EXTRACTION_SYSTEM_PROMPT);
+                const fallbackResult = await options.pdfAiFallbackFn(
+                  pdfUrl,
+                  GRADUATORIA_EXTRACTION_SYSTEM_PROMPT,
+                  targetNamesToSearch
+                );
                 try {
                   pdfRes = JSON.parse(fallbackResult?.choices?.[0]?.message?.content || "null");
                 } catch {}
@@ -1970,9 +2144,15 @@ export async function resolveFromGraduatorie<T extends ExtractionData>(
                   posizione: entry.posizione !== undefined ? entry.posizione : null,
                   fascia: entry.fascia || pdfRes?.meta?.fascia || null,
                   classe: entry.classe_concorso || pdfRes?.meta?.profilo_o_cdc || "",
+                  anno: pdfRes?.meta?.anno_scolastico || null,
                   tipologia: pdfRes?.meta?.tipologia_personale || null,
                   url: pdfUrl,
                 });
+              }
+
+              if (checkAllNamesSatisfied()) {
+                options.onLog?.("Tutti i nominativi cercati hanno riscontro completo con punteggio e fascia. Interruzione anticipata ricerca graduatorie.");
+                break pageLoop;
               }
             } catch (pdfErr: any) {
               options.onLog?.(`Avviso estrazione PDF ${pdfUrl}: ${pdfErr.message}`);
