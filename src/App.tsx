@@ -738,24 +738,22 @@ function findRelevantSchoolLinks(rawContent: string, baseUrl: string, doc?: Docu
         lowerText.includes("portaleargo.it/albopretorio") ||
         lowerText.includes("albo pretorio") ||
         lowerText.includes("albo online") ||
-        lowerText.includes("trasparenza-pa") ||
+        lowerText.includes("albo-pretorio") ||
+        lowerText.includes("albo-online") ||
+        lowerText.includes("/albo/") ||
+        lowerText.includes("bacheca") ||
         lowerText.includes("pubblicita legale") ||
         lowerText.includes("pubblicità legale")
       ) {
         priority = 10;
       } else if (
-        lowerText.includes("interpelli") ||
-        lowerText.includes("convocazion") ||
-        lowerText.includes("supplenz") ||
-        lowerText.includes("personale ata") ||
-        lowerText.includes("/ata/") ||
-        lowerText.includes("avvisi ata") ||
-        lowerText.includes("circolar") ||
-        lowerText.includes("comunicazion")
+        lowerText.includes("trasparenza") || 
+        lowerText.includes("amministrazione trasparente") || 
+        lowerText.includes("amministrazione-trasparente") || 
+        lowerText.includes("trasparenza-pa") ||
+        lowerText.includes("amministrazionetrasparente")
       ) {
         priority = 5;
-      } else if (lowerText.includes("trasparenza") || lowerText.includes("amministrazione trasparente")) {
-        priority = 3;
       }
 
       if (priority > 0) {
@@ -1262,12 +1260,28 @@ async function executeClientSideSearch(queryStr: string, apiKey: string) {
   return respData?.choices?.[0]?.message?.content || "Nessun risultato trovato.";
 }
 
+function textContainsName(text: string, name: string): boolean {
+  if (!text || !name) return false;
+  const cleanText = text.toLowerCase();
+  const cleanName = name.toLowerCase().trim();
+  if (cleanText.includes(cleanName)) return true;
+
+  // Split name into words (e.g., "Rossi Mario" -> ["rossi", "mario"])
+  const words = cleanName.split(/\s+/).filter(w => w.length > 2);
+  if (words.length >= 2) {
+    // Check if all words are present in the text
+    return words.every(word => cleanText.includes(word));
+  }
+  return false;
+}
+
 async function scrapeWebsite(
   targetUrl: string,
   apiKey: string,
   systemPrompt?: string,
   customProxyUrl?: string,
-  failedProxiesByDomain: Map<string, Set<string>> = new Map()
+  failedProxiesByDomain: Map<string, Set<string>> = new Map(),
+  inputNominativo?: string
 ) {
   const logs: string[] = [];
   const log = (msg: string) => {
@@ -1275,7 +1289,7 @@ async function scrapeWebsite(
   };
 
   let currentUrl = targetUrl.startsWith("http") ? targetUrl : `https://${targetUrl}`;
-  log(`Avvio estrazione approfondita per: ${currentUrl}`);
+  log(`Avvio estrazione approfondita per: ${currentUrl}${inputNominativo ? ` (Cercando nominativo: ${inputNominativo})` : ""}`);
 
   let fullText = "";
   let navigatedUrl = currentUrl;
@@ -1315,21 +1329,32 @@ async function scrapeWebsite(
         // Estrai e analizza gli allegati PDF presenti direttamente nella pagina principale
         const mainPagePdfs = extractPdfsFromHtml(rawHome, currentUrl);
         if (mainPagePdfs.length > 0) {
-          log(`Trovati ${mainPagePdfs.length} documenti/allegati PDF nella pagina principale.`);
+          log(`Trovati ${mainPagePdfs.length} documenti/allegati nella pagina principale.`);
           const topMainPdfs = mainPagePdfs.slice(0, 4);
           for (const pdfItem of topMainPdfs) {
-            log(`Analisi allegato PDF: "${pdfItem.title}" (${pdfItem.url})`);
+            log(`Analisi allegato: "${pdfItem.title}" (${pdfItem.url})`);
             try {
               const pBufRes = await fetchWithProxy(pdfItem.url, true, log, customProxyUrl, failedProxiesByDomain);
               if (pBufRes?.data) {
                 const { text: pText } = await extractTextFromPdfBuffer(pBufRes.data as ArrayBuffer);
                 if (pText && pText.trim().length > 30) {
-                  log(`Estratti ${pText.length} caratteri da allegato PDF "${pdfItem.title}"`);
-                  allTexts.push(`=== DOCUMENTO/GRADUATORIA ALLEGATA "${pdfItem.title}" (${pdfItem.url}) ===\n${pText}`);
+                  log(`Estratti ${pText.length} caratteri da allegato "${pdfItem.title}"`);
+                  
+                  // Se stiamo cercando un nominativo specifico, filtra
+                  if (inputNominativo && inputNominativo.trim()) {
+                    if (textContainsName(pText, inputNominativo)) {
+                      log(`🎯 Nominativo cercato "${inputNominativo}" individuato nell'allegato: ${pdfItem.url}`);
+                      allTexts.push(`=== DOCUMENTO/GRADUATORIA ALLEGATA "${pdfItem.title}" (${pdfItem.url}) ===\n${pText}`);
+                    } else {
+                      log(`Filtro: nominativo "${inputNominativo}" non presente nell'allegato. Salto per salvare spazio.`);
+                    }
+                  } else {
+                    allTexts.push(`=== DOCUMENTO/GRADUATORIA ALLEGATA "${pdfItem.title}" (${pdfItem.url}) ===\n${pText}`);
+                  }
                 }
               }
             } catch (pErr: any) {
-              log(`Avviso lettura allegato PDF ${pdfItem.title}: ${pErr.message}`);
+              log(`Avviso lettura allegato ${pdfItem.title}: ${pErr.message}`);
             }
           }
         }
@@ -1339,14 +1364,14 @@ async function scrapeWebsite(
       allTexts.push(`=== HOMEPAGE (${currentUrl}) ===\n${homeText}`);
       log(`Homepage analizzata (${homeText.length} caratteri estratti).`);
 
-      // 2. Discover relevant sub-links (Albo Pretorio, Circolari, ATA, Trasparenza)
+      // 2. Discover relevant sub-links (Albo Pretorio, Trasparenza)
       const discoveredLinks = findRelevantSchoolLinks(rawHome, currentUrl, homeDoc);
-      log(`Trovati ${discoveredLinks.length} link rilevanti (Albo, Circolari, Convocazioni).`);
+      log(`Trovati ${discoveredLinks.length} link di sezioni d'interesse (Albo Online / Amministrazione Trasparente).`);
 
       // Take top 5 highest priority links to crawl deeply
       const topLinksToFetch = discoveredLinks.slice(0, 5);
       for (const link of topLinksToFetch) {
-        log(`Scansione approfondita sottolink: "${link.title}" (${link.url})`);
+        log(`Scansione approfondita sezione: "${link.title}" (${link.url})`);
         try {
           navigatedUrl = link.url;
           const subRes = await fetchWithProxy(link.url, false, log, customProxyUrl, failedProxiesByDomain);
@@ -1378,42 +1403,46 @@ async function scrapeWebsite(
                   const pdfAnchors = Array.from(detailDoc.querySelectorAll("a"));
                   for (const pa of pdfAnchors) {
                     const ph = pa.getAttribute("href") || "";
-                    if (ph.toLowerCase().endsWith(".pdf") || ph.toLowerCase().includes(".pdf?")) {
-                      const pdfResolved = new URL(ph, act.url).href;
-                      log(`PDF trovato: ${pdfResolved}`);
+                    if (ph) {
+                      const lowerH = ph.toLowerCase();
+                      const lowerT = (pa.textContent || pa.getAttribute("title") || "").toLowerCase();
+                      
+                      const isPdf = lowerH.endsWith(".pdf") || lowerH.includes(".pdf?") || lowerH.includes(".pdf/") ||
+                                    lowerH.includes("download") || lowerH.includes("allegat") || lowerH.includes("attachment") ||
+                                    lowerT.includes("pdf") || lowerT.includes("allegato") || lowerT.includes("scarica") || lowerT.includes("visualizza");
+                      
+                      const isExcluded = lowerH.endsWith(".zip") || lowerH.endsWith(".png") || lowerH.endsWith(".jpg") || lowerH.endsWith(".jpeg") || lowerH.endsWith(".doc") || lowerH.endsWith(".docx") || lowerH.endsWith(".xls") || lowerH.endsWith(".xlsx");
 
-                      // Estrai il testo completo del PDF dell'atto
-                      try {
-                        const actPdfBuf = await fetchWithProxy(pdfResolved, true, log, customProxyUrl, failedProxiesByDomain);
-                        if (actPdfBuf?.data) {
-                          const { text: actPdfText } = await extractTextFromPdfBuffer(actPdfBuf.data as ArrayBuffer);
-                          if (actPdfText && actPdfText.trim().length > 30) {
-                            log(`Estratti ${actPdfText.length} caratteri dal PDF dell'atto ${act.id}`);
-                            allTexts.push(`=== ATTO ${act.id} TESTO PDF ALLEGATO (${pdfResolved}) ===\n${actPdfText}`);
+                      if (isPdf && !isExcluded) {
+                        const pdfResolved = new URL(ph, act.url).href;
+                        log(`Documento allegato trovato: ${pdfResolved}`);
+
+                        // Estrai il testo completo del PDF dell'atto
+                        try {
+                          const actPdfBuf = await fetchWithProxy(pdfResolved, true, log, customProxyUrl, failedProxiesByDomain);
+                          if (actPdfBuf?.data) {
+                            const { text: actPdfText } = await extractTextFromPdfBuffer(actPdfBuf.data as ArrayBuffer);
+                            if (actPdfText && actPdfText.trim().length > 30) {
+                              log(`Estratti ${actPdfText.length} caratteri dal PDF dell'atto ${act.id}`);
+                              
+                              // Se stiamo cercando un nominativo specifico, verifichiamo se è presente
+                              if (inputNominativo && inputNominativo.trim()) {
+                                if (textContainsName(actPdfText, inputNominativo)) {
+                                  log(`🎯 Nominativo cercato "${inputNominativo}" individuato nel PDF dell'atto: ${pdfResolved}`);
+                                  allTexts.push(`=== ATTO ${act.id} TESTO PDF ALLEGATO (${pdfResolved}) ===\n${actPdfText}`);
+                                } else {
+                                  log(`Filtro: nominativo "${inputNominativo}" non presente nel PDF dell'atto. Salto.`);
+                                }
+                              } else {
+                                allTexts.push(`=== ATTO ${act.id} TESTO PDF ALLEGATO (${pdfResolved}) ===\n${actPdfText}`);
+                              }
+                            }
                           }
+                        } catch (actPdfErr: any) {
+                          log(`Avviso lettura buffer PDF atto ${act.id}: ${actPdfErr.message}`);
                         }
-                      } catch (actPdfErr: any) {
-                        log(`Avviso lettura buffer PDF atto ${act.id}: ${actPdfErr.message}`);
-                      }
 
-                      allTexts.push(`=== PDF ALLEGATO (${pdfResolved}) ===\n[PDF URL: ${pdfResolved}]`);
-
-                      try {
-                        log(`Invio PDF via URL/fallback: ${pdfResolved}`);
-                        const pdfResJson = await extractPdfWithOpenRouter(
-                          pdfResolved,
-                          "Estrai con precisione da questo atto/PDF i dati relativi a: codice_meccanografico univoco della scuola (es. CHIC81000A, MIIS00100B, cerca nell'intestazione o email @istruzione.it), convocazioni, contratti e interpelli per personale ATA (collaboratore scolastico, assistente amministrativo, tecnico con relativa area laboratorio es. AR01, AR02, AR08, cuoco, agrario) e DOCENTI (infanzia, primaria, secondaria, cattedre comuni e sostegno con relativa classe di concorso CDC es. A-12, A-22, A-28, ADMM, ADSS), graduatorie, punteggi (es. punti 13,17, pt. 45, soglia fino a punteggio 12), tipologia_personale, classe_concorso_area_lab, tipo_posto, ore e decorrenza. Se il punteggio manca, restituisci RIGOROSAMENTE null (MAI 0). Rispondi in JSON.",
-                          apiKey,
-                          false,
-                          customProxyUrl,
-                          failedProxiesByDomain
-                        );
-                        if (pdfResJson && !pdfResJson.error && pdfResJson?.choices?.[0]?.message?.content) {
-                          const pdfContentStr = pdfResJson.choices[0].message.content;
-                          allTexts.push(`=== ESTRAZIONE PDF (${pdfResolved}) ===\n${pdfContentStr}`);
-                        }
-                      } catch (pdfErr: any) {
-                        log(`Avviso estrazione PDF ${pdfResolved}: ${pdfErr.message}`);
+                        allTexts.push(`=== PDF ALLEGATO (${pdfResolved}) ===\n[PDF URL: ${pdfResolved}]`);
                       }
                     }
                   }
@@ -1483,7 +1512,7 @@ const executeClientSideExtract = async (
   failedProxiesByDomain: Map<string, Set<string>> = new Map(),
   inputNominativo?: string
 ) => {
-    const res = await scrapeWebsite(targetUrl, apiKey, EXTRACTION_SYSTEM_PROMPT, customProxy, failedProxiesByDomain);
+    const res = await scrapeWebsite(targetUrl, apiKey, EXTRACTION_SYSTEM_PROMPT, customProxy, failedProxiesByDomain, inputNominativo);
     const defaultData = {
       nome_istituto: "",
       codice_meccanografico: "",

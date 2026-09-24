@@ -954,12 +954,7 @@ export function isGraduatoriaLink(text: string, href: string): { matches: boolea
   const cleanHref = safeDecodeURIComponent(href || "");
   const combined = `${cleanText} ${cleanHref}`.toLowerCase();
 
-  // 1. graduatoria / graduatorie (priorità massima)
-  if (/\bgraduatorie?\b/i.test(combined) || combined.includes("graduatoria") || combined.includes("graduatorie")) {
-    return { matches: true, keyword: "graduatoria/e", priority: 10 };
-  }
-
-  // 2. albo pretorio / albo online / pubblicità legale
+  // 1. albo pretorio / albo online / pubblicità legale
   if (
     combined.includes("albo pretorio") ||
     combined.includes("albo-pretorio") ||
@@ -968,13 +963,14 @@ export function isGraduatoriaLink(text: string, href: string): { matches: boolea
     combined.includes("albo-online") ||
     combined.includes("/albo/") ||
     combined.includes("albipretorionline") ||
+    combined.includes("bacheca") ||
     combined.includes("pubblicita legale") ||
     combined.includes("pubblicità legale")
   ) {
-    return { matches: true, keyword: "albo pretorio", priority: 6 };
+    return { matches: true, keyword: "albo pretorio", priority: 10 };
   }
 
-  // 3. amministrazione trasparente / trasparenza
+  // 2. amministrazione trasparente / trasparenza
   if (
     combined.includes("amministrazione trasparente") ||
     combined.includes("amministrazione-trasparente") ||
@@ -983,7 +979,15 @@ export function isGraduatoriaLink(text: string, href: string): { matches: boolea
     combined.includes("/trasparenza") ||
     combined.includes("trasparenza-pa")
   ) {
-    return { matches: true, keyword: "amministrazione trasparente", priority: 5 };
+    return { matches: true, keyword: "amministrazione trasparente", priority: 8 };
+  }
+
+  // 3. graduatoria / graduatorie (mantenuta solo se contiene anche albo, trasparenza, o pubblicità legale)
+  if (
+    (/\bgraduatorie?\b/i.test(combined) || combined.includes("graduatoria") || combined.includes("graduatorie")) &&
+    (combined.includes("albo") || combined.includes("trasparenza") || combined.includes("pubblicit") || combined.includes("bacheca"))
+  ) {
+    return { matches: true, keyword: "graduatoria/e", priority: 9 };
   }
 
   return { matches: false, keyword: "", priority: 0 };

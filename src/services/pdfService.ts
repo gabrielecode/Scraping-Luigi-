@@ -15,7 +15,7 @@ if (typeof window !== 'undefined' && pdfjsLib.GlobalWorkerOptions) {
  */
 export async function extractTextFromPdfBuffer(
   buffer: ArrayBuffer | Uint8Array,
-  maxPages = 20
+  maxPages = 100
 ): Promise<{ text: string; numPages: number }> {
   try {
     const data = buffer instanceof Uint8Array ? buffer : new Uint8Array(buffer);
@@ -88,7 +88,8 @@ export function extractPdfsFromHtml(
   const pdfLinks: Array<{ url: string; title: string; priority: number }> = [];
   const seenUrls = new Set<string>();
 
-  const regex = /<a\b[^>]*\bhref=["']([^"']+\.pdf(?:\?[^"']*)?)["'][^>]*>(.*?)<\/a>/gi;
+  // Match any <a> tag
+  const regex = /<a\b[^>]*\bhref=["']([^"']+)["'][^>]*>(.*?)<\/a>/gi;
   let match: RegExpExecArray | null;
 
   while ((match = regex.exec(html)) !== null) {
@@ -98,42 +99,56 @@ export function extractPdfsFromHtml(
       const resolvedUrl = new URL(rawHref, baseUrl).href;
 
       if (seenUrls.has(resolvedUrl)) continue;
-      seenUrls.add(resolvedUrl);
 
-      // Calcola punteggio di priorità basato su parole chiave
-      const combined = `${resolvedUrl} ${rawText}`.toLowerCase();
-      let priority = 1;
+      const lowerHref = resolvedUrl.toLowerCase();
+      const lowerText = rawText.toLowerCase();
+      const combined = `${lowerHref} ${lowerText}`;
 
-      if (
-        combined.includes('graduatori') ||
-        combined.includes('convocazion') ||
-        combined.includes('calendario') ||
-        combined.includes('supplenz') ||
-        combined.includes('disponibilit') ||
-        combined.includes('decreto') ||
-        combined.includes('individuazion') ||
-        combined.includes('assunzion') ||
-        combined.includes('interpell') ||
-        combined.includes('puntegg') ||
-        combined.includes('nomina')
-      ) {
-        priority += 10;
+      // Check if it is likely a PDF or document download
+      const isPdfExtension = lowerHref.endsWith('.pdf') || lowerHref.includes('.pdf?') || lowerHref.includes('.pdf/');
+      const isDownloadUrl = lowerHref.includes('download') || lowerHref.includes('allegat') || lowerHref.includes('attachment') || lowerHref.includes('document') || lowerHref.includes('visualizza') || lowerHref.includes('getfile') || lowerHref.includes('uploads');
+      const hasDocKeyword = lowerText.includes('pdf') || lowerText.includes('allegato') || lowerText.includes('scarica') || lowerText.includes('graduatori') || lowerText.includes('convocazion') || lowerText.includes('supplenz') || lowerText.includes('contratto') || lowerText.includes('nomina') || lowerText.includes('avviso');
+
+      // Exclude non-PDF extensions to avoid false positives
+      const isExcluded = lowerHref.endsWith('.zip') || lowerHref.endsWith('.png') || lowerHref.endsWith('.jpg') || lowerHref.endsWith('.jpeg') || lowerHref.endsWith('.doc') || lowerHref.endsWith('.docx') || lowerHref.endsWith('.xls') || lowerHref.endsWith('.xlsx') || lowerHref.endsWith('.mp4') || lowerHref.endsWith('.css') || lowerHref.endsWith('.js');
+
+      if ((isPdfExtension || isDownloadUrl || hasDocKeyword) && !isExcluded) {
+        seenUrls.add(resolvedUrl);
+
+        // Calcola punteggio di priorità basato su parole chiave
+        let priority = 1;
+
+        if (
+          combined.includes('graduatori') ||
+          combined.includes('convocazion') ||
+          combined.includes('calendario') ||
+          combined.includes('supplenz') ||
+          combined.includes('disponibilit') ||
+          combined.includes('decreto') ||
+          combined.includes('individuazion') ||
+          combined.includes('assunzion') ||
+          combined.includes('interpell') ||
+          combined.includes('puntegg') ||
+          combined.includes('nomina')
+        ) {
+          priority += 10;
+        }
+
+        if (combined.includes('ata') || combined.includes('docent')) {
+          priority += 5;
+        }
+
+        // Penalizza moduli generici o privacy se non pertinenti
+        if (combined.includes('privacy') || combined.includes('patto') || combined.includes('modulistica')) {
+          priority -= 4;
+        }
+
+        pdfLinks.push({
+          url: resolvedUrl,
+          title: rawText || resolvedUrl.split('/').pop() || 'Documento PDF',
+          priority,
+        });
       }
-
-      if (combined.includes('ata') || combined.includes('docent')) {
-        priority += 5;
-      }
-
-      // Penalizza moduli generici o privacy se non pertinenti
-      if (combined.includes('privacy') || combined.includes('patto') || combined.includes('modulistica')) {
-        priority -= 4;
-      }
-
-      pdfLinks.push({
-        url: resolvedUrl,
-        title: rawText || resolvedUrl.split('/').pop() || 'Documento PDF',
-        priority,
-      });
     } catch {
       // Ignora URL non validi
     }
