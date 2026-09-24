@@ -127,7 +127,7 @@ export const GraduatorieManager: React.FC<GraduatorieManagerProps> = ({
   return (
     <div className="space-y-6">
       {/* Header Banner */}
-      <div className="bg-slate-900 border border-slate-800 rounded-lg p-6 hover:border-slate-700 transition-colors space-y-4">
+      <div className="bg-slate-900 border border-slate-800 rounded-lg p-6 hover:border-slate-700 transition-colors motion-reduce:transition-none space-y-4">
         <div className="flex flex-col lg:flex-row items-start lg:items-center justify-between gap-6">
           <div className="space-y-2 max-w-2xl">
             <div className="inline-flex items-center gap-2 bg-blue-500/10 text-blue-400 border border-blue-500/20 px-3 py-1 rounded-md text-xs font-semibold uppercase tracking-wider">
@@ -144,16 +144,19 @@ export const GraduatorieManager: React.FC<GraduatorieManagerProps> = ({
 
           <div className="flex flex-wrap items-center gap-3">
             <button
+              type="button"
               onClick={() => setShowAddModal(true)}
-              className="h-10 px-4 bg-blue-500 hover:bg-blue-400 text-white font-medium rounded-md transition-colors flex items-center gap-2 text-sm cursor-pointer focus-visible:ring-2 ring-blue-500 ring-offset-2 ring-offset-slate-950"
+              className="h-10 px-4 bg-blue-500 hover:bg-blue-400 text-white font-medium rounded-md transition-colors motion-reduce:transition-none flex items-center gap-2 text-sm cursor-pointer focus-visible:ring-2 ring-blue-500 ring-offset-2 ring-offset-slate-950"
             >
               <Plus className="w-4 h-4" />
               <span>Importa Nuova Graduatoria</span>
             </button>
             <button
+              type="button"
               onClick={exportGraduatorieJson}
-              className="h-10 px-4 bg-slate-800 hover:bg-slate-700 text-slate-200 border border-slate-700 text-sm font-medium rounded-md transition-colors flex items-center gap-2 cursor-pointer focus-visible:ring-2 ring-slate-400 ring-offset-2 ring-offset-slate-950"
+              className="h-10 px-4 bg-slate-800 hover:bg-slate-700 text-slate-200 border border-slate-700 text-sm font-medium rounded-md transition-colors motion-reduce:transition-none flex items-center gap-2 cursor-pointer focus-visible:ring-2 ring-slate-400 ring-offset-2 ring-offset-slate-950"
               title="Esporta le graduatorie salvate in formato JSON"
+              aria-label="Esporta le graduatorie salvate in formato JSON"
             >
               <Download className="w-4 h-4 text-blue-400" />
               <span>Esporta JSON</span>
@@ -180,22 +183,26 @@ export const GraduatorieManager: React.FC<GraduatorieManagerProps> = ({
             </h3>
           </div>
 
-          {/* Search filter */}
+          {/* Search filter with accessible label */}
           <div className="relative">
-            <Search className="size-4 text-slate-500 absolute left-3 top-3" />
+            <label htmlFor="graduatorie-search-filter" className="sr-only">
+              Filtra graduatorie per scuola, codice o CDC
+            </label>
+            <Search className="size-4 text-slate-400 absolute left-3 top-3 pointer-events-none" />
             <input
+              id="graduatorie-search-filter"
               type="text"
               placeholder="Filtra per scuola, codice o CDC..."
               value={searchTerm}
               onChange={(e) => setSearchTerm(e.target.value)}
-              className="w-full bg-slate-950 border border-slate-800 rounded-md h-10 pl-9 pr-3 text-sm text-slate-100 placeholder-slate-500 outline-none focus-visible:ring-2 ring-blue-500 ring-offset-2 ring-offset-slate-950 transition-colors"
+              className="w-full bg-slate-950 border border-slate-800 rounded-md h-10 pl-9 pr-3 text-sm text-slate-100 placeholder-slate-400 outline-none focus-visible:ring-2 ring-blue-500 ring-offset-2 ring-offset-slate-950 transition-colors motion-reduce:transition-none"
             />
           </div>
 
-          <div className="space-y-2 max-h-[500px] overflow-y-auto pr-1">
+          <div className="space-y-2 max-h-[500px] overflow-y-auto pr-1" role="list" aria-label="Elenco graduatorie salvate">
             {filteredGraduatorie.length === 0 ? (
-              <div className="p-6 text-center text-slate-500 text-xs space-y-2">
-                <BookOpen className="w-8 h-8 mx-auto opacity-40" />
+              <div className="p-6 text-center text-slate-400 text-xs space-y-2">
+                <BookOpen className="w-8 h-8 mx-auto opacity-40 text-slate-400" />
                 <p>Nessuna graduatoria trovata.</p>
               </div>
             ) : (
@@ -204,8 +211,17 @@ export const GraduatorieManager: React.FC<GraduatorieManagerProps> = ({
                 return (
                   <div
                     key={g.id}
+                    role="button"
+                    tabIndex={0}
+                    aria-pressed={isSelected}
                     onClick={() => setSelectedGrad(g)}
-                    className={`p-3.5 rounded-md border transition-colors cursor-pointer relative group ${
+                    onKeyDown={(e) => {
+                      if (e.key === "Enter" || e.key === " ") {
+                        e.preventDefault();
+                        setSelectedGrad(g);
+                      }
+                    }}
+                    className={`p-3.5 rounded-md border transition-colors motion-reduce:transition-none cursor-pointer relative group text-left outline-none focus-visible:ring-2 ring-blue-500 ring-offset-2 ring-offset-slate-950 ${
                       isSelected
                         ? "bg-blue-500/10 border-blue-500/40"
                         : "bg-slate-950 border-slate-800 hover:border-slate-700"
@@ -215,10 +231,10 @@ export const GraduatorieManager: React.FC<GraduatorieManagerProps> = ({
                       <div className="space-y-1">
                         <div className="flex items-center gap-2 flex-wrap">
                           <span
-                            className={`px-2 py-0.5 rounded text-[10px] font-bold ${
+                            className={`px-2 py-0.5 rounded-md text-xs font-medium border ${
                               g.tipologia_personale === "DOCENTE"
-                                ? "bg-amber-500/20 text-amber-300 border border-amber-500/30"
-                                : "bg-blue-500/20 text-blue-300 border border-blue-500/30"
+                                ? "bg-amber-500/10 text-amber-400 border-amber-500/20"
+                                : "bg-blue-500/10 text-blue-400 border-blue-500/20"
                             }`}
                           >
                             {g.tipologia_personale}
@@ -244,9 +260,11 @@ export const GraduatorieManager: React.FC<GraduatorieManagerProps> = ({
                       </div>
 
                       <button
+                        type="button"
                         onClick={(e) => handleDeleteGraduatoria(g.id, e)}
                         title="Elimina graduatoria"
-                        className="opacity-0 group-hover:opacity-100 p-1.5 text-slate-400 hover:text-rose-400 hover:bg-slate-800 rounded-md transition-colors"
+                        aria-label={`Elimina graduatoria ${g.nome_istituto || g.profilo_o_cdc} fascia ${g.fascia}`}
+                        className="opacity-0 group-hover:opacity-100 focus:opacity-100 p-1.5 text-slate-400 hover:text-rose-400 hover:bg-slate-800 rounded-md transition-colors motion-reduce:transition-none focus-visible:ring-2 ring-rose-500 ring-offset-2 ring-offset-slate-950 cursor-pointer"
                       >
                         <Trash2 className="w-3.5 h-3.5" />
                       </button>
@@ -266,10 +284,10 @@ export const GraduatorieManager: React.FC<GraduatorieManagerProps> = ({
                 <div>
                   <div className="flex items-center gap-2 flex-wrap mb-1">
                     <span
-                      className={`px-2 py-0.5 rounded text-[11px] font-bold ${
+                      className={`px-2 py-0.5 rounded-md text-xs font-medium border ${
                         selectedGrad.tipologia_personale === "DOCENTE"
-                          ? "bg-amber-500/20 text-amber-300 border border-amber-500/30"
-                          : "bg-blue-500/20 text-blue-300 border border-blue-500/30"
+                          ? "bg-amber-500/10 text-amber-400 border-amber-500/20"
+                          : "bg-blue-500/10 text-blue-400 border-blue-500/20"
                       }`}
                     >
                       {selectedGrad.tipologia_personale}
@@ -281,7 +299,7 @@ export const GraduatorieManager: React.FC<GraduatorieManagerProps> = ({
                       Fascia {selectedGrad.fascia}
                     </span>
                     {selectedGrad.anno_scolastico && (
-                      <span className="text-xs bg-slate-800 text-slate-400 px-2 py-0.5 rounded-md">
+                      <span className="text-xs bg-slate-800 text-slate-300 px-2 py-0.5 rounded-md border border-slate-700">
                         A.S. {selectedGrad.anno_scolastico}
                       </span>
                     )}
@@ -304,19 +322,22 @@ export const GraduatorieManager: React.FC<GraduatorieManagerProps> = ({
                 </div>
               </div>
 
-              {/* Table of entries */}
+              {/* Table of entries with sr-only caption */}
               <div className="overflow-x-auto max-h-[460px] overflow-y-auto border border-slate-800 rounded-lg">
                 <table className="w-full text-left text-sm border-collapse">
+                  <caption className="sr-only">
+                    Elenco posizioni e punteggi della graduatoria {selectedGrad.profilo_o_cdc} - Fascia {selectedGrad.fascia} ({selectedGrad.nome_istituto || "Tutti gli istituti"})
+                  </caption>
                   <thead className="sticky top-0 bg-slate-900 text-slate-400 text-xs font-semibold border-b border-slate-800 z-10">
                     <tr>
-                      <th className="px-4 py-3 font-semibold text-center w-24">Posizione</th>
-                      <th className="px-4 py-3 font-semibold text-center w-28 text-emerald-400">Punteggio</th>
-                      <th className="px-4 py-3 font-semibold">Candidato / Note</th>
+                      <th scope="col" className="px-4 py-3 font-semibold text-center w-24">Posizione</th>
+                      <th scope="col" className="px-4 py-3 font-semibold text-center w-28 text-emerald-400">Punteggio</th>
+                      <th scope="col" className="px-4 py-3 font-semibold">Candidato / Note</th>
                     </tr>
                   </thead>
                   <tbody>
                     {selectedGrad.graduatoria.map((entry, idx) => (
-                      <tr key={idx} className="border-b border-slate-800 last:border-b-0 hover:bg-slate-800/50 transition-colors">
+                      <tr key={idx} className="border-b border-slate-800 last:border-b-0 hover:bg-slate-800/50 transition-colors motion-reduce:transition-none">
                         <td className="px-4 py-3 text-center font-mono font-bold text-blue-400 text-sm">
                           #{entry.posizione}
                         </td>
@@ -325,7 +346,7 @@ export const GraduatorieManager: React.FC<GraduatorieManagerProps> = ({
                         </td>
                         <td className="px-4 py-3 text-slate-300 text-sm">
                           {entry.cognome_nome || (
-                            <span className="text-slate-500 italic">Dato riservato (Posizione #{entry.posizione})</span>
+                            <span className="text-slate-400 italic">Dato riservato (Posizione #{entry.posizione})</span>
                           )}
                         </td>
                       </tr>
@@ -335,12 +356,13 @@ export const GraduatorieManager: React.FC<GraduatorieManagerProps> = ({
               </div>
             </>
           ) : (
-            <div className="p-12 text-center text-slate-500 space-y-3">
+            <div className="p-12 text-center text-slate-400 space-y-3">
               <GraduationCap className="w-12 h-12 mx-auto opacity-30 text-blue-400" />
               <p className="text-sm font-medium">Nessuna graduatoria selezionata.</p>
               <button
+                type="button"
                 onClick={() => setShowAddModal(true)}
-                className="h-10 px-4 bg-blue-500 hover:bg-blue-400 text-white text-xs font-semibold rounded-md transition-colors cursor-pointer focus-visible:ring-2 ring-blue-500 ring-offset-2 ring-offset-slate-950"
+                className="h-10 px-4 bg-blue-500 hover:bg-blue-400 text-white text-xs font-semibold rounded-md transition-colors motion-reduce:transition-none cursor-pointer focus-visible:ring-2 ring-blue-500 ring-offset-2 ring-offset-slate-950"
               >
                 Carica una graduatoria
               </button>
@@ -351,17 +373,23 @@ export const GraduatorieManager: React.FC<GraduatorieManagerProps> = ({
 
       {/* Modal: Add New Graduatoria */}
       {showAddModal && (
-        <div className="fixed inset-0 bg-slate-950/80 backdrop-blur-sm z-50 flex items-center justify-center p-4 overflow-y-auto">
+        <div
+          role="dialog"
+          aria-modal="true"
+          aria-labelledby="modal-add-title"
+          className="fixed inset-0 bg-slate-950/80 backdrop-blur-sm z-50 flex items-center justify-center p-4 overflow-y-auto"
+        >
           <div className="bg-slate-900 border border-slate-800 rounded-lg max-w-2xl w-full p-6 space-y-5 my-8">
             <div className="flex items-center justify-between border-b border-slate-800 pb-3">
-              <h3 className="text-base font-semibold text-slate-100 flex items-center gap-2">
+              <h3 id="modal-add-title" className="text-base font-semibold text-slate-100 flex items-center gap-2">
                 <FileSpreadsheet className="w-5 h-5 text-blue-400" />
                 <span>Importa Graduatoria d'Istituto</span>
               </h3>
               <button
                 type="button"
                 onClick={() => setShowAddModal(false)}
-                className="text-slate-400 hover:text-white p-1 rounded-md hover:bg-slate-800 transition-colors"
+                aria-label="Chiudi finestra modale"
+                className="text-slate-400 hover:text-white p-1.5 rounded-md hover:bg-slate-800 transition-colors motion-reduce:transition-none focus-visible:ring-2 ring-slate-400 ring-offset-2 ring-offset-slate-900 cursor-pointer"
               >
                 ✕
               </button>
@@ -370,30 +398,39 @@ export const GraduatorieManager: React.FC<GraduatorieManagerProps> = ({
             <form onSubmit={handleCreateGraduatoria} className="space-y-4">
               <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
                 <div className="space-y-1.5">
-                  <label className="text-xs font-medium text-slate-400 block">Denominazione Scuola</label>
+                  <label htmlFor="modal-input-scuola" className="text-xs font-medium text-slate-400 block">
+                    Denominazione Scuola
+                  </label>
                   <input
+                    id="modal-input-scuola"
                     type="text"
                     placeholder="es. IC Ripa Teatina"
                     value={newIstituto}
                     onChange={(e) => setNewIstituto(e.target.value)}
-                    className="w-full bg-slate-950 border border-slate-800 rounded-md h-10 px-3 py-2 text-sm text-slate-100 placeholder-slate-500 outline-none focus-visible:ring-2 ring-blue-500 ring-offset-2 ring-offset-slate-950 transition-colors"
+                    className="w-full bg-slate-950 border border-slate-800 rounded-md h-10 px-3 py-2 text-sm text-slate-100 placeholder-slate-400 outline-none focus-visible:ring-2 ring-blue-500 ring-offset-2 ring-offset-slate-950 transition-colors motion-reduce:transition-none"
                   />
                 </div>
 
                 <div className="space-y-1.5">
-                  <label className="text-xs font-medium text-slate-400 block">Codice Meccanografico</label>
+                  <label htmlFor="modal-input-codice" className="text-xs font-medium text-slate-400 block">
+                    Codice Meccanografico
+                  </label>
                   <input
+                    id="modal-input-codice"
                     type="text"
                     placeholder="es. CHIC81000A"
                     value={newCodice}
                     onChange={(e) => setNewCodice(e.target.value.toUpperCase())}
-                    className="w-full bg-slate-950 border border-slate-800 rounded-md h-10 px-3 py-2 text-sm text-slate-100 placeholder-slate-500 outline-none uppercase font-mono focus-visible:ring-2 ring-blue-500 ring-offset-2 ring-offset-slate-950 transition-colors"
+                    className="w-full bg-slate-950 border border-slate-800 rounded-md h-10 px-3 py-2 text-sm text-slate-100 placeholder-slate-400 outline-none uppercase font-mono focus-visible:ring-2 ring-blue-500 ring-offset-2 ring-offset-slate-950 transition-colors motion-reduce:transition-none"
                   />
                 </div>
 
                 <div className="space-y-1.5">
-                  <label className="text-xs font-medium text-slate-400 block">Tipologia Personale</label>
+                  <label htmlFor="modal-select-tipologia" className="text-xs font-medium text-slate-400 block">
+                    Tipologia Personale
+                  </label>
                   <select
+                    id="modal-select-tipologia"
                     value={newTipologia}
                     onChange={(e) => {
                       const t = e.target.value as TipologiaPersonale;
@@ -401,7 +438,7 @@ export const GraduatorieManager: React.FC<GraduatorieManagerProps> = ({
                       if (t === "DOCENTE") setNewProfilo("A-22");
                       else setNewProfilo("CS");
                     }}
-                    className="w-full bg-slate-950 border border-slate-800 rounded-md h-10 px-3 py-2 text-sm text-slate-100 outline-none focus-visible:ring-2 ring-blue-500 ring-offset-2 ring-offset-slate-950 transition-colors cursor-pointer"
+                    className="w-full bg-slate-950 border border-slate-800 rounded-md h-10 px-3 py-2 text-sm text-slate-100 outline-none focus-visible:ring-2 ring-blue-500 ring-offset-2 ring-offset-slate-950 transition-colors motion-reduce:transition-none cursor-pointer"
                   >
                     <option value="ATA">Personale ATA</option>
                     <option value="DOCENTE">Personale DOCENTE</option>
@@ -409,23 +446,29 @@ export const GraduatorieManager: React.FC<GraduatorieManagerProps> = ({
                 </div>
 
                 <div className="space-y-1.5">
-                  <label className="text-xs font-medium text-slate-400 block">Profilo ATA o CDC Docente</label>
+                  <label htmlFor="modal-input-profilo" className="text-xs font-medium text-slate-400 block">
+                    Profilo ATA o CDC Docente
+                  </label>
                   <input
+                    id="modal-input-profilo"
                     type="text"
                     placeholder={newTipologia === "DOCENTE" ? "es. A-12, A-22, ADMM" : "es. CS, AA, AT, AR02"}
                     value={newProfilo}
                     onChange={(e) => setNewProfilo(e.target.value)}
-                    className="w-full bg-slate-950 border border-slate-800 rounded-md h-10 px-3 py-2 text-sm text-slate-100 font-mono uppercase outline-none focus-visible:ring-2 ring-blue-500 ring-offset-2 ring-offset-slate-950 transition-colors"
+                    className="w-full bg-slate-950 border border-slate-800 rounded-md h-10 px-3 py-2 text-sm text-slate-100 font-mono uppercase outline-none focus-visible:ring-2 ring-blue-500 ring-offset-2 ring-offset-slate-950 transition-colors motion-reduce:transition-none"
                     required
                   />
                 </div>
 
                 <div className="space-y-1.5">
-                  <label className="text-xs font-medium text-slate-400 block">Fascia Graduatoria</label>
+                  <label htmlFor="modal-select-fascia" className="text-xs font-medium text-slate-400 block">
+                    Fascia Graduatoria
+                  </label>
                   <select
+                    id="modal-select-fascia"
                     value={newFascia}
                     onChange={(e) => setNewFascia(e.target.value)}
-                    className="w-full bg-slate-950 border border-slate-800 rounded-md h-10 px-3 py-2 text-sm text-slate-100 outline-none focus-visible:ring-2 ring-blue-500 ring-offset-2 ring-offset-slate-950 transition-colors cursor-pointer"
+                    className="w-full bg-slate-950 border border-slate-800 rounded-md h-10 px-3 py-2 text-sm text-slate-100 outline-none focus-visible:ring-2 ring-blue-500 ring-offset-2 ring-offset-slate-950 transition-colors motion-reduce:transition-none cursor-pointer"
                   >
                     <option value="1">Prima fascia (Fascia 1 / 24 Mesi)</option>
                     <option value="2">Seconda fascia (Fascia 2)</option>
@@ -435,13 +478,16 @@ export const GraduatorieManager: React.FC<GraduatorieManagerProps> = ({
                 </div>
 
                 <div className="space-y-1.5">
-                  <label className="text-xs font-medium text-slate-400 block">Anno Scolastico / Validità</label>
+                  <label htmlFor="modal-input-anno" className="text-xs font-medium text-slate-400 block">
+                    Anno Scolastico / Validità
+                  </label>
                   <input
+                    id="modal-input-anno"
                     type="text"
                     placeholder="2024/2027"
                     value={newAnno}
                     onChange={(e) => setNewAnno(e.target.value)}
-                    className="w-full bg-slate-950 border border-slate-800 rounded-md h-10 px-3 py-2 text-sm text-slate-100 outline-none focus-visible:ring-2 ring-blue-500 ring-offset-2 ring-offset-slate-950 transition-colors"
+                    className="w-full bg-slate-950 border border-slate-800 rounded-md h-10 px-3 py-2 text-sm text-slate-100 outline-none focus-visible:ring-2 ring-blue-500 ring-offset-2 ring-offset-slate-950 transition-colors motion-reduce:transition-none"
                   />
                 </div>
               </div>
@@ -449,22 +495,30 @@ export const GraduatorieManager: React.FC<GraduatorieManagerProps> = ({
               {/* Textarea / File input */}
               <div className="space-y-2 pt-2 border-t border-slate-800">
                 <div className="flex items-center justify-between">
-                  <label className="text-xs font-medium text-slate-400 block">
+                  <label htmlFor="modal-textarea-rawtext" className="text-xs font-medium text-slate-400 block">
                     Elenco Candidati (Posizione, Punteggio, Nominativo opzionale)
                   </label>
-                  <label className="text-xs text-blue-400 hover:text-blue-300 cursor-pointer flex items-center gap-1 font-medium">
+                  <label htmlFor="modal-file-upload-grad" className="text-xs text-blue-400 hover:text-blue-300 cursor-pointer flex items-center gap-1 font-medium focus-within:ring-2 ring-blue-500 ring-offset-2 ring-offset-slate-950 rounded px-1">
                     <Upload className="w-3.5 h-3.5" />
                     <span>Carica file CSV/TXT</span>
-                    <input type="file" accept=".csv,.txt,.tsv" onChange={handleFileUpload} className="hidden" />
+                    <input
+                      id="modal-file-upload-grad"
+                      type="file"
+                      accept=".csv,.txt,.tsv"
+                      onChange={handleFileUpload}
+                      className="sr-only"
+                      aria-label="Carica file CSV o TXT con elenco graduatoria"
+                    />
                   </label>
                 </div>
 
                 <textarea
+                  id="modal-textarea-rawtext"
                   rows={8}
                   value={rawText}
                   onChange={(e) => setRawText(e.target.value)}
                   placeholder={`Incolla qui le righe copiate dal PDF o dal file CSV della graduatoria:\n1;19,80;ROSSI M.\n2;18,55;BIANCHI G.\n15;15,20;VERDI A.\n313;13,17\n342;12,57`}
-                  className="w-full bg-slate-950 border border-slate-800 rounded-md p-3.5 text-xs text-slate-100 font-mono outline-none focus-visible:ring-2 ring-blue-500 ring-offset-2 ring-offset-slate-950 placeholder-slate-600 transition-colors"
+                  className="w-full bg-slate-950 border border-slate-800 rounded-md p-3.5 text-xs text-slate-100 font-mono outline-none focus-visible:ring-2 ring-blue-500 ring-offset-2 ring-offset-slate-950 placeholder-slate-400 transition-colors motion-reduce:transition-none"
                   required
                 />
                 <p className="text-xs text-slate-400">
@@ -477,13 +531,13 @@ export const GraduatorieManager: React.FC<GraduatorieManagerProps> = ({
                 <button
                   type="button"
                   onClick={() => setShowAddModal(false)}
-                  className="h-10 px-4 rounded-md text-xs font-medium text-slate-400 hover:text-slate-200 bg-slate-800 hover:bg-slate-700 transition-colors cursor-pointer"
+                  className="h-10 px-4 rounded-md text-xs font-medium text-slate-300 hover:text-slate-100 bg-slate-800 hover:bg-slate-700 transition-colors motion-reduce:transition-none cursor-pointer focus-visible:ring-2 ring-slate-400 ring-offset-2 ring-offset-slate-950"
                 >
                   Annulla
                 </button>
                 <button
                   type="submit"
-                  className="h-10 px-5 rounded-md text-xs font-medium bg-blue-500 hover:bg-blue-400 text-white flex items-center gap-1.5 cursor-pointer transition-colors focus-visible:ring-2 ring-blue-500 ring-offset-2 ring-offset-slate-950"
+                  className="h-10 px-5 rounded-md text-xs font-medium bg-blue-500 hover:bg-blue-400 text-white flex items-center gap-1.5 cursor-pointer transition-colors motion-reduce:transition-none focus-visible:ring-2 ring-blue-500 ring-offset-2 ring-offset-slate-950"
                 >
                   <CheckCircle2 className="w-4 h-4" />
                   <span>Salva e Importa</span>

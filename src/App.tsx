@@ -2819,7 +2819,7 @@ const executeClientSideExtract = async (
                           }}
                           aria-label="Svuota campo chiave"
                           title="Svuota campo"
-                          className="size-8 flex items-center justify-center text-slate-400 hover:text-white rounded-md hover:bg-slate-800 transition-colors"
+                          className="size-8 flex items-center justify-center text-slate-400 hover:text-white rounded-md hover:bg-slate-800 transition-colors motion-reduce:transition-none focus-visible:ring-2 ring-blue-500 ring-offset-2 ring-offset-slate-950 cursor-pointer"
                         >
                           <X className="w-3.5 h-3.5" />
                         </button>
@@ -2829,7 +2829,7 @@ const executeClientSideExtract = async (
                         onClick={() => setShowApiKey(!showApiKey)}
                         aria-label={showApiKey ? "Nascondi chiave" : "Mostra chiave"}
                         title={showApiKey ? "Nascondi chiave" : "Mostra chiave"}
-                        className="size-8 flex items-center justify-center text-slate-400 hover:text-white rounded-md hover:bg-slate-800 transition-colors"
+                        className="size-8 flex items-center justify-center text-slate-400 hover:text-white rounded-md hover:bg-slate-800 transition-colors motion-reduce:transition-none focus-visible:ring-2 ring-blue-500 ring-offset-2 ring-offset-slate-950 cursor-pointer"
                       >
                         {showApiKey ? <EyeOff className="w-4 h-4" /> : <Eye className="w-4 h-4" />}
                       </button>
@@ -3103,16 +3103,18 @@ const executeClientSideExtract = async (
 
               <form onSubmit={handleBatchProcess} className="space-y-4 pt-4 border-t border-slate-800">
                 <div className="flex flex-col sm:flex-row items-stretch sm:items-center gap-4">
-                  <label className="flex-1 flex flex-col items-center justify-center border-2 border-dashed border-slate-800 hover:border-slate-700 rounded-lg p-6 cursor-pointer bg-slate-950/60 transition-colors group min-h-[140px]">
-                    <FileSpreadsheet className="w-8 h-8 text-slate-400 group-hover:text-blue-400 mb-2 transition-colors" />
+                  <label htmlFor="batch-csv-upload-input" className="flex-1 flex flex-col items-center justify-center border-2 border-dashed border-slate-800 hover:border-slate-700 rounded-lg p-6 cursor-pointer bg-slate-950/60 transition-colors motion-reduce:transition-none group min-h-[140px] focus-within:ring-2 ring-blue-500 ring-offset-2 ring-offset-slate-950">
+                    <FileSpreadsheet className="w-8 h-8 text-slate-400 group-hover:text-blue-400 mb-2 transition-colors motion-reduce:transition-none" />
                     <span className="text-sm font-medium text-slate-200 group-hover:text-white text-center">
                       {selectedFile ? selectedFile.name : "Trascina qui il file CSV o clicca per selezionarlo"}
                     </span>
-                    <span className="text-xs text-slate-500 mt-1">Formati supportati: .csv</span>
+                    <span className="text-xs text-slate-400 mt-1">Formati supportati: .csv</span>
                     <input
+                      id="batch-csv-upload-input"
                       type="file"
                       accept=".csv"
-                      className="hidden"
+                      className="sr-only"
+                      aria-label="Carica file CSV contenente lista di URL scolastici"
                       onChange={(e) => {
                         if (e.target.files && e.target.files[0]) {
                           setSelectedFile(e.target.files[0]);
@@ -3347,22 +3349,25 @@ const executeClientSideExtract = async (
 
                 <div className="overflow-x-auto border border-slate-800 rounded-lg">
                   <table className="w-full text-left border-collapse text-sm">
+                    <caption className="sr-only">
+                      Risultati dell'elaborazione batch CSV con dettaglio statistiche convocazioni, nomine, graduatorie e contratti
+                    </caption>
                     <thead className="sticky top-0 bg-slate-900 text-xs font-semibold text-slate-400 border-b border-slate-800 z-10">
                       <tr>
-                        <th className="px-4 py-3 font-semibold whitespace-nowrap">URL Originale</th>
-                        <th className="px-4 py-3 font-semibold whitespace-nowrap">Stato</th>
-                        <th className="px-4 py-3 font-semibold text-center whitespace-nowrap text-blue-400">Tipo</th>
-                        <th className="px-4 py-3 font-semibold text-center whitespace-nowrap text-emerald-400">Profilo</th>
-                        <th className="px-4 py-3 font-semibold text-center whitespace-nowrap text-emerald-400">CDC / Area AT</th>
-                        <th className="px-4 py-3 font-semibold text-center whitespace-nowrap text-emerald-400">Posto</th>
-                        <th className="px-4 py-3 font-semibold text-center whitespace-nowrap text-emerald-400">Punti / Origine</th>
-                        <th className="px-4 py-3 font-semibold text-center whitespace-nowrap text-emerald-400">Fascia</th>
-                        <th className="px-4 py-3 font-semibold text-center whitespace-nowrap">Conv. Doc.</th>
-                        <th className="px-4 py-3 font-semibold text-center whitespace-nowrap">Conv. ATA</th>
-                        <th className="px-4 py-3 font-semibold text-center whitespace-nowrap">Pens. Doc.</th>
-                        <th className="px-4 py-3 font-semibold text-center whitespace-nowrap">Pens. ATA</th>
-                        <th className="px-4 py-3 font-semibold text-center whitespace-nowrap text-emerald-400">Ore</th>
-                        <th className="px-4 py-3 font-semibold text-center whitespace-nowrap text-emerald-400">Decorrenza</th>
+                        <th scope="col" className="px-4 py-3 font-semibold whitespace-nowrap">URL Originale</th>
+                        <th scope="col" className="px-4 py-3 font-semibold whitespace-nowrap">Stato</th>
+                        <th scope="col" className="px-4 py-3 font-semibold text-center whitespace-nowrap text-blue-400">Tipo</th>
+                        <th scope="col" className="px-4 py-3 font-semibold text-center whitespace-nowrap text-emerald-400">Profilo</th>
+                        <th scope="col" className="px-4 py-3 font-semibold text-center whitespace-nowrap text-emerald-400">CDC / Area AT</th>
+                        <th scope="col" className="px-4 py-3 font-semibold text-center whitespace-nowrap text-emerald-400">Posto</th>
+                        <th scope="col" className="px-4 py-3 font-semibold text-center whitespace-nowrap text-emerald-400">Punti / Origine</th>
+                        <th scope="col" className="px-4 py-3 font-semibold text-center whitespace-nowrap text-emerald-400">Fascia</th>
+                        <th scope="col" className="px-4 py-3 font-semibold text-center whitespace-nowrap">Conv. Doc.</th>
+                        <th scope="col" className="px-4 py-3 font-semibold text-center whitespace-nowrap">Conv. ATA</th>
+                        <th scope="col" className="px-4 py-3 font-semibold text-center whitespace-nowrap">Pens. Doc.</th>
+                        <th scope="col" className="px-4 py-3 font-semibold text-center whitespace-nowrap">Pens. ATA</th>
+                        <th scope="col" className="px-4 py-3 font-semibold text-center whitespace-nowrap text-emerald-400">Ore</th>
+                        <th scope="col" className="px-4 py-3 font-semibold text-center whitespace-nowrap text-emerald-400">Decorrenza</th>
                       </tr>
                     </thead>
                     <tbody>
@@ -3503,23 +3508,29 @@ const executeClientSideExtract = async (
               <form onSubmit={handleSingleProcess} className="space-y-4">
                 <div className="flex flex-col sm:flex-row gap-3">
                   <div className="flex-1 space-y-1.5">
-                    <label className="text-xs font-medium text-slate-400 block">URL Portale Scuola</label>
+                    <label htmlFor="single-url-input" className="text-xs font-medium text-slate-400 block">
+                      URL Portale Scuola
+                    </label>
                     <input
+                      id="single-url-input"
                       type="text"
                       placeholder="https://www.istitutoscolastico.edu.it"
                       value={singleUrl}
                       onChange={(e) => setSingleUrl(e.target.value)}
-                      className="w-full bg-slate-950 border border-slate-800 focus:border-blue-500 rounded-md h-10 px-3 py-2 text-sm text-slate-100 placeholder-slate-500 outline-none focus-visible:ring-2 ring-blue-500 ring-offset-2 ring-offset-slate-950 transition-colors"
+                      className="w-full bg-slate-950 border border-slate-800 focus:border-blue-500 rounded-md h-10 px-3 py-2 text-sm text-slate-100 placeholder-slate-400 outline-none focus-visible:ring-2 ring-blue-500 ring-offset-2 ring-offset-slate-950 transition-colors motion-reduce:transition-none"
                     />
                   </div>
                   <div className="sm:w-64 space-y-1.5">
-                    <label className="text-xs font-medium text-slate-400 block">Nominativo (opzionale)</label>
+                    <label htmlFor="single-nominativo-input" className="text-xs font-medium text-slate-400 block">
+                      Nominativo (opzionale)
+                    </label>
                     <input
+                      id="single-nominativo-input"
                       type="text"
                       placeholder="es. Mario Rossi"
                       value={singleNominativo}
                       onChange={(e) => setSingleNominativo(e.target.value)}
-                      className="w-full bg-slate-950 border border-slate-800 focus:border-blue-500 rounded-md h-10 px-3 py-2 text-sm text-slate-100 placeholder-slate-500 outline-none focus-visible:ring-2 ring-blue-500 ring-offset-2 ring-offset-slate-950 transition-colors"
+                      className="w-full bg-slate-950 border border-slate-800 focus:border-blue-500 rounded-md h-10 px-3 py-2 text-sm text-slate-100 placeholder-slate-400 outline-none focus-visible:ring-2 ring-blue-500 ring-offset-2 ring-offset-slate-950 transition-colors motion-reduce:transition-none"
                       title="Se inserito e il punteggio manca nel contratto, avvia la ricerca automatica nelle graduatorie d'istituto"
                     />
                   </div>
@@ -3527,7 +3538,7 @@ const executeClientSideExtract = async (
                     <button
                       type="submit"
                       disabled={isProcessingSingle || !singleUrl.trim()}
-                      className="h-10 px-5 bg-blue-500 hover:bg-blue-400 disabled:opacity-50 disabled:cursor-not-allowed text-white font-medium rounded-md transition-colors flex items-center justify-center gap-2 shrink-0 cursor-pointer focus-visible:ring-2 ring-blue-500 ring-offset-2 ring-offset-slate-950 w-full sm:w-auto"
+                      className="h-10 px-5 bg-blue-500 hover:bg-blue-400 disabled:opacity-50 disabled:cursor-not-allowed text-white font-medium rounded-md transition-colors motion-reduce:transition-none flex items-center justify-center gap-2 shrink-0 cursor-pointer focus-visible:ring-2 ring-blue-500 ring-offset-2 ring-offset-slate-950 w-full sm:w-auto"
                     >
                       {isProcessingSingle ? (
                         <>
@@ -3896,17 +3907,23 @@ const executeClientSideExtract = async (
 
               <form onSubmit={handleAlboScan} className="space-y-4">
                 <div className="flex flex-col sm:flex-row gap-3">
-                  <input
-                    type="text"
-                    placeholder="https://www.comprensivomilano.edu.it"
-                    value={alboUrlInput}
-                    onChange={(e) => setAlboUrlInput(e.target.value)}
-                    className="flex-1 bg-slate-950 border border-slate-800 focus:border-blue-500 rounded-md h-10 px-3 py-2 text-sm text-slate-100 placeholder-slate-500 outline-none focus-visible:ring-2 ring-blue-500 ring-offset-2 ring-offset-slate-950 transition-colors"
-                  />
+                  <div className="flex-1">
+                    <label htmlFor="albo-url-input" className="sr-only">
+                      URL Portale Istituto per scansione Albo Pretorio
+                    </label>
+                    <input
+                      id="albo-url-input"
+                      type="text"
+                      placeholder="https://www.comprensivomilano.edu.it"
+                      value={alboUrlInput}
+                      onChange={(e) => setAlboUrlInput(e.target.value)}
+                      className="w-full bg-slate-950 border border-slate-800 focus:border-blue-500 rounded-md h-10 px-3 py-2 text-sm text-slate-100 placeholder-slate-400 outline-none focus-visible:ring-2 ring-blue-500 ring-offset-2 ring-offset-slate-950 transition-colors motion-reduce:transition-none"
+                    />
+                  </div>
                   <button
                     type="submit"
                     disabled={isScanningAlbo || !alboUrlInput.trim()}
-                    className="h-10 px-5 bg-blue-500 hover:bg-blue-400 disabled:opacity-50 disabled:cursor-not-allowed text-white font-medium rounded-md transition-colors flex items-center justify-center gap-2 shrink-0 cursor-pointer focus-visible:ring-2 ring-blue-500 ring-offset-2 ring-offset-slate-950"
+                    className="h-10 px-5 bg-blue-500 hover:bg-blue-400 disabled:opacity-50 disabled:cursor-not-allowed text-white font-medium rounded-md transition-colors motion-reduce:transition-none flex items-center justify-center gap-2 shrink-0 cursor-pointer focus-visible:ring-2 ring-blue-500 ring-offset-2 ring-offset-slate-950"
                   >
                     {isScanningAlbo ? (
                       <>
@@ -4112,16 +4129,22 @@ const executeClientSideExtract = async (
 
               <form onSubmit={handlePdfUploadAndExtract} className="space-y-4">
                 <div className="flex flex-col sm:flex-row items-center gap-3">
-                  <input
-                    type="file"
-                    accept=".pdf"
-                    onChange={(e) => setSelectedPdfFile(e.target.files?.[0] || null)}
-                    className="flex-1 bg-slate-950 border border-slate-800 rounded-md h-10 px-3 py-1.5 text-sm text-slate-300 file:mr-3 file:py-1 file:px-3 file:rounded-md file:border-0 file:text-xs file:font-semibold file:bg-blue-500 file:text-white hover:file:bg-blue-400 cursor-pointer w-full focus-visible:ring-2 ring-blue-500 ring-offset-2 ring-offset-slate-950 transition-colors"
-                  />
+                  <div className="flex-1 w-full">
+                    <label htmlFor="direct-pdf-upload-input" className="sr-only">
+                      Carica file PDF di contratto o bando scolastico
+                    </label>
+                    <input
+                      id="direct-pdf-upload-input"
+                      type="file"
+                      accept=".pdf"
+                      onChange={(e) => setSelectedPdfFile(e.target.files?.[0] || null)}
+                      className="w-full bg-slate-950 border border-slate-800 rounded-md h-10 px-3 py-1.5 text-sm text-slate-300 file:mr-3 file:py-1 file:px-3 file:rounded-md file:border-0 file:text-xs file:font-semibold file:bg-blue-500 file:text-white hover:file:bg-blue-400 cursor-pointer focus-visible:ring-2 ring-blue-500 ring-offset-2 ring-offset-slate-950 transition-colors motion-reduce:transition-none"
+                    />
+                  </div>
                   <button
                     type="submit"
                     disabled={isExtractingPdf || !selectedPdfFile}
-                    className="h-10 px-5 bg-blue-500 hover:bg-blue-400 disabled:opacity-50 disabled:cursor-not-allowed text-white font-medium rounded-md transition-colors flex items-center justify-center gap-2 shrink-0 w-full sm:w-auto cursor-pointer focus-visible:ring-2 ring-blue-500 ring-offset-2 ring-offset-slate-950"
+                    className="h-10 px-5 bg-blue-500 hover:bg-blue-400 disabled:opacity-50 disabled:cursor-not-allowed text-white font-medium rounded-md transition-colors motion-reduce:transition-none flex items-center justify-center gap-2 shrink-0 w-full sm:w-auto cursor-pointer focus-visible:ring-2 ring-blue-500 ring-offset-2 ring-offset-slate-950"
                   >
                     {isExtractingPdf ? (
                       <>
@@ -4348,17 +4371,23 @@ const executeClientSideExtract = async (
 
               <form onSubmit={handleGoogleSearch} className="space-y-4">
                 <div className="flex flex-col sm:flex-row gap-3">
-                  <input
-                    type="text"
-                    placeholder="es. Convocazioni ATA terza fascia Milano 2026"
-                    value={searchQuery}
-                    onChange={(e) => setSearchQuery(e.target.value)}
-                    className="flex-1 bg-slate-950 border border-slate-800 rounded-md h-10 px-3 py-2 text-sm text-slate-100 placeholder-slate-500 outline-none focus-visible:ring-2 ring-blue-500 ring-offset-2 ring-offset-slate-950 transition-colors"
-                  />
+                  <div className="flex-1">
+                    <label htmlFor="google-search-query-input" className="sr-only">
+                      Termine di ricerca per bandi e convocazioni scolastiche
+                    </label>
+                    <input
+                      id="google-search-query-input"
+                      type="text"
+                      placeholder="es. Convocazioni ATA terza fascia Milano 2026"
+                      value={searchQuery}
+                      onChange={(e) => setSearchQuery(e.target.value)}
+                      className="w-full bg-slate-950 border border-slate-800 rounded-md h-10 px-3 py-2 text-sm text-slate-100 placeholder-slate-400 outline-none focus-visible:ring-2 ring-blue-500 ring-offset-2 ring-offset-slate-950 transition-colors motion-reduce:transition-none"
+                    />
+                  </div>
                   <button
                     type="submit"
                     disabled={isSearching || !searchQuery.trim()}
-                    className="h-10 px-5 bg-blue-500 hover:bg-blue-400 disabled:opacity-50 disabled:cursor-not-allowed text-white font-medium rounded-md transition-colors flex items-center justify-center gap-2 shrink-0 cursor-pointer focus-visible:ring-2 ring-blue-500 ring-offset-2 ring-offset-slate-950"
+                    className="h-10 px-5 bg-blue-500 hover:bg-blue-400 disabled:opacity-50 disabled:cursor-not-allowed text-white font-medium rounded-md transition-colors motion-reduce:transition-none flex items-center justify-center gap-2 shrink-0 cursor-pointer focus-visible:ring-2 ring-blue-500 ring-offset-2 ring-offset-slate-950"
                   >
                     {isSearching ? (
                       <>
@@ -4484,24 +4513,26 @@ const executeClientSideExtract = async (
                           link.click();
                           document.body.removeChild(link);
                         }}
-                        className="h-10 px-4 bg-emerald-600 hover:bg-emerald-500 text-white font-medium rounded-md text-xs transition-colors flex items-center gap-1.5 cursor-pointer focus-visible:ring-2 ring-emerald-500 ring-offset-2 ring-offset-slate-950"
+                        className="h-10 px-4 bg-emerald-600 hover:bg-emerald-500 text-white font-medium rounded-md text-xs transition-colors motion-reduce:transition-none flex items-center gap-1.5 cursor-pointer focus-visible:ring-2 ring-emerald-500 ring-offset-2 ring-offset-slate-950"
                         title="Esporta in CSV (11 colonne)"
+                        aria-label={`Esporta sessione storico ${item.filename} in formato CSV`}
                       >
                         <Download className="w-3.5 h-3.5" />
                         <span>Esporta CSV</span>
                       </button>
                       <button
                         onClick={() => loadHistoryItem(item)}
-                        className="h-10 px-4 bg-blue-500 hover:bg-blue-400 text-white font-medium rounded-md text-xs transition-colors flex items-center gap-1.5 cursor-pointer focus-visible:ring-2 ring-blue-500 ring-offset-2 ring-offset-slate-950"
+                        className="h-10 px-4 bg-blue-500 hover:bg-blue-400 text-white font-medium rounded-md text-xs transition-colors motion-reduce:transition-none flex items-center gap-1.5 cursor-pointer focus-visible:ring-2 ring-blue-500 ring-offset-2 ring-offset-slate-950"
+                        aria-label={`Carica risultati sessione ${item.filename} nella dashboard`}
                       >
                         <ExternalLink className="w-3.5 h-3.5" />
                         <span>Carica in Dashboard</span>
                       </button>
                       <button
                         onClick={(e) => deleteHistoryItem(item.id, e)}
-                        className="size-10 bg-slate-800 hover:bg-rose-500/20 text-slate-400 hover:text-rose-400 border border-slate-700 hover:border-rose-500/30 rounded-md transition-colors flex items-center justify-center cursor-pointer focus-visible:ring-2 ring-rose-500 ring-offset-2 ring-offset-slate-950"
+                        className="size-10 bg-slate-800 hover:bg-rose-500/20 text-slate-400 hover:text-rose-400 border border-slate-700 hover:border-rose-500/30 rounded-md transition-colors motion-reduce:transition-none flex items-center justify-center cursor-pointer focus-visible:ring-2 ring-rose-500 ring-offset-2 ring-offset-slate-950"
                         title="Elimina dallo storico"
-                        aria-label="Elimina dallo storico"
+                        aria-label={`Elimina sessione ${item.filename} dallo storico locale`}
                       >
                         <Trash2 className="w-4 h-4" />
                       </button>
@@ -4518,12 +4549,12 @@ const executeClientSideExtract = async (
           <div className="space-y-6 animate-fadeIn max-w-4xl mx-auto">
             <div className="bg-slate-900 border border-slate-800 rounded-lg p-6 hover:border-slate-700 transition-colors space-y-6">
               <div className="flex items-center gap-3">
-                <div className="size-10 rounded-lg bg-blue-500/10 text-blue-400 flex items-center justify-center">
+                <div className="size-10 rounded-lg bg-blue-500/10 text-blue-400 flex items-center justify-center shrink-0">
                   <Code2 className="size-5" />
                 </div>
                 <div>
                   <h2 className="text-xl font-bold text-slate-100">Architettura Consigliata e Flusso di Lavoro</h2>
-                  <p className="text-sm font-medium text-slate-400">Dettagli tecnici dell'applicazione Node.js, Axios, Cheerio e Gemini API</p>
+                  <p className="text-sm font-medium text-slate-400">Dettagli tecnici dell'applicazione Node.js, Axios, Cheerio e Gemini AI</p>
                 </div>
               </div>
 
@@ -4532,10 +4563,10 @@ const executeClientSideExtract = async (
                   <h3 className="font-semibold text-slate-100 flex items-center gap-2 text-base text-blue-400">
                     <span>1. Stack Tecnologico Consigliato</span>
                   </h3>
-                  <ul className="list-disc list-inside space-y-1.5 text-slate-400 text-xs">
-                    <li><strong>Backend Runtime:</strong> Node.js con Express per gestire le richieste HTTP, l'upload dei file CSV e la sincronizzazione delle chiamate di scraping.</li>
-                    <li><strong>Scraping & Parsing:</strong> Librerie <code>axios</code> per il fetch delle pagine web e <code>cheerio</code> per l'analisi del DOM HTML e la ricerca mirata di sezioni "ATA" o "Bandi di gara".</li>
-                    <li><strong>Estrazione con LLM:</strong> SDK ufficiale <code>@google/genai</code> con il modello <code>gemini-3.8-flash</code> per l'estrazione strutturata tramite schema JSON rigoroso.</li>
+                  <ul className="list-disc list-inside space-y-1.5 text-slate-300 text-xs">
+                    <li><strong className="text-slate-100">Backend Runtime:</strong> Node.js con Express per gestire le richieste HTTP, l'upload dei file CSV e la sincronizzazione delle chiamate di scraping.</li>
+                    <li><strong className="text-slate-100">Scraping & Parsing:</strong> Librerie <code className="bg-slate-900 text-blue-300 border border-slate-800 px-1.5 py-0.5 rounded font-mono text-[11px]">axios</code> per il fetch delle pagine web e <code className="bg-slate-900 text-blue-300 border border-slate-800 px-1.5 py-0.5 rounded font-mono text-[11px]">cheerio</code> per l'analisi del DOM HTML e la ricerca mirata di sezioni "ATA" o "Bandi di gara".</li>
+                    <li><strong className="text-slate-100">Estrazione con LLM:</strong> SDK ufficiale <code className="bg-slate-900 text-blue-300 border border-slate-800 px-1.5 py-0.5 rounded font-mono text-[11px]">@google/genai</code> con il modello <code className="bg-slate-900 text-blue-300 border border-slate-800 px-1.5 py-0.5 rounded font-mono text-[11px]">gemini-2.5-flash</code> per l'estrazione strutturata tramite schema JSON rigoroso.</li>
                   </ul>
                 </div>
 
@@ -4543,11 +4574,11 @@ const executeClientSideExtract = async (
                   <h3 className="font-semibold text-slate-100 flex items-center gap-2 text-base text-blue-400">
                     <span>2. Flusso di Esecuzione Dettagliato</span>
                   </h3>
-                  <ol className="list-decimal list-inside space-y-2 text-slate-400 text-xs">
-                    <li><strong>Caricamento CSV:</strong> L'utente carica il file iniziale contenente l'elenco degli URL istituzionali.</li>
-                    <li><strong>Scansione Homepage & Sottopagina:</strong> Per ogni URL, il server effettua una richiesta HTTP, analizza i link alla ricerca di parole chiave come <em>ATA</em>, <em>Bandi di gara</em>, <em>Graduatorie</em> o <em>Avvisi</em>, e scarica il testo combinato.</li>
-                    <li><strong>Analisi IA:</strong> Il testo estratto viene inviato a Gemini con il prompt di sistema dedicato, garantendo un output JSON pulito e privo di testo superfluo.</li>
-                    <li><strong>Generazione CSV:</strong> Tutti i dati vengono aggregati in un nuovo file CSV strutturato, pronto per il download immediato.</li>
+                  <ol className="list-decimal list-inside space-y-2 text-slate-300 text-xs">
+                    <li><strong className="text-slate-100">Caricamento CSV:</strong> L'utente carica il file iniziale contenente l'elenco degli URL istituzionali.</li>
+                    <li><strong className="text-slate-100">Scansione Homepage & Sottopagina:</strong> Per ogni URL, il server effettua una richiesta HTTP, analizza i link alla ricerca di parole chiave come <em className="text-slate-200">ATA</em>, <em className="text-slate-200">Bandi di gara</em>, <em className="text-slate-200">Graduatorie</em> o <em className="text-slate-200">Avvisi</em>, e scarica il testo combinato.</li>
+                    <li><strong className="text-slate-100">Analisi IA:</strong> Il testo estratto viene inviato a Gemini con il prompt di sistema dedicato, garantendo un output JSON pulito e privo di testo superfluo.</li>
+                    <li><strong className="text-slate-100">Generazione CSV:</strong> Tutti i dati vengono aggregati in un nuovo file CSV strutturato, pronto per il download immediato.</li>
                   </ol>
                 </div>
 
@@ -4579,16 +4610,16 @@ Se un dato non viene menzionato nel testo, assegna il valore 0 alla chiave corri
                   <h3 className="font-semibold text-slate-100 flex items-center gap-2 text-base text-emerald-400">
                     <span>4. Estensione Modulare: Albo Pretorio, Filtri 6 Mesi & Download PDF</span>
                   </h3>
-                  <div className="space-y-3 text-slate-400 text-xs leading-relaxed">
+                  <div className="space-y-3 text-slate-300 text-xs leading-relaxed">
                     <p>
                       L'estensione opera come un add-on autonomo mantenendo al 100% la retrocompatibilità con tutte le funzioni preesistenti.
                     </p>
                     <ul className="list-disc list-inside space-y-1.5">
-                      <li><strong>Filtro 6 Mesi:</strong> Scansione limitata tassativamente agli atti pubblicati negli ultimi 6 mesi rispetto alla data odierna.</li>
-                      <li><strong>Parole Chiave di Inclusione:</strong> <em>"Contratto di supplenza annuale"</em>, <em>"Contratto di supplenza breve"</em>, <em>"Contratto di supplenza"</em>.</li>
-                      <li><strong>Parole Chiave di Esclusione:</strong> <em>"ASSEGNAZIONE AI PLESSI DEL PERSONALE ATA"</em>, <em>"CI_031 Assenze del personale docente e ATA"</em>, <em>"direttiva_ds"</em>, <em>"informativa sindacale"</em>.</li>
-                      <li><strong>Gestione Memoria Rigorosa:</strong> I file PDF scaricati temporaneamente vengono memorizzati su disco e tassativamente eliminati all'interno di blocchi <code>try...finally</code> tramite <code>fs.promises.unlink</code>, sia in caso di successo che di errore.</li>
-                      <li><strong>Tutela Assoluta della Privacy:</strong> Non viene estratto alcun nominativo, codice fiscale o dato anagrafico. Vengono estratti solo i campi contrattuali: <code>graduatoria_fascia</code>, <code>profilo_professionale</code>, <code>classe_di_concorso</code>, <code>ore_settimanali</code>, <code>decorrenza_da</code>, <code>decorrenza_a</code>.</li>
+                      <li><strong className="text-slate-100">Filtro 6 Mesi:</strong> Scansione limitata tassativamente agli atti pubblicati negli ultimi 6 mesi rispetto alla data odierna.</li>
+                      <li><strong className="text-slate-100">Parole Chiave di Inclusione:</strong> <em className="text-slate-200">"Contratto di supplenza annuale"</em>, <em className="text-slate-200">"Contratto di supplenza breve"</em>, <em className="text-slate-200">"Contratto di supplenza"</em>.</li>
+                      <li><strong className="text-slate-100">Parole Chiave di Esclusione:</strong> <em className="text-slate-200">"ASSEGNAZIONE AI PLESSI DEL PERSONALE ATA"</em>, <em className="text-slate-200">"CI_031 Assenze del personale docente e ATA"</em>, <em className="text-slate-200">"direttiva_ds"</em>, <em className="text-slate-200">"informativa sindacale"</em>.</li>
+                      <li><strong className="text-slate-100">Gestione Memoria Rigorosa:</strong> I file PDF scaricati temporaneamente vengono memorizzati su disco e tassativamente eliminati all'interno di blocchi <code className="bg-slate-900 text-blue-300 border border-slate-800 px-1.5 py-0.5 rounded font-mono text-[11px]">try...finally</code> tramite <code className="bg-slate-900 text-blue-300 border border-slate-800 px-1.5 py-0.5 rounded font-mono text-[11px]">fs.promises.unlink</code>, sia in caso di successo che di errore.</li>
+                      <li><strong className="text-slate-100">Tutela Assoluta della Privacy:</strong> Non viene estratto alcun nominativo, codice fiscale o dato anagrafico. Vengono estratti solo i campi contrattuali: <code className="bg-slate-900 text-emerald-300 border border-slate-800 px-1.5 py-0.5 rounded font-mono text-[11px]">graduatoria_fascia</code>, <code className="bg-slate-900 text-emerald-300 border border-slate-800 px-1.5 py-0.5 rounded font-mono text-[11px]">profilo_professionale</code>, <code className="bg-slate-900 text-emerald-300 border border-slate-800 px-1.5 py-0.5 rounded font-mono text-[11px]">classe_di_concorso</code>, <code className="bg-slate-900 text-emerald-300 border border-slate-800 px-1.5 py-0.5 rounded font-mono text-[11px]">ore_settimanali</code>, <code className="bg-slate-900 text-emerald-300 border border-slate-800 px-1.5 py-0.5 rounded font-mono text-[11px]">decorrenza_da</code>, <code className="bg-slate-900 text-emerald-300 border border-slate-800 px-1.5 py-0.5 rounded font-mono text-[11px]">decorrenza_a</code>.</li>
                     </ul>
                   </div>
                 </div>
