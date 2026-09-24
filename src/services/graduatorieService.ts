@@ -1010,8 +1010,26 @@ export function normalizeDomainForComparison(urlStr: string): string {
 }
 
 /**
+ * Verifica se un dominio esterno è un portale scolastico o di trasparenza autorizzato (es. Spaggiari, Nuvola, Argo, Axios).
+ */
+export function isAllowedExternalDomain(linkDomain: string): boolean {
+  if (!linkDomain) return false;
+  const allowedExts = [
+    "spaggiari.eu",
+    "madisoft.it",
+    "argo-enti.it",
+    "axioscloud.it",
+    "zippy.it",
+    "trasparenza-valutazione-merito.it",
+    "pubblicitalegale.gov.it",
+    "albopretorio.it"
+  ];
+  return allowedExts.some(ext => linkDomain === ext || linkDomain.endsWith("." + ext));
+}
+
+/**
  * Trova i link candidati relativi a graduatoria, amministrazione trasparente o albo pretorio
- * filtrando RIGOROSAMENTE sullo stesso dominio di base.
+ * filtrando sullo stesso dominio di base o su portali esterni autorizzati (es. Spaggiari, Nuvola, Argo).
  */
 export function findGraduatoriaCandidateLinks(
   rawContent: string,
@@ -1038,10 +1056,11 @@ export function findGraduatoriaCandidateLinks(
       const resolved = new URL(cleanUrl, baseUrl).href;
       if (seen.has(resolved)) return;
 
-      // Stesso dominio: verifica se il dominio corrisponde
+      // Stesso dominio o dominio esterno autorizzato (es. Spaggiari, Nuvola, Argo, Axios)
       const linkDomain = normalizeDomainForComparison(resolved);
-      if (linkDomain !== baseDomain) {
-        return; // Salta link esterni fuori dal dominio scolastico
+      const isExternalAllowed = isAllowedExternalDomain(linkDomain);
+      if (linkDomain !== baseDomain && !isExternalAllowed) {
+        return; // Salta link esterni fuori dai domini scolastici autorizzati
       }
 
       const match = isGraduatoriaLink(title, resolved);
