@@ -59,12 +59,19 @@ export default async function handler(req: any, res: any) {
     if (!directSuccess) {
       try {
         const jinaUrl = `https://r.jina.ai/${formattedUrl}`;
+        const jinaApiKey = process.env.VITE_JINA_API_KEY || process.env.JINA_API_KEY;
+        
+        const jinaHeaders: Record<string, string> = {
+          "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36",
+          "Accept": "text/html,text/plain,*/*",
+          "x-return-format": "html"
+        };
+        if (jinaApiKey) {
+          jinaHeaders["Authorization"] = `Bearer ${jinaApiKey}`;
+        }
+
         const jinaResponse = await fetch(jinaUrl, {
-          headers: {
-            "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36",
-            "Accept": "text/html,text/plain,*/*",
-            "x-return-format": "html"
-          }
+          headers: jinaHeaders
         });
 
         if (jinaResponse.ok) {
@@ -72,10 +79,15 @@ export default async function handler(req: any, res: any) {
           contentType = "text/html; charset=utf-8";
         } else {
           // Try markdown format from Jina
+          const jinaMdHeaders: Record<string, string> = {
+            "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36"
+          };
+          if (jinaApiKey) {
+            jinaMdHeaders["Authorization"] = `Bearer ${jinaApiKey}`;
+          }
+
           const jinaMdResponse = await fetch(jinaUrl, {
-            headers: {
-              "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36"
-            }
+            headers: jinaMdHeaders
           });
           if (jinaMdResponse.ok) {
             text = await jinaMdResponse.text();
