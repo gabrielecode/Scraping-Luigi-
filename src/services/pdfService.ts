@@ -143,71 +143,128 @@ export function extractPdfsFromHtml(
   return pdfLinks.sort((a, b) => b.priority - a.priority);
 }
 
+export interface HeuristicScoreResult {
+  punteggio: number | null;
+  sourcePhrase?: string;
+  sogliaConvocazione?: number | null;
+  sogliaPhrase?: string;
+}
+
 /**
- * Estrae un punteggio mediante analisi euristica e regex avanzata dal testo di un atto o contratto.
- * Gestisce:
- * 1. Soglie di convocazione ("fino a punteggio 12", "fino a punti 11")
- * 2. Punteggi espliciti ("punti 13,17", "punteggio totale: 69,50", "pt. 42.50", "punteggio di 54,00")
- * 3. Valutazioni di merito ("valutazione: 28,00")
- * 4. Punteggio associato a un profilo specifico (AA, AT, CS, ecc.)
+ * Regex per individuare soglie di convocazione ("fino a punteggio 12", "fino a punti 11", "soglia convocazione: 12", ecc.).
+ * Le soglie NON sono il punteggio del candidato e NON devono essere attribuite al campo punteggio:
+ * lasciano punteggio=null e vengono salvate come "Soglia convocazione: N" in note_cross_reference.
+ */
+export const THRESHOLD_CONVOCAZIONE_REGEX = /(?:fino\s+a(?:l)?\s+(?:concorrenza\s+di\s+)?(?:punteggio|punti|pt\.?|p\.ti)|soglia\s*(?:di\s*)?(?:convocazione\s*)?(?:punteggio|punti|pt\.?|p\.ti)?)\s*(?:complessivo|totale|di)?\s*[:=\-]?\s*([0-9]{1,3}(?:[.,][0-9]{1,3})?)\b/i;
+
+/**
+ * Individua un'eventuale soglia di convocazione all'interno di un testo.
+ */
+export function findThresholdInText(text: string): { soglia: number | null; sourcePhrase?: string } {
+  if (!text || typeof text !== 'string') return { soglia: null };
+  const clean = text.replace(/\s+/g, ' ');
+  const match = clean.match(THRESHOLD_CONVOCAZIONE_REGEX);
+  if (match && match[1]) {
+    const val = parsePunteggioValue(match[1]);
+    if (val !== null) {
+      return { soglia: val, sourcePhrase: match[0] };
+    }
+  }
+  return { soglia: null };
+}
+
+/**
+ * Estrae un punteggio mediante analisi euristica e regex dal testo di un atto o contratto.
+ * TASK 6/7:
+ * - Rimosso il fallback su tutto il testo: l'euristica vale SOLO con nominativo trovato nel testo (finestra ±250 caratteri).
+ * - Le soglie ("fino a punteggio 12", "fino a punti 11") NON vanno in punteggio: lasciano punteggio=null
+ *   e finiscono in note_cross_reference come "Soglia convocazione: N".
+ * - Se il punteggio reale del candidato manca, il TASK 5 si attiva per ricercarlo nelle graduatorie.
  */
 export function extractPunteggioHeuristic(
   text: string,
   context?: { profilo?: string; cdc?: string; nominativo?: string }
-): { punteggio: number | null; sourcePhrase?: string } {
+): HeuristicScoreResult {
   if (!text || typeof text !== 'string') {
-    return { punteggio: null };
+    return { punteggio: null, sogliaConvocazione: null };
   }
 
   const cleanText = text.replace(/\s+/g, ' ');
 
-  // 1. Se è specificato un profilo (es. Assistente Amministrativo, Collaboratore Scolastico),
-  // cerca prima nelle vicinanze della menzione del profilo (finestra mirata successiva alla menzione)
-  if (context?.profilo) {
-    const profLower = context.profilo.toLowerCase();
-    const candidateKeywords = [];
-    if (profLower.includes('amministrativ') || profLower.includes(' aa')) candidateKeywords.push('amministrativ', ' aa ');
-    if (profLower.includes('collaborator') || profLower.includes(' cs')) candidateKeywords.push('collaborator', ' cs ');
-    if (profLower.includes('tecnico') || profLower.includes(' at')) candidateKeywords.push('tecnico', ' at ');
-    if (profLower.includes('docent') || profLower.includes('insegnant') || profLower.includes('maestr')) candidateKeywords.push('docent', 'insegnant', 'posto comune', 'sostegno');
-    if (candidateKeywords.length === 0) candidateKeywords.push(profLower.slice(0, 10));
+  // Rileva eventuale soglia di convocazione presente nel documento (es. "fino a punteggio 12", "fino a punti 11")
+  const thResult = findThresholdInText(cleanText);
+  const sogliaConvocazione = thResult.soglia;
+  const sogliaPhrase = thResult.sourcePhrase;
 
-    for (const kw of candidateKeywords) {
-      const profIdx = cleanText.toLowerCase().indexOf(kw.trim());
-      if (profIdx !== -1) {
-        // Finestra specifica che parte dalla menzione del profilo e prosegue fino alla menzione successiva o 300 caratteri
-        const windowSnippet = cleanText.slice(profIdx, Math.min(cleanText.length, profIdx + 300));
-        const scopedMatch = findScoreInSnippet(windowSnippet);
-        if (scopedMatch.punteggio !== null) {
-          return scopedMatch;
-        }
+  // L'euristica vale SOLO con nominativo specificato e trovato nel testo (nessun fallback su tutto il testo)
+  const nom = context?.nominativo?.trim();
+  if (!nom || nom.length < 3) {
+    return { punteggio: null, sogliaConvocazione, sogliaPhrase };
+  }
+
+  // Normalizzazione caratteri/accenti per il matching del nominativo
+  const normClean = cleanText.normalize("NFD").replace(/[\u0300-\u036f]/g, "").toLowerCase();
+  const normNom = nom.normalize("NFD").replace(/[\u0300-\u036f]/g, "").toLowerCase();
+
+  const occurrences: { index: number; length: number }[] = [];
+
+  let idx = normClean.indexOf(normNom);
+  while (idx !== -1 && occurrences.length < 10) {
+    occurrences.push({ index: idx, length: normNom.length });
+    idx = normClean.indexOf(normNom, idx + 1);
+  }
+
+  // Prova anche cognome e nome invertiti se composti da 2 parole (es. "Mario Rossi" vs "Rossi Mario")
+  const parts = normNom.split(/\s+/).filter(Boolean);
+  if (parts.length === 2) {
+    const reversed = `${parts[1]} ${parts[0]}`;
+    let revIdx = normClean.indexOf(reversed);
+    while (revIdx !== -1 && occurrences.length < 10) {
+      if (!occurrences.some(o => Math.abs(o.index - revIdx) < 5)) {
+        occurrences.push({ index: revIdx, length: reversed.length });
       }
+      revIdx = normClean.indexOf(reversed, revIdx + 1);
     }
   }
 
-  // 2. Se è specificato un nominativo, cerca vicino al nominativo
-  if (context?.nominativo && context.nominativo.length >= 4) {
-    const nomIdx = cleanText.toLowerCase().indexOf(context.nominativo.toLowerCase().trim());
-    if (nomIdx !== -1) {
-      const windowSnippet = cleanText.slice(Math.max(0, nomIdx - 100), Math.min(cleanText.length, nomIdx + 250));
-      const scopedMatch = findScoreInSnippet(windowSnippet);
-      if (scopedMatch.punteggio !== null) {
-        return scopedMatch;
-      }
+  // Se il nominativo non compare nel testo, nessun fallback su tutto il testo
+  if (occurrences.length === 0) {
+    return { punteggio: null, sogliaConvocazione, sogliaPhrase };
+  }
+
+  // Analisi mirata sulla finestra ±250 caratteri attorno a ciascuna occorrenza del nominativo
+  for (const occ of occurrences) {
+    const start = Math.max(0, occ.index - 250);
+    const end = Math.min(cleanText.length, occ.index + occ.length + 250);
+    const windowSnippet = cleanText.slice(start, end);
+
+    const scoreMatch = findCandidateScoreInSnippet(windowSnippet);
+    if (scoreMatch.punteggio !== null) {
+      return {
+        punteggio: scoreMatch.punteggio,
+        sourcePhrase: scoreMatch.sourcePhrase,
+        sogliaConvocazione,
+        sogliaPhrase,
+      };
     }
   }
 
-  // 3. Ricerca su tutto il testo
-  return findScoreInSnippet(cleanText);
+  // Nessun punteggio reale trovato nella finestra del nominativo -> punteggio = null (nessun fallback su tutto il testo)
+  return { punteggio: null, sogliaConvocazione, sogliaPhrase };
 }
 
 /**
- * Cerca pattern di punteggio all'interno di uno snippet di testo
+ * Cerca il punteggio attribuito al candidato all'interno dello snippet.
+ * Maschera preventivamente eventuali soglie di convocazione ("fino a punteggio 12", "fino a punti 11")
+ * in modo che non vengano erroneamente considerate come punteggio del candidato.
  */
-function findScoreInSnippet(snippet: string): { punteggio: number | null; sourcePhrase?: string } {
-  // Pattern 1: Soglie di convocazione ("fino a punteggio 12", "fino a punti 11", "da punti X a punti Y")
-  const thresholdRegex = /(?:fino\s+a(?:l)?\s+)?(?:punteggio|punti|pt\.?|p\.ti)\s*(?:complessivo|totale|di)?\s*[:=\-]?\s*([0-9]{1,3}(?:[.,][0-9]{1,3})?)\b/i;
-  const match1 = snippet.match(thresholdRegex);
+function findCandidateScoreInSnippet(snippet: string): { punteggio: number | null; sourcePhrase?: string } {
+  // Maschera le formule di soglia di convocazione
+  const maskedSnippet = snippet.replace(new RegExp(THRESHOLD_CONVOCAZIONE_REGEX.source, 'gi'), ' ');
+
+  // Pattern 1: "con punti 45,50", "avente punteggio 32.00", "in virtù di punti X"
+  const conPuntiRegex = /(?:con|avente|in virtù di|riportando)\s+(?:punti|punteggio)\s*[:=\-]?\s*([0-9]{1,3}(?:[.,][0-9]{1,3})?)\b/i;
+  const match1 = maskedSnippet.match(conPuntiRegex);
   if (match1 && match1[1]) {
     const val = parsePunteggioValue(match1[1]);
     if (val !== null) {
@@ -215,9 +272,9 @@ function findScoreInSnippet(snippet: string): { punteggio: number | null; source
     }
   }
 
-  // Pattern 2: "punti 13,17", "punti: 14", "pt 25.5", "punteggio: 89,00"
-  const explicitRegex = /\b(?:punteggio|punti|pt\.?|p\.ti|valutazione)\s*[:=\-]?\s*([0-9]{1,3}(?:[.,][0-9]{1,3})?)\b/i;
-  const match2 = snippet.match(explicitRegex);
+  // Pattern 2: Posizione con punti es: "pos. 12 - punti 54.00" o "posto 4 pt 23"
+  const posPointsRegex = /\b(?:pos(?:izione)?\.?|posto|n\.)\s*\d{1,4}\s*(?:[-–—/,]|con)?\s*(?:punti|pt\.?|punteggio)\s*[:=\-]?\s*([0-9]{1,3}(?:[.,][0-9]{1,3})?)\b/i;
+  const match2 = maskedSnippet.match(posPointsRegex);
   if (match2 && match2[1]) {
     const val = parsePunteggioValue(match2[1]);
     if (val !== null) {
@@ -225,23 +282,13 @@ function findScoreInSnippet(snippet: string): { punteggio: number | null; source
     }
   }
 
-  // Pattern 3: "con punti 45,50" o "avente punteggio 32.00"
-  const conPuntiRegex = /(?:con|avente|in virtù di|riportando)\s+(?:punti|punteggio)\s+([0-9]{1,3}(?:[.,][0-9]{1,3})?)\b/i;
-  const match3 = snippet.match(conPuntiRegex);
+  // Pattern 3: Punteggio esplicito: "punti 13,17", "punti: 14", "pt 25.5", "punteggio: 89,00", "valutazione: 28,00"
+  const explicitRegex = /\b(?:punteggio|punti|pt\.?|p\.ti|valutazione)\s*(?:complessivo|totale|di)?\s*[:=\-]?\s*([0-9]{1,3}(?:[.,][0-9]{1,3})?)\b/i;
+  const match3 = maskedSnippet.match(explicitRegex);
   if (match3 && match3[1]) {
     const val = parsePunteggioValue(match3[1]);
     if (val !== null) {
       return { punteggio: val, sourcePhrase: match3[0] };
-    }
-  }
-
-  // Pattern 4: Posizione con punti es: "pos. 12 - punti 54.00" o "posto 4 pt 23"
-  const posPointsRegex = /\b(?:pos(?:izione)?\.?|posto|n\.)\s*\d{1,4}\s*(?:[-–—/,]|con)?\s*(?:punti|pt\.?|punteggio)\s*[:=\-]?\s*([0-9]{1,3}(?:[.,][0-9]{1,3})?)\b/i;
-  const match4 = snippet.match(posPointsRegex);
-  if (match4 && match4[1]) {
-    const val = parsePunteggioValue(match4[1]);
-    if (val !== null) {
-      return { punteggio: val, sourcePhrase: match4[0] };
     }
   }
 

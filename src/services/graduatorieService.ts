@@ -112,7 +112,24 @@ export function normalizePunteggio(val: any): number | null {
 }
 
 /**
- * Cerca un candidato per posizione o nominativo in una graduatoria specifica
+ * Normalizza la denominazione della scuola per il confronto:
+ * lowercase, rimozione della punteggiatura e normalizzazione degli spazi
+ */
+export function normalizeNomeIstituto(nome?: string | null): string {
+  if (!nome) return "";
+  const decoded = safeDecodeURIComponent(nome);
+  return decoded
+    .toLowerCase()
+    .replace(/[.,\/#!$%\^&\*;:{}=\-_`~()'"?<>@\\\[\]|«»“”’‘–—]/g, " ")
+    .replace(/\s+/g, " ")
+    .trim();
+}
+
+/**
+ * Cerca un candidato per posizione o nominativo in una graduatoria specifica.
+ * Una graduatoria è candidata SOLO se il codice meccanografico coincide oppure,
+ * senza codice, se coincide nome_istituto normalizzato (lowercase, senza punteggiatura).
+ * Nessun match scuola = return null. Mai match per sola posizione.
  */
 export function lookupPunteggioGraduatoria(
   graduatorie: GraduatoriaIstituto[],
@@ -127,16 +144,32 @@ export function lookupPunteggioGraduatoria(
   }
 ): { punteggio: number; entry?: GraduatoriaIstitutoEntry; graduatoriaMatched?: GraduatoriaIstituto } | null {
   const normCodice = normalizeCodiceMeccanografico(criteri.codice_meccanografico);
+  const normNomeCriteri = normalizeNomeIstituto(criteri.nome_istituto);
+
+  // Nessun match scuola possibile se mancano sia codice che nome istituto nei criteri:
+  // una graduatoria è candidata SOLO se la scuola coincide. Mai match per sola posizione.
+  if (!normCodice && !normNomeCriteri) {
+    return null;
+  }
+
   const normProfilo = normalizeProfiloOrCdc(criteri.profilo_o_cdc || "");
   const normFascia = normalizeFascia(criteri.fascia || "");
 
   // Filtriamo le graduatorie candidate
   const candidateGrad = graduatorie.filter(g => {
-    // Se c'è codice meccanografico e coincide, priorità
-    if (normCodice && g.codice_meccanografico) {
-      if (normalizeCodiceMeccanografico(g.codice_meccanografico) !== normCodice) {
-        return false;
-      }
+    const gCodice = normalizeCodiceMeccanografico(g.codice_meccanografico);
+    const gNome = normalizeNomeIstituto(g.nome_istituto);
+
+    // Candidata SOLO se il codice meccanografico coincide oppure, senza codice, se coincide nome_istituto normalizzato
+    let schoolMatch = false;
+    if (normCodice && gCodice) {
+      schoolMatch = (normCodice === gCodice);
+    } else if ((!normCodice || !gCodice) && normNomeCriteri && gNome) {
+      schoolMatch = (normNomeCriteri === gNome);
+    }
+
+    if (!schoolMatch) {
+      return false;
     }
 
     // Tipologia personale
@@ -144,10 +177,11 @@ export function lookupPunteggioGraduatoria(
       return false;
     }
 
-    // Profilo o CDC
-    const gProfilo = normalizeProfiloOrCdc(g.profilo_o_cdc);
-    if (normProfilo && gProfilo && !gProfilo.includes(normProfilo) && !normProfilo.includes(gProfilo)) {
-      return false;
+    // Profilo o CDC (solo uguaglianza dei valori canonici)
+    if (criteri.profilo_o_cdc && g.profilo_o_cdc) {
+      if (!isClassMatch(criteri.profilo_o_cdc, g.profilo_o_cdc)) {
+        return false;
+      }
     }
 
     // Fascia
@@ -161,11 +195,22 @@ export function lookupPunteggioGraduatoria(
     return true;
   });
 
+  // Nessun match scuola = return null
+  if (candidateGrad.length === 0) {
+    return null;
+  }
+
   // 1. Cerca per posizione se specificata
   if (criteri.posizione && criteri.posizione > 0) {
     for (const g of candidateGrad) {
       const entry = g.graduatoria.find(e => e.posizione === criteri.posizione);
       if (entry && typeof entry.punteggio === "number" && !isNaN(entry.punteggio)) {
+        // Se c'è anche il nominativo nei criteri, verifichiamo che non sia in conflitto
+        if (criteri.nominativo && criteri.nominativo.trim().length >= 3 && entry.cognome_nome) {
+          if (!isNameMatch(criteri.nominativo, entry.cognome_nome)) {
+            continue;
+          }
+        }
         return {
           punteggio: Number(entry.punteggio.toFixed(2)),
           entry,
@@ -202,13 +247,18 @@ export function crossReferenceNomina<T extends NominaContrattoItem | AlboPretori
   graduatorie: GraduatoriaIstituto[],
   scuolaContext?: { codice_meccanografico?: string; nome_istituto?: string }
 ): T & { punteggio: number | null; origine_punteggio: OriginePunteggio; note_cross_reference?: string } {
+  const existingNotes = (item as any).note_cross_reference || "";
+  const existingSoglia = existingNotes.includes("Soglia convocazione:")
+    ? (existingNotes.split("|").find((s: string) => s.includes("Soglia convocazione:"))?.trim() || "")
+    : "";
+
   // Se ha già un punteggio esplicito valido
   if (item.punteggio !== null && item.punteggio !== undefined && !isNaN(Number(item.punteggio))) {
     return {
       ...item,
       punteggio: Number(Number(item.punteggio).toFixed(2)),
       origine_punteggio: "Esplicito",
-      note_cross_reference: "Punteggio estratto direttamente dal testo del documento/contratto.",
+      note_cross_reference: existingNotes || "Punteggio estratto direttamente dal testo del documento/contratto.",
     };
   }
 
@@ -235,13 +285,14 @@ export function crossReferenceNomina<T extends NominaContrattoItem | AlboPretori
     if (match) {
       const nomeGrad = match.graduatoriaMatched?.nome_istituto || match.graduatoriaMatched?.codice_meccanografico || "Graduatoria d'Istituto";
       const matchedPos = match.entry?.posizione || posNum || "N/D";
+      const sogliaSuffix = existingSoglia ? ` | ${existingSoglia}` : "";
       return {
         ...item,
         codice_meccanografico: (item as any).codice_meccanografico || match.graduatoriaMatched?.codice_meccanografico || "",
         posizione_graduatoria: (item as any).posizione_graduatoria && (item as any).posizione_graduatoria !== "Non disponibile" ? (item as any).posizione_graduatoria : String(matchedPos),
         punteggio: match.punteggio,
         origine_punteggio: "Incrociato",
-        note_cross_reference: `Punteggio incrociato con ${nomeGrad} (${match.graduatoriaMatched?.profilo_o_cdc}, Fascia ${match.graduatoriaMatched?.fascia}): pos. ${matchedPos} = ${match.punteggio.toFixed(2)} pt${match.entry?.cognome_nome ? ` [${match.entry.cognome_nome}]` : ""}`,
+        note_cross_reference: `Punteggio incrociato con ${nomeGrad} (${match.graduatoriaMatched?.profilo_o_cdc}, Fascia ${match.graduatoriaMatched?.fascia}): pos. ${matchedPos} = ${match.punteggio.toFixed(2)} pt${match.entry?.cognome_nome ? ` [${match.entry.cognome_nome}]` : ""}${sogliaSuffix}`,
       } as any;
     }
   }
@@ -249,20 +300,22 @@ export function crossReferenceNomina<T extends NominaContrattoItem | AlboPretori
   // Verifica se si tratta di un interpello o bando aperto in corso
   const combinedDesc = `${profilo} ${fascia} ${(item as any).note || ""} ${(item as any).tipo_posto || ""}`.toLowerCase();
   if (combinedDesc.includes("interpell") || combinedDesc.includes("bando") || combinedDesc.includes("selezione")) {
+    const defaultMsg = "Bando/Interpello di selezione: nessun candidato ancora nominato nell'atto.";
     return {
       ...item,
       punteggio: null,
       origine_punteggio: "Non disponibile",
-      note_cross_reference: "Bando/Interpello di selezione: nessun candidato ancora nominato nell'atto.",
+      note_cross_reference: existingSoglia ? `${existingSoglia} | ${defaultMsg}` : (existingNotes || defaultMsg),
     };
   }
 
   if (posNum) {
+    const posMsg = `Posizione ${posNum} presente, ma nessuna graduatoria caricata corrisponde a [${profilo} - Fascia ${fascia || "N/D"}].`;
     return {
       ...item,
       punteggio: null,
       origine_punteggio: "Non disponibile",
-      note_cross_reference: `Posizione ${posNum} presente, ma nessuna graduatoria caricata corrisponde a [${profilo} - Fascia ${fascia || "N/D"}].`,
+      note_cross_reference: existingSoglia ? `${existingSoglia} | ${posMsg}` : (existingNotes || posMsg),
     };
   }
 
@@ -270,7 +323,7 @@ export function crossReferenceNomina<T extends NominaContrattoItem | AlboPretori
     ...item,
     punteggio: null,
     origine_punteggio: "Non disponibile",
-    note_cross_reference: "Punteggio non presente nel documento e posizione non specificata.",
+    note_cross_reference: existingNotes || "Punteggio non presente nel documento e posizione non specificata.",
   };
 }
 
@@ -477,54 +530,69 @@ export function standardizePlaceholder(
  *  "ADMM - Sostegno I grado" -> "ADMM"
  */
 export function normalizeProfiloOrCdc(val: string): string {
-  if (!val) return "";
-  const s = val.trim().toUpperCase();
-
-  // Docenti sostegno
-  if (s.includes("ADMM")) return "ADMM";
-  if (s.includes("ADSS")) return "ADSS";
-  if (s.includes("ADAA")) return "ADAA";
-  if (s.includes("ADEE")) return "ADEE";
-
-  // Infanzia / Primaria
-  if (s.includes("AAAA") || s.includes("INFANZIA")) return "AAAA";
-  if (s.includes("EEEE") || s.includes("PRIMARIA")) return "EEEE";
-
-  // CDC tipo A-12 o A12 o B-02
-  const cdcMatch = s.match(/\b([AB])-?(\d{2})\b/);
-  if (cdcMatch) {
-    return `${cdcMatch[1]}-${cdcMatch[2]}`;
-  }
-
-  // ATA
-  if (s.includes("COLLABORATORE") || s === "CS") return "CS";
-  if (s.includes("AMMINISTRATIVO") || s === "AA") return "AA";
-  if (s.includes("TECNICO") || s === "AT") {
-    // Se c'è anche l'area es. AR02
-    const arMatch = s.match(/\b(AR\d{2})\b/);
-    if (arMatch) return `AT_${arMatch[1]}`;
-    return "AT";
-  }
-  if (s.includes("CUOCO") || s === "CU") return "CU";
-  if (s.includes("AGRARIO") || s === "CR") return "CR";
-  if (s.includes("GUARDAROBIERE") || s === "GU") return "GU";
-  if (s.includes("OPERATORE") || s === "OS") return "OS";
-
-  return s;
+  return normalizeCdcOrProfile(val);
 }
 
 /**
- * Normalizza la fascia: "1", "2", "3" o "Prima", "Seconda", "Terza"
+ * Normalizza la fascia:
+ * Rimuove anni/intervalli (\d{4}(/\d{2,4})?) e "24 mesi" se preceduto da "permanente".
+ * Poi, nell'ordine:
+ * terza|iii|3 → "3"
+ * seconda|ii|2 → "2"
+ * prima|i|1 → "1"
+ * "permanente" → "1"
+ * "istituto" senza numero → "GI"
+ * "interpello" → "INT"
+ * Nessun match: restituisce la stringa originale trimmata.
  */
 export function normalizeFascia(val: string): string {
   if (!val) return "";
-  const s = val.toLowerCase();
-  if (s.includes("1") || s.includes("prima") || s.includes("i fascia")) return "1";
-  if (s.includes("2") || s.includes("seconda") || s.includes("ii fascia")) return "2";
-  if (s.includes("3") || s.includes("terza") || s.includes("iii fascia")) return "3";
-  if (s.includes("istituto")) return "GI";
-  if (s.includes("interpello")) return "INT";
-  return s.trim();
+  const originalTrimmed = val.trim();
+  let s = val.toLowerCase();
+
+  // Rimuovi anni e intervalli (\d{4}(/\d{2,4})?)
+  s = s.replace(/\d{4}(?:\/\d{2,4})?/g, " ");
+
+  // Rimuovi "24 mesi" se preceduto da "permanente"
+  s = s.replace(/(?<=\bpermanente\b[\s\S]*?)\b24\s*mesi\b/gi, " ");
+
+  // Token interi con word boundary, mai includes su singole cifre/lettere, gestisci "ª" e "°"
+  const matchToken = (pattern: string) => {
+    const re = new RegExp(`(?<![a-z0-9])${pattern}(?![a-z0-9])`, "i");
+    return re.test(s);
+  };
+
+  // 1. terza|iii|3 → "3"
+  if (matchToken("(?:terza|iii|3[ª°]?)")) {
+    return "3";
+  }
+
+  // 2. seconda|ii|2 → "2"
+  if (matchToken("(?:seconda|ii|2[ª°]?)")) {
+    return "2";
+  }
+
+  // 3. prima|i|1 → "1"
+  if (matchToken("(?:prima|i|1[ª°]?)")) {
+    return "1";
+  }
+
+  // 4. "permanente" → "1"
+  if (matchToken("permanente")) {
+    return "1";
+  }
+
+  // 5. "istituto" senza numero → "GI"
+  if (matchToken("istituto")) {
+    return "GI";
+  }
+
+  // 6. "interpello" → "INT"
+  if (matchToken("interpello")) {
+    return "INT";
+  }
+
+  return originalTrimmed;
 }
 
 /**
@@ -691,18 +759,19 @@ export function parsePosizioneNumber(posStr?: string | number): number | null {
 }
 
 /**
- * Carica le graduatorie salvate in LocalStorage
+ * Carica le graduatorie salvate in LocalStorage.
+ * Restituisce [] se lo storage è vuoto o corrotto.
  */
 export function getStoredGraduatorie(): GraduatoriaIstituto[] {
   if (typeof window === "undefined") return [];
   try {
     const raw = localStorage.getItem(STORAGE_KEY);
-    if (!raw) return getDefaultDemoGraduatorie();
+    if (!raw) return [];
     const parsed = JSON.parse(raw);
-    return Array.isArray(parsed) ? parsed : getDefaultDemoGraduatorie();
+    return Array.isArray(parsed) ? parsed : [];
   } catch (e) {
     console.error("Errore lettura graduatorie da LocalStorage:", e);
-    return getDefaultDemoGraduatorie();
+    return [];
   }
 }
 
@@ -805,77 +874,6 @@ export function parseGraduatoriaText(
     anno_scolastico: metadata.anno_scolastico || "2024/2025 - 2026/2027",
     graduatoria: entries,
   };
-}
-
-/**
- * Graduatorie demo pre-caricate per consentire test immediati senza dover caricare a mano
- */
-function getDefaultDemoGraduatorie(): GraduatoriaIstituto[] {
-  return [
-    {
-      id: "demo_cs_fascia3",
-      nome_istituto: "Istituto Comprensivo Statale",
-      codice_meccanografico: "CHIC81000A",
-      tipologia_personale: "ATA",
-      profilo_o_cdc: "CS",
-      fascia: "3",
-      anno_scolastico: "2024/2027",
-      graduatoria: [
-        { posizione: 1, punteggio: 19.80, cognome_nome: "ROSSI M." },
-        { posizione: 2, punteggio: 18.55, cognome_nome: "BIANCHI G." },
-        { posizione: 15, punteggio: 15.20, cognome_nome: "VERDI A." },
-        { posizione: 42, punteggio: 13.90, cognome_nome: "FERRARI E." },
-        { posizione: 87, punteggio: 12.50, cognome_nome: "ESPOSITO C." },
-        { posizione: 120, punteggio: 11.35, cognome_nome: "ROMANO F." },
-        { posizione: 313, punteggio: 13.17, cognome_nome: "CANDIDATO 313" },
-        { posizione: 342, punteggio: 12.57, cognome_nome: "CANDIDATO 342" },
-      ]
-    },
-    {
-      id: "demo_aa_fascia3",
-      nome_istituto: "Istituto Comprensivo Statale",
-      codice_meccanografico: "CHIC81000A",
-      tipologia_personale: "ATA",
-      profilo_o_cdc: "AA",
-      fascia: "3",
-      anno_scolastico: "2024/2027",
-      graduatoria: [
-        { posizione: 1, punteggio: 35.50, cognome_nome: "MARINO S." },
-        { posizione: 5, punteggio: 28.30, cognome_nome: "GRECO D." },
-        { posizione: 12, punteggio: 22.10, cognome_nome: "BRUNO P." },
-        { posizione: 25, punteggio: 17.80, cognome_nome: "GALLO L." },
-      ]
-    },
-    {
-      id: "demo_docenti_a22",
-      nome_istituto: "IIS Schiaparelli - Gramsci",
-      codice_meccanografico: "MIIS00100B",
-      tipologia_personale: "DOCENTE",
-      profilo_o_cdc: "A-22",
-      fascia: "2",
-      anno_scolastico: "2024/2026",
-      graduatoria: [
-        { posizione: 1, punteggio: 112.50, cognome_nome: "CONTI R." },
-        { posizione: 5, punteggio: 88.00, cognome_nome: "DE LUCA F." },
-        { posizione: 14, punteggio: 69.50, cognome_nome: "COSTA M." },
-        { posizione: 28, punteggio: 54.00, cognome_nome: "GIORDANO A." },
-      ]
-    },
-    {
-      id: "demo_docenti_admm",
-      nome_istituto: "IC Ripa Teatina",
-      codice_meccanografico: "CHIC81000A",
-      tipologia_personale: "DOCENTE",
-      profilo_o_cdc: "ADMM",
-      fascia: "1",
-      anno_scolastico: "2024/2026",
-      graduatoria: [
-        { posizione: 1, punteggio: 140.00, cognome_nome: "RIZZO E." },
-        { posizione: 3, punteggio: 118.50, cognome_nome: "LOMBARDI S." },
-        { posizione: 8, punteggio: 95.00, cognome_nome: "BARBIERI T." },
-      ]
-    }
-  ];
 }
 
 // -------------------------------------------------------------
@@ -1172,31 +1170,214 @@ export async function searchGraduatoriaPages(
 // TASK 5.2 — Estrazione + Matching Graduatoria
 // -------------------------------------------------------------
 
-export const GRADUATORIA_EXTRACTION_SYSTEM_PROMPT = `Sei un assistente specializzato nell'estrazione precisa di dati da graduatorie d'istituto scolastiche italiane (Docenti e Personale ATA) pubblicate su pagine web, albi pretori o file PDF.
+export interface GraduatoriaMeta {
+  tipologia_personale: "ATA" | "DOCENTE" | null;
+  fascia: string | null;
+  profilo_o_cdc: string | null;
+  anno_scolastico: string | null;
+}
 
-Il tuo compito è individuare e estrarre tutti i candidati/nominativi presenti nella graduatoria o elenco con il relativo punteggio e la classe di concorso o profilo professionale.
+export interface GraduatoriaExtractedEntry {
+  nominativo: string;
+  punteggio: number | null;
+  posizione?: number | null;
+  classe_concorso?: string;
+}
+
+export interface GraduatoriaExtractionResult {
+  meta: GraduatoriaMeta;
+  graduatoria_entries: GraduatoriaExtractedEntry[];
+}
+
+export const GRADUATORIA_EXTRACTION_SYSTEM_PROMPT = `Sei un assistente specializzato nell'estrazione precisa di dati da graduatorie d'istituto scolastiche italiane (Docenti e Personale ATA) pubblicate su pagine web, albi pretori o file PDF.
 
 SCHEMA JSON OBBLIGATORIO:
 {
+  "meta": {
+    "tipologia_personale": "ATA" | "DOCENTE" | null,
+    "fascia": string | null,
+    "profilo_o_cdc": string | null,
+    "anno_scolastico": string | null
+  },
   "graduatoria_entries": [
     {
-      "nominativo": "COGNOME NOME o NOME COGNOME del candidato",
-      "punteggio": 54.5,
-      "classe_concorso": "Codice classe di concorso (es. A-22, A-12, A-28, ADMM, ADSS) oppure profilo ATA (es. Collaboratore Scolastico, Assistente Amministrativo, Assistente Tecnico)"
+      "nominativo": "COGNOME NOME o NOME COGNOME",
+      "punteggio": number | null,
+      "posizione": number | null,
+      "classe_concorso": string
     }
   ]
 }
 
 REGOLE CRITICHE:
-1. "nominativo": Riporta il nome completo del candidato esattamente come scritto nel documento (es. "ROSSI MARIO", "MARIO ROSSI").
-2. "punteggio": Deve essere un valore numerico (es. 54.5, 88.0, 112.5). Se il punteggio non è esplicitato o non è presente, imposta RIGOROSAMENTE null. MAI restituire 0 se il punteggio è assente.
-3. "classe_concorso": Riporta la classe di concorso per docenti (es. "A-22", "A-12", "A-28", "ADMM") o il profilo ATA (es. "AA", "CS", "AT", "Collaboratore Scolastico", "Assistente Amministrativo").
-4. Rispondi RIGOROSAMENTE ed ESCLUSIVAMENTE con l'oggetto JSON richiesto, senza markdown o commenti esterni.`;
+1. "meta": Estrai i metadati ESCLUSIVAMENTE dall'intestazione del documento:
+   - "tipologia_personale": "ATA" o "DOCENTE" (oppure null).
+   - "fascia": es. "1", "2", "3", "Prima fascia", "Permanente" (oppure null).
+   - "profilo_o_cdc": codice classe di concorso (es. "A-22", "A-12", "ADMM") o profilo ATA (es. "CS", "AA", "AT") (oppure null).
+   - "anno_scolastico": es. "2024/2025", "2024/2027" (oppure null).
+   - REGOLA ASSOLUTA: Qualsiasi campo non presente nel testo deve essere RIGOROSAMENTE null, MAI inventato o presupposto.
+2. "graduatoria_entries":
+   - Ricevi la lista dei nominativi cercati nel prompt utente.
+   - Restituisci SOLO ed ESCLUSIVAMENTE le righe corrispondenti a quei nominativi cercati (considera nome e cognome anche invertiti, es. "MARIO ROSSI" o "ROSSI MARIO").
+   - Non estrarre altri nominativi non inclusi nella lista cercata.
+   - "punteggio": Deve essere un valore numerico valido con eventuali decimali (es. 54.5, 88.0, 112.5). Se il punteggio non è presente o non è riportato, imposta RIGOROSAMENTE null. MAI restituire 0 se il punteggio è assente.
+   - "posizione": Numero intero della posizione in graduatoria se presente, altrimenti null.
+   - "classe_concorso": Codice classe di concorso o profilo ATA della riga/graduatoria.
+3. Rispondi RIGOROSAMENTE ed ESCLUSIVAMENTE con l'oggetto JSON richiesto, senza blocchi markdown esterni o testo addizionale.`;
 
-export interface GraduatoriaExtractedEntry {
-  nominativo: string;
-  punteggio: number | null;
-  classe_concorso?: string;
+/**
+ * Prefiltra il testo di una pagina o documento di graduatoria:
+ * - Intestazione (primi 1500 caratteri di ogni pagina/sezione)
+ * - Righe contenenti i cognomi/nomi cercati ± 3 righe di contesto
+ */
+export function prefilterGraduatoriaText(text: string, targetNames: string[]): string {
+  if (!text) return "";
+  const cleanedNames = targetNames
+    .map(n => n.trim())
+    .filter(n => n.length >= 2);
+
+  // Se nessun nominativo target fornito, estrai primi 3000 caratteri
+  if (cleanedNames.length === 0) {
+    return text.slice(0, 3000);
+  }
+
+  // Estrai i token significativi (lunghezza >= 3 caratteri per evitare falsi positivi con particelle)
+  const searchTokens = new Set<string>();
+  for (const name of cleanedNames) {
+    const tokens = name
+      .toLowerCase()
+      .replace(/[^a-z0-9àèéìòù]/gi, " ")
+      .split(/\s+/)
+      .filter(t => t.length >= 3);
+    for (const t of tokens) searchTokens.add(t);
+  }
+
+  // Suddividi per pagine se sono presenti delimitatori di pagina PDF, altrimenti tratta l'intero testo
+  const pageSections = text.split(/(?=\n--- PAGINA \d+)/i);
+  const resultBlocks: string[] = [];
+
+  for (const section of pageSections) {
+    const lines = section.split("\n");
+    let headerText = "";
+    let headerLineCount = 0;
+
+    for (let i = 0; i < lines.length; i++) {
+      if (headerText.length + lines[i].length <= 1500) {
+        headerText += lines[i] + "\n";
+        headerLineCount = i + 1;
+      } else {
+        break;
+      }
+    }
+
+    const matchedLineIndices = new Set<number>();
+    for (let i = headerLineCount; i < lines.length; i++) {
+      const lineLower = lines[i].toLowerCase();
+      let matched = false;
+      for (const tok of searchTokens) {
+        const re = new RegExp(`(?<![a-z0-9àèéìòù])${tok}(?![a-z0-9àèéìòù])`, "i");
+        if (re.test(lineLower)) {
+          matched = true;
+          break;
+        }
+      }
+      if (matched) {
+        for (let j = Math.max(headerLineCount, i - 3); j <= Math.min(lines.length - 1, i + 3); j++) {
+          matchedLineIndices.add(j);
+        }
+      }
+    }
+
+    let block = headerText.trim();
+    const sortedIndices = Array.from(matchedLineIndices).sort((a, b) => a - b);
+    if (sortedIndices.length > 0) {
+      block += "\n\n... [RIGHE CON CANDIDATI CERCATI] ...\n";
+      let prevIdx = -1;
+      for (const idx of sortedIndices) {
+        if (prevIdx !== -1 && idx > prevIdx + 1) {
+          block += "...\n";
+        }
+        block += lines[idx] + "\n";
+        prevIdx = idx;
+      }
+    }
+    resultBlocks.push(block.trim());
+  }
+
+  return resultBlocks.filter(Boolean).join("\n\n");
+}
+
+/**
+ * Costruisce il messaggio utente per l'estrazione della graduatoria
+ * specificando esplicitamente i nominativi cercati
+ */
+export function buildGraduatoriaUserPrompt(filteredText: string, targetNames: string[]): string {
+  const nomList = targetNames.filter(Boolean).join(", ");
+  return `NOMINATIVI DA CERCARE (estrai SOLO le righe di questi candidati, gestendo cognome/nome anche invertiti):\n${nomList || "Tutti i candidati presenti"}\n\nTESTO GRADUATORIA PRE-FILTRATO:\n${filteredText}`;
+}
+
+/**
+ * Esegue il parsing del JSON della graduatoria con ritentativo (1 volta con testo dimezzato)
+ * se il modello non restituisce un JSON valido, loggando eventuali errori.
+ */
+export async function extractGraduatoriaWithRetry(
+  text: string,
+  targetNames: string[],
+  apiKey: string,
+  fetchFn: (promptText: string, sysPrompt: string) => Promise<any>,
+  onLog?: (msg: string) => void
+): Promise<GraduatoriaExtractionResult | null> {
+  const filtered = prefilterGraduatoriaText(text, targetNames);
+  if (!filtered || filtered.trim().length < 20) {
+    onLog?.("Nessun testo utile dopo il pre-filtraggio per i nominativi cercati.");
+    return null;
+  }
+
+  const prompt1 = buildGraduatoriaUserPrompt(filtered, targetNames);
+
+  try {
+    const rawRes1 = await fetchFn(prompt1, GRADUATORIA_EXTRACTION_SYSTEM_PROMPT);
+    const content1 = rawRes1?.choices?.[0]?.message?.content || "";
+    const parsed1 = JSON.parse(content1);
+    if (parsed1 && typeof parsed1 === "object") {
+      return {
+        meta: parsed1.meta || {
+          tipologia_personale: null,
+          fascia: null,
+          profilo_o_cdc: null,
+          anno_scolastico: null,
+        },
+        graduatoria_entries: Array.isArray(parsed1.graduatoria_entries) ? parsed1.graduatoria_entries : [],
+      };
+    }
+  } catch (err1: any) {
+    onLog?.(`Risposta non in formato JSON valido (${err1.message}). Nuovo tentativo con testo dimezzato...`);
+  }
+
+  // Tentativo 2: testo dimezzato
+  try {
+    const halvedText = filtered.slice(0, Math.floor(filtered.length / 2));
+    const prompt2 = buildGraduatoriaUserPrompt(halvedText, targetNames);
+    const rawRes2 = await fetchFn(prompt2, GRADUATORIA_EXTRACTION_SYSTEM_PROMPT);
+    const content2 = rawRes2?.choices?.[0]?.message?.content || "";
+    const parsed2 = JSON.parse(content2);
+    if (parsed2 && typeof parsed2 === "object") {
+      return {
+        meta: parsed2.meta || {
+          tipologia_personale: null,
+          fascia: null,
+          profilo_o_cdc: null,
+          anno_scolastico: null,
+        },
+        graduatoria_entries: Array.isArray(parsed2.graduatoria_entries) ? parsed2.graduatoria_entries : [],
+      };
+    }
+  } catch (err2: any) {
+    console.error("Errore irreversibile parsing JSON graduatoria:", err2);
+    onLog?.(`Errore estrazione graduatoria (JSON non valido anche al secondo tentativo): ${err2.message}`);
+  }
+
+  return null;
 }
 
 /**
@@ -1247,36 +1428,82 @@ export function isNameMatch(nameA?: string, nameB?: string): boolean {
 }
 
 /**
- * Normalizza classe di concorso o profilo professionale per il matching
+ * Normalizza classe di concorso o profilo professionale per il matching.
+ * - Docenti: canonicalizza a lettera-NN con zero padding (A1, A-1, A01 → "A-01"; A022 → "A-22");
+ *   ADMM/ADSS/ADAA/ADEE/AAAA/EEEE invariati.
+ * - ATA: CS, AA, AT, CU, CR, GU, IF come ora; se entrambi hanno area lab (AR02…) devono coincidere.
  */
 export function normalizeCdcOrProfile(val?: string): string {
   if (!val) return "";
-  const s = val.toLowerCase().replace(/[^a-z0-9]/g, "");
+  const s = val.trim().toUpperCase();
 
-  // Mappatura ATA
-  if (s.includes("collaboratore") || s === "cs" || s.includes("scolastico")) return "cs";
-  if (s.includes("amministrativo") || s === "aa") return "aa";
-  if (s.includes("tecnico") || s === "at") return "at";
-  if (s.includes("cuoco") || s === "cu") return "cu";
-  if (s.includes("agrario") || s === "cr") return "cr";
-  if (s.includes("guardarob") || s === "gu") return "gu";
-  if (s.includes("inferm") || s === "if") return "if";
+  // Docenti sostegno: ADMM, ADSS, ADAA, ADEE, AAAA, EEEE invariati
+  const SOSTEGNO = ["ADMM", "ADSS", "ADAA", "ADEE", "AAAA", "EEEE"];
+  for (const code of SOSTEGNO) {
+    const re = new RegExp(`(?<![A-Z0-9])${code}(?![A-Z0-9])`, "i");
+    if (re.test(s)) return code;
+  }
+  if (/\bINFANZIA\b/i.test(s)) return "AAAA";
+  if (/\bPRIMARIA\b/i.test(s)) return "EEEE";
 
-  // Docenti: rimozione zeri iniziali e standardizzazione (es. a022 -> a22)
-  return s.replace(/^a0+([1-9])/i, "a$1");
+  // ATA: CS, AA, AT, CU, CR, GU, IF
+  if (/\b(COLLABORATORE(\s+SCOLASTICO)?|CS)\b/i.test(s)) return "CS";
+  if (/\b(ASSISTENTE\s+AMMINISTRATIVO|AMMINISTRATIVO|AA)\b/i.test(s)) return "AA";
+  if (/\b(CUOCO|CU)\b/i.test(s)) return "CU";
+  if (/\b(AGRARIO|ADDETTO\s+ALLE\s+AZIENDE\s+AGRARIE|CR)\b/i.test(s)) return "CR";
+  if (/\b(GUARDAROBIERE|GU)\b/i.test(s)) return "GU";
+  if (/\b(INFERMIERE|IF)\b/i.test(s)) return "IF";
+  if (/\b(OPERATORE(\s+SCOLASTICO)?|OS)\b/i.test(s)) return "OS";
+
+  // Assistente tecnico (AT) con eventuale area di laboratorio ARxx
+  const arMatch = s.match(/(?<![A-Z0-9])AR\s*(\d{2})(?![A-Z0-9])/i);
+  if (/\b(ASSISTENTE\s+TECNICO|TECNICO|AT)\b/i.test(s) || arMatch) {
+    if (arMatch) {
+      return `AT_AR${arMatch[1]}`;
+    }
+    return "AT";
+  }
+
+  // Docenti: canonicalizza a lettera-NN con zero padding (A1, A-1, A01 → "A-01"; A022 → "A-22")
+  const docMatch = s.match(/(?<![A-Z0-9])([A-Z])[\s\-_]*0*([0-9]{1,3})(?![A-Z0-9])/i);
+  if (docMatch) {
+    const letter = docMatch[1].toUpperCase();
+    const num = parseInt(docMatch[2], 10);
+    const padded = String(num).padStart(2, "0");
+    return `${letter}-${padded}`;
+  }
+
+  return s;
 }
 
 /**
- * Confronta due classi di concorso o profili professionali
+ * Confronta due classi di concorso o profili professionali.
+ * isClassMatch: SOLO uguaglianza dei valori canonici. Elimina ogni includes().
+ * Se entrambi hanno area lab (AR02...), devono coincidere.
  */
 export function isClassMatch(classA?: string, classB?: string): boolean {
   if (!classA || !classB) return false;
   const normA = normalizeCdcOrProfile(classA);
   const normB = normalizeCdcOrProfile(classB);
   if (!normA || !normB) return false;
-  if (normA === normB) return true;
-  if (normA.includes(normB) || normB.includes(normA)) return true;
-  return false;
+
+  // Se entrambi hanno area lab (ARxx), devono coincidere
+  const labA = normA.startsWith("AT_AR") ? normA.slice(3) : null;
+  const labB = normB.startsWith("AT_AR") ? normB.slice(3) : null;
+  if (labA && labB) {
+    return labA === labB;
+  }
+  if ((normA === "AT" && labB) || (normB === "AT" && labA)) {
+    return true;
+  }
+
+  // SOLO uguaglianza dei valori canonici. Elimina ogni includes().
+  return normA === normB;
 }
+
+/**
+ * Suite di test rapidi per graduatorieService (normalizeFascia, isClassMatch, lookupPunteggioGraduatoria):
+ * Eseguibile tramite: `npm run test:graduatorie` (oppure `npx tsx scripts/test-graduatorie.ts`)
+ */
 
 

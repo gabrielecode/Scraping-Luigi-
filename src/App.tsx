@@ -43,6 +43,8 @@ import {
   crossReferenceNomina,
   searchGraduatoriaPages,
   GRADUATORIA_EXTRACTION_SYSTEM_PROMPT,
+  extractGraduatoriaWithRetry,
+  prefilterGraduatoriaText,
   isNameMatch,
   isClassMatch,
   isValidCodiceMeccanografico,
@@ -229,13 +231,11 @@ export default function App() {
     }, 1200);
   };
 
-  // Export local backup (JSON)
+  // Export local backup (JSON) - esclude credenziali e token sensibili (openRouterApiKey, jinaApiKey, githubPat)
   const exportLocalBackup = () => {
     const backupData = {
       version: 1,
       timestamp: new Date().toISOString(),
-      openRouterApiKey,
-      jinaApiKey,
       githubUser,
       githubRepo,
       customProxyUrl,
@@ -251,7 +251,7 @@ export default function App() {
     document.body.removeChild(link);
   };
 
-  // Import local backup (JSON)
+  // Import local backup (JSON) - credenziali e API key non vengono reimportate
   const importLocalBackup = (e: React.ChangeEvent<HTMLInputElement>) => {
     const file = e.target.files?.[0];
     if (!file) return;
@@ -262,14 +262,6 @@ export default function App() {
         if (json.batchHistory && Array.isArray(json.batchHistory)) {
           setBatchHistory(json.batchHistory);
           localStorage.setItem("scuola_batch_history", JSON.stringify(json.batchHistory));
-        }
-        if (json.openRouterApiKey !== undefined) {
-          setOpenRouterApiKey(json.openRouterApiKey);
-          localStorage.setItem("scuola_openrouter_api_key", json.openRouterApiKey);
-        }
-        if (json.jinaApiKey !== undefined) {
-          setJinaApiKey(json.jinaApiKey);
-          localStorage.setItem("scuola_jina_api_key", json.jinaApiKey);
         }
         if (json.githubUser !== undefined) {
           setGithubUser(json.githubUser);
@@ -353,12 +345,11 @@ Leggi attentamente il testo ed estrai con la massima precisione:
    - "tipo_posto": "comune" per posti ordinari/curricolari e ATA; "sostegno" per posti di sostegno / minorati psicofisici / uditivi / vista / cattedre sostegno ADAA/ADEE/ADMM/ADSS.
    - "punteggio": NUMERO FLOAT DECIMALE (es. 13.17, 19.80, 54.5, 112.0) OPPURE null.
      ⚠️ ISTRUZIONI CRITICHE SULL'ESTRAZIONE DEI PUNTEGGI:
-     - Estrai con la massima attenzione qualsiasi punteggio attribuito o associato al candidato, al posto o alla convocazione.
-     - Il punteggio compare sotto varie diciture: "punteggio", "punti", "pt.", "p.ti", "p.", "punteggio complessivo", "punteggio totale", "totale punti", "valutazione", "punti titoli/servizio", "somma punti", "con punti ...", "in virtù del punteggio di ...".
-     - Nelle convocazioni o avvisi con scaglioni o soglie di punteggio (es. "per i candidati fino a punteggio 12", "fino a punti 11"), estrai come punteggio il valore numerico della soglia indicata (es. 12.0 o 11.0).
-     - Nelle graduatorie, bollettini o elenchi con tabelle (es. colonna PUNTI, PT, PUNTEGGIO, VALUTAZIONE), estrai per ogni candidato o riga il rispettivo punteggio.
+     - "punteggio" deve contenere SOLO ED ESCLUSIVAMENTE IL PUNTEGGIO REALE DEL CANDIDATO (es. punteggio individuale conseguito dal lavoratore/candidato in graduatoria o nel contratto).
+     - IMPORTANTE - LE SOGLIE DI CONVOCAZIONE NON VANNO IN PUNTEGGIO: formule come "fino a punteggio 12", "fino a punti 11", "da punti X a punti Y" NON sono il punteggio del candidato e NON devono essere inserite nel campo "punteggio". Se l'atto menziona solo una soglia di convocazione e nessun punteggio individuale del candidato, imposta "punteggio": null.
+     - Nelle graduatorie, bollettini o elenchi con tabelle (es. colonna PUNTI, PT, PUNTEGGIO, VALUTAZIONE), estrai per ogni candidato il proprio punteggio individuale.
      - Converti sempre le virgole in punto decimale (es. "13,17" -> 13.17, "69,50" -> 69.5).
-     - Restituisci null SOLO se nel testo/allegati non è presente assolutamente alcuna cifra o soglia di punteggio o valutazione.
+     - Se manca il punteggio individuale reale del candidato/lavoratore, imposta sempre "punteggio": null.
    - "posizione_graduatoria": posizione numerica in graduatoria (es. "1", "15", "313"). Cercala accanto a "posizione", "pos.", "posto", "n.", "collocato al n.". Se assente lascia stringa vuota o "Non disponibile".
    - "fascia": fascia della graduatoria (es. "Prima fascia", "Seconda fascia", "Terza fascia", "Graduatoria d'Istituto", "Graduatoria permanente 24 mesi", "Interpello"). Se non specificata scrivi "Non disponibile".
    - "ore_settimanali": orario di cattedra/servizio (es. "36 ore", "18 ore", "12 ore", "7 ore"). Se non menzionato scrivi ESATTAMENTE "Non disponibile".
@@ -427,12 +418,11 @@ CAMPI DA ESTRARRE:
 - "tipo_posto": "comune" per posti ordinari/curricolari e ATA; "sostegno" per posti e cattedre di sostegno / minorati psicofisici / uditivi / della vista / ADAA / ADEE / ADMM / ADSS.
 - "punteggio": punteggio numerico float con punto decimale (es. 13.17, 19.80, 54.5, 112.0) OPPURE null.
   ⚠️ ISTRUZIONI CRITICHE SULL'ESTRAZIONE DEI PUNTEGGI:
-  - Cerca con la massima attenzione qualsiasi punteggio attribuito o associato al candidato, al posto o alla convocazione.
-  - Cercalo sotto diciture come: "punteggio", "punti", "pt.", "p.ti", "p.", "punteggio complessivo", "punteggio totale", "totale punti", "valutazione", "punti titoli/servizio", "con punti ...", "in virtù del punteggio di ...".
-  - Nelle convocazioni o avvisi con scaglioni/soglie di punteggio (es. "fino a punteggio 12", "fino a punti 11"), estrai come punteggio il valore della soglia indicata (es. 12.0 o 11.0).
-  - Nelle graduatorie o elenchi con tabella a colonne (es. colonna PUNTI, PT, PUNTEGGIO, VALUTAZIONE), estrai il punteggio corrispondente dalla colonna dei punti/punteggio.
+  - "punteggio" deve contenere SOLO ED ESCLUSIVAMENTE IL PUNTEGGIO REALE DEL CANDIDATO (es. punteggio individuale in graduatoria o nel contratto).
+  - IMPORTANTE - LE SOGLIE DI CONVOCAZIONE NON VANNO IN PUNTEGGIO: formule come "fino a punteggio 12", "fino a punti 11", "da punti X a punti Y" NON sono il punteggio del candidato e NON devono essere inserite nel campo "punteggio". Se nel documento compare solo la soglia di convocazione senza il punteggio individuale del candidato, imposta "punteggio": null.
+  - Nelle graduatorie o elenchi con tabella a colonne (es. colonna PUNTI, PT, PUNTEGGIO, VALUTAZIONE), estrai per ciascun candidato il suo punteggio individuale.
   - Converti sempre le virgole in punto decimale (es. "13,17" -> 13.17, "69,50" -> 69.5).
-  - Restituisci null SOLO se nel documento non compare assolutamente alcuna cifra o soglia di punteggio.
+  - Se manca il punteggio individuale reale del lavoratore/candidato, imposta "punteggio": null.
 - "posizione_graduatoria": posizione numerica in graduatoria (es. "1", "15", "313"). Cercala accanto a "posizione", "pos.", "posto", "n.". Se assente scrivi "Non disponibile".
 - "fascia": fascia di graduatoria (es. "Prima fascia", "Seconda fascia", "Terza fascia", "Graduatoria d'Istituto", "Graduatoria permanente 24 mesi", "Interpello"). Se assente scrivi "Non disponibile".
 - "ore_settimanali": orario di servizio (es. "36 ore", "18 ore", "12 ore", "7 ore"). Se non indicato scrivi ESATTAMENTE "Non disponibile".
@@ -1089,7 +1079,8 @@ async function extractPdfWithOpenRouter(
   apiKey: string,
   isBase64 = false,
   customProxyUrl?: string,
-  failedProxiesByDomain?: Map<string, Set<string>>
+  failedProxiesByDomain?: Map<string, Set<string>>,
+  maxPages = 20
 ) {
   // 1. Priorità assoluta: scarica il buffer binario ed estrai il testo localmente con pdfjs
   // Questo elimina ogni problema di compatibilità del plugin OpenRouter ed estrae tabelle e punteggi al 100%
@@ -1098,7 +1089,7 @@ async function extractPdfWithOpenRouter(
       const res = await fetchWithProxy(pdfSource, true, undefined, customProxyUrl, failedProxiesByDomain);
       if (res?.data) {
         const buf = res.data as ArrayBuffer;
-        const { text: localPdfText } = await extractTextFromPdfBuffer(buf);
+        const { text: localPdfText } = await extractTextFromPdfBuffer(buf, maxPages);
         if (localPdfText && localPdfText.trim().length > 30) {
           const textRes = await extractWithOpenRouter(localPdfText, apiKey, promptText);
           if (textRes && !textRes.error && textRes.choices?.[0]?.message?.content) {
@@ -1476,6 +1467,8 @@ const executeClientSideExtract = async (
       pagine_graduatoria_esplorate: [] as string[]
     };
     let extractedData = { ...defaultData };
+    let extractionStatus: "success" | "error" = "success";
+    let extractionError: string | undefined = undefined;
     try {
       const parsed = JSON.parse(res.content);
       extractedData = { ...defaultData, ...parsed };
@@ -1598,18 +1591,25 @@ const executeClientSideExtract = async (
       extractedData.classe_di_concorso = extractedData.classe_concorso_area_lab;
       extractedData.punteggio = normalizePunteggio(extractedData.punteggio);
 
-      // Se il punteggio di primo livello manca, tenta l'estrazione euristica/regex dal testo completo scaricato
-      if (extractedData.punteggio === null && res.fullText) {
+      // Se il punteggio di primo livello manca o ci sono soglie nel testo, esegui l'analisi euristica
+      if (res.fullText) {
         const heuristicScore = extractPunteggioHeuristic(res.fullText, {
           profilo: extractedData.profilo_lavorativo || extractedData.profilo_professionale,
           cdc: extractedData.classe_concorso_area_lab,
           nominativo: extractedData.nominativo,
         });
-        if (heuristicScore.punteggio !== null) {
+        if (extractedData.punteggio === null && heuristicScore.punteggio !== null) {
           extractedData.punteggio = heuristicScore.punteggio;
           extractedData.origine_punteggio = "Esplicito";
           extractedData.note_cross_reference = `Punteggio rilevato nel testo: "${heuristicScore.sourcePhrase || heuristicScore.punteggio}"`;
           res.logs.push(`🎯 Punteggio rilevato dal testo: ${heuristicScore.punteggio} (${heuristicScore.sourcePhrase || ""})`);
+        }
+        if (heuristicScore.sogliaConvocazione !== null && heuristicScore.sogliaConvocazione !== undefined) {
+          const sogliaMsg = `Soglia convocazione: ${heuristicScore.sogliaConvocazione}`;
+          extractedData.note_cross_reference = extractedData.note_cross_reference
+            ? `${extractedData.note_cross_reference} | ${sogliaMsg}`
+            : sogliaMsg;
+          res.logs.push(`ℹ️ ${sogliaMsg}`);
         }
       }
 
@@ -1644,18 +1644,24 @@ const executeClientSideExtract = async (
           const tipoPosto = inferTipoPosto(item);
           let punt = normalizePunteggio(item.punteggio);
 
-          // Se manca il punteggio in questa singola nomina, tenta estrazione euristica specifica per profilo/nominativo
-          if (punt === null && res.fullText) {
+          // Se manca il punteggio in questa singola nomina o per rilevare soglie di convocazione
+          if (res.fullText) {
             const hMatch = extractPunteggioHeuristic(res.fullText, {
               profilo: item.profilo_lavorativo || item.profilo_professionale,
               cdc: cdcArea,
               nominativo: item.nominativo || extractedData.nominativo,
             });
-            if (hMatch.punteggio !== null) {
+            if (punt === null && hMatch.punteggio !== null) {
               punt = hMatch.punteggio;
               item.origine_punteggio = "Esplicito";
               item.note_cross_reference = `Punteggio rilevato nel testo: "${hMatch.sourcePhrase || punt}"`;
               res.logs.push(`🎯 Punteggio nomina (${item.profilo_lavorativo || "profilo"}): ${punt}`);
+            }
+            if (hMatch.sogliaConvocazione !== null && hMatch.sogliaConvocazione !== undefined) {
+              const sogliaMsg = `Soglia convocazione: ${hMatch.sogliaConvocazione}`;
+              item.note_cross_reference = item.note_cross_reference
+                ? `${item.note_cross_reference} | ${sogliaMsg}`
+                : sogliaMsg;
             }
           }
 
@@ -1734,19 +1740,36 @@ const executeClientSideExtract = async (
               ""
             ).trim();
 
+            // Lista di tutti i nominativi cercati per il pre-filtraggio e il prompt
+            const targetNamesToSearch: string[] = [];
+            if (targetNom) targetNamesToSearch.push(targetNom);
+            if (Array.isArray(extractedData.nomine_contratti)) {
+              for (const n of extractedData.nomine_contratti) {
+                if (n.nominativo && n.nominativo.trim() && !targetNamesToSearch.includes(n.nominativo.trim())) {
+                  targetNamesToSearch.push(n.nominativo.trim());
+                }
+              }
+            }
+
             for (const page of exploredPages) {
               if (matchedEntry) break;
 
               // 1. Analisi testo HTML / markdown della pagina
-              const pageText = (page.content || "").slice(0, 35000).trim();
-              if (pageText.length > 50) {
+              const pageContent = (page.content || "").trim();
+              if (pageContent.length > 50) {
                 res.logs.push(`Estrazione dati graduatoria da: "${page.title}" (${page.url})`);
                 try {
-                  const llmRes = await extractWithOpenRouter(pageText, apiKey, GRADUATORIA_EXTRACTION_SYSTEM_PROMPT);
-                  const parsedJson = JSON.parse(llmRes?.choices?.[0]?.message?.content || "{}");
-                  const entries: any[] = Array.isArray(parsedJson.graduatoria_entries)
-                    ? parsedJson.graduatoria_entries
-                    : [];
+                  const extractionResult = await extractGraduatoriaWithRetry(
+                    pageContent,
+                    targetNamesToSearch,
+                    apiKey,
+                    async (promptText, sysPrompt) => {
+                      return await extractWithOpenRouter(promptText, apiKey, sysPrompt);
+                    },
+                    (logMsg) => res.logs.push(logMsg)
+                  );
+
+                  const entries = extractionResult?.graduatoria_entries || [];
 
                   for (const entry of entries) {
                     if (
@@ -1794,18 +1817,60 @@ const executeClientSideExtract = async (
                   if (matchedEntry) break;
                   res.logs.push(`Estrazione da PDF graduatoria allegato: ${pdfUrl}`);
                   try {
-                    const pdfResult = await extractPdfWithOpenRouter(
-                      pdfUrl,
-                      GRADUATORIA_EXTRACTION_SYSTEM_PROMPT,
-                      apiKey,
-                      false,
-                      customProxy,
-                      failedProxiesByDomain
-                    );
-                    const parsedPdf = JSON.parse(pdfResult?.choices?.[0]?.message?.content || "{}");
-                    const entries: any[] = Array.isArray(parsedPdf.graduatoria_entries)
-                      ? parsedPdf.graduatoria_entries
-                      : [];
+                    // Per le graduatorie usa maxPages=300
+                    let pdfText = "";
+                    try {
+                      const fetchRes = await fetchWithProxy(pdfUrl, true, undefined, customProxy, failedProxiesByDomain);
+                      if (fetchRes?.data) {
+                        const { text: extractedPdfText } = await extractTextFromPdfBuffer(fetchRes.data as ArrayBuffer, 300);
+                        pdfText = extractedPdfText || "";
+                      }
+                    } catch (pdfFetchErr: any) {
+                      res.logs.push(`Download diretto PDF fallito (${pdfFetchErr.message}), provo fallback OpenRouter...`);
+                    }
+
+                    let entries: any[] = [];
+
+                    if (pdfText && pdfText.trim().length > 30) {
+                      const extractionResult = await extractGraduatoriaWithRetry(
+                        pdfText,
+                        targetNamesToSearch,
+                        apiKey,
+                        async (promptText, sysPrompt) => {
+                          return await extractWithOpenRouter(promptText, apiKey, sysPrompt);
+                        },
+                        (logMsg) => res.logs.push(logMsg)
+                      );
+                      entries = extractionResult?.graduatoria_entries || [];
+                    } else {
+                      // Fallback: se pdfjs non ha estratto testo, invia con fallback OpenRouter (maxPages=300)
+                      const pdfResult = await extractPdfWithOpenRouter(
+                        pdfUrl,
+                        GRADUATORIA_EXTRACTION_SYSTEM_PROMPT,
+                        apiKey,
+                        false,
+                        customProxy,
+                        failedProxiesByDomain,
+                        300
+                      );
+                      let parsedPdf: any = null;
+                      try {
+                        parsedPdf = JSON.parse(pdfResult?.choices?.[0]?.message?.content || "{}");
+                      } catch {
+                        // Ritenta 1 volta con testo dimezzato
+                        const rawContent = pdfResult?.choices?.[0]?.message?.content || "";
+                        if (rawContent) {
+                          try {
+                            const halvedContent = rawContent.slice(0, Math.floor(rawContent.length / 2));
+                            const retryRes = await extractWithOpenRouter(halvedContent, apiKey, GRADUATORIA_EXTRACTION_SYSTEM_PROMPT);
+                            parsedPdf = JSON.parse(retryRes?.choices?.[0]?.message?.content || "{}");
+                          } catch (retryErr: any) {
+                            console.error("Errore fallback parsing PDF graduatoria:", retryErr);
+                          }
+                        }
+                      }
+                      entries = Array.isArray(parsedPdf?.graduatoria_entries) ? parsedPdf.graduatoria_entries : [];
+                    }
 
                     for (const entry of entries) {
                       if (
@@ -1853,7 +1918,10 @@ const executeClientSideExtract = async (
             res.logs.push(`✅ Trovato: ${matchedScore}`);
             extractedData.punteggio = matchedScore;
             extractedData.origine_punteggio = "Incrociato";
-            extractedData.note_cross_reference = `Punteggio incrociato da graduatoria (${matchedEntry.sourceUrl}): ${matchedEntry.nominativo} [${matchedEntry.classe_concorso}] = ${matchedScore} pt`;
+            const existingSoglia = extractedData.note_cross_reference?.includes("Soglia convocazione:")
+              ? ` | ${extractedData.note_cross_reference.split("|").find((s: string) => s.includes("Soglia convocazione:"))?.trim() || ""}`
+              : "";
+            extractedData.note_cross_reference = `Punteggio incrociato da graduatoria (${matchedEntry.sourceUrl}): ${matchedEntry.nominativo} [${matchedEntry.classe_concorso}] = ${matchedScore} pt${existingSoglia}`;
 
             // Aggiorna anche le nomine nei contratti
             if (Array.isArray(extractedData.nomine_contratti)) {
@@ -1865,11 +1933,14 @@ const executeClientSideExtract = async (
                     matchedEntry!.classe_concorso
                   )
                 ) {
+                  const existingSogliaNom = n.note_cross_reference?.includes("Soglia convocazione:")
+                    ? ` | ${n.note_cross_reference.split("|").find((s: string) => s.includes("Soglia convocazione:"))?.trim() || ""}`
+                    : "";
                   return {
                     ...n,
                     punteggio: matchedScore,
                     origine_punteggio: "Incrociato",
-                    note_cross_reference: `Punteggio incrociato da graduatoria (${matchedEntry!.sourceUrl}): ${matchedEntry!.nominativo} = ${matchedScore} pt`,
+                    note_cross_reference: `Punteggio incrociato da graduatoria (${matchedEntry!.sourceUrl}): ${matchedEntry!.nominativo} = ${matchedScore} pt${existingSogliaNom}`,
                   };
                 } else if (
                   (n.punteggio === null || n.punteggio === undefined || n.punteggio === "") &&
@@ -1931,15 +2002,19 @@ const executeClientSideExtract = async (
           }
         }
       }
-    } catch {
-      // fallback
+    } catch (err: any) {
+      const errMsg = err?.message || String(err);
+      res.logs.push(`❌ Errore durante la post-elaborazione: ${errMsg}`);
+      extractionStatus = "error";
+      extractionError = errMsg;
     }
     return {
-      status: "success" as const,
+      status: extractionStatus,
       url: targetUrl,
       navigatedUrl: res.navigatedUrl,
       logs: res.logs,
-      data: extractedData
+      data: extractedData,
+      error: extractionError,
     };
 };
 
