@@ -118,6 +118,21 @@ export default function App() {
     }
     return "";
   });
+  const [deepseekApiKey, setDeepseekApiKey] = useState(() => {
+    if (typeof window !== "undefined") {
+      const meta = import.meta as any;
+      return (
+        localStorage.getItem("scuola_deepseek_api_key") || 
+        (meta && meta.env && meta.env.VITE_DEEPSEEK_API_KEY) || 
+        (meta && meta.env && meta.env.DEEPSEEK_API_KEY) || 
+        ""
+      );
+    }
+    return "";
+  });
+  const [showDeepseekKey, setShowDeepseekKey] = useState(false);
+  const [isTestingDeepseek, setIsTestingDeepseek] = useState(false);
+  const [deepseekTestStatus, setDeepseekTestStatus] = useState<{ valid: boolean; message: string } | null>(null);
   const [jinaApiKey, setJinaApiKey] = useState(() => {
     if (typeof window !== "undefined") {
       const meta = import.meta as any;
@@ -239,11 +254,51 @@ export default function App() {
     }
   };
 
+  const testDeepseekKey = async () => {
+    const cleanKey = deepseekApiKey.trim();
+    if (!cleanKey) {
+      setDeepseekTestStatus({ valid: false, message: "Inserisci prima una chiave API DeepSeek valida." });
+      return;
+    }
+    setIsTestingDeepseek(true);
+    setDeepseekTestStatus(null);
+    try {
+      const res = await fetch("https://api.deepseek.com/chat/completions", {
+        method: "POST",
+        headers: {
+          "Authorization": `Bearer ${cleanKey}`,
+          "Content-Type": "application/json"
+        },
+        body: JSON.stringify({
+          model: "deepseek-chat",
+          messages: [{ role: "user", content: "Ping" }],
+          max_tokens: 5
+        })
+      });
+      const data = await res.json();
+      if (res.ok && !data?.error) {
+        setDeepseekTestStatus({ valid: true, message: "Chiave DeepSeek valida e attiva!" });
+      } else {
+        const err = data?.error?.message || (res.status === 401 ? "Chiave DeepSeek non valida (401 Unauthorized)." : `Errore HTTP ${res.status}`);
+        setDeepseekTestStatus({ valid: false, message: err });
+      }
+    } catch (e: any) {
+      setDeepseekTestStatus({
+        valid: false,
+        message: `Impossibile verificare: ${e.message || "Errore di connessione"}`
+      });
+    } finally {
+      setIsTestingDeepseek(false);
+    }
+  };
+
   const saveSettings = (e?: React.FormEvent) => {
     if (e) e.preventDefault();
     const cleanKey = openRouterApiKey.trim();
+    const cleanDeepseekKey = deepseekApiKey.trim();
     const cleanJinaKey = jinaApiKey.trim();
     localStorage.setItem("scuola_openrouter_api_key", cleanKey);
+    localStorage.setItem("scuola_deepseek_api_key", cleanDeepseekKey);
     localStorage.setItem("scuola_jina_api_key", cleanJinaKey);
     localStorage.setItem("scuola_github_user", githubUser.trim());
     localStorage.setItem("scuola_github_repo", githubRepo.trim());
@@ -885,7 +940,7 @@ function findActLinks(rawContent: string, baseUrl: string, doc?: Document): { ur
     }
   }
 
-  return acts.sort((a, b) => b.score - a.score).slice(0, 10);
+  return acts.sort((a, b) => b.score - a.score).slice(0, 25);
 }
 
 function extractDomain(urlStr: string): string {
@@ -1159,6 +1214,31 @@ function inferClasseConcorsoAreaLab(item: any, tipologia: "ATA" | "DOCENTE"): st
 }
 
 async function extractWithOpenRouter(text: string, apiKey: string, systemPrompt?: string) {
+  const deepseekKey = typeof window !== "undefined" ? localStorage.getItem("scuola_deepseek_api_key") || "" : "";
+  if (deepseekKey && deepseekKey.trim()) {
+    try {
+      const dsRes = await fetch("https://api.deepseek.com/chat/completions", {
+        method: "POST",
+        headers: {
+          "Authorization": `Bearer ${deepseekKey.trim()}`,
+          "Content-Type": "application/json"
+        },
+        body: JSON.stringify({
+          model: "deepseek-chat",
+          messages: [
+            { role: "system", content: systemPrompt || "Sei un assistente specializzato nell'analisi avanzata di documenti scolastici, graduatorie e contratti ATA/Docenti. Estrai con precisione millimetrica punteggi, posizioni e dati. Se il punteggio manca, restituisci RIGOROSAMENTE null (MAI 0). Rispondi solo con JSON valido." },
+            { role: "user", content: `Analizza questo testo in profondità:\n\n${text}` }
+          ],
+          response_format: { type: "json_object" }
+        })
+      });
+      const dsData = await dsRes.json();
+      if (!dsData?.error && dsData?.choices?.[0]?.message?.content) {
+        return dsData;
+      }
+    } catch {}
+  }
+
   const response = await fetch("https://openrouter.ai/api/v1/chat/completions", {
     method: "POST",
     headers: {
@@ -1186,7 +1266,7 @@ async function extractPdfWithOpenRouter(
   isBase64 = false,
   customProxyUrl?: string,
   failedProxiesByDomain?: Map<string, Set<string>>,
-  maxPages = 20
+  maxPages = 300
 ) {
   // 1. Priorità assoluta: scarica il buffer binario ed estrai il testo localmente con pdfjs
   // Questo elimina ogni problema di compatibilità del plugin OpenRouter ed estrae tabelle e punteggi al 100%
@@ -1383,7 +1463,7 @@ async function scrapeWebsite(
         const mainPagePdfs = extractPdfsFromHtml(rawHome, currentUrl);
         if (mainPagePdfs.length > 0) {
           log(`Trovati ${mainPagePdfs.length} documenti/allegati nella pagina principale.`);
-          const topMainPdfs = mainPagePdfs.slice(0, 4);
+          const topMainPdfs = mainPagePdfs.slice(0, 12);
           for (const pdfItem of topMainPdfs) {
             log(`Analisi allegato: "${pdfItem.title}" (${pdfItem.url})`);
             try {
@@ -1392,18 +1472,7 @@ async function scrapeWebsite(
                 const { text: pText } = await extractTextFromPdfBuffer(pBufRes.data as ArrayBuffer);
                 if (pText && pText.trim().length > 30) {
                   log(`Estratti ${pText.length} caratteri da allegato "${pdfItem.title}"`);
-                  
-                  // Se stiamo cercando un nominativo specifico, filtra
-                  if (inputNominativo && inputNominativo.trim()) {
-                    if (textContainsName(pText, inputNominativo)) {
-                      log(`🎯 Nominativo cercato "${inputNominativo}" individuato nell'allegato: ${pdfItem.url}`);
-                      allTexts.push(`=== DOCUMENTO/GRADUATORIA ALLEGATA "${pdfItem.title}" (${pdfItem.url}) ===\n${pText}`);
-                    } else {
-                      log(`Filtro: nominativo "${inputNominativo}" non presente nell'allegato. Salto per salvare spazio.`);
-                    }
-                  } else {
-                    allTexts.push(`=== DOCUMENTO/GRADUATORIA ALLEGATA "${pdfItem.title}" (${pdfItem.url}) ===\n${pText}`);
-                  }
+                  allTexts.push(`=== DOCUMENTO/GRADUATORIA ALLEGATA "${pdfItem.title}" (${pdfItem.url}) ===\n${pText}`);
                 }
               }
             } catch (pErr: any) {
@@ -1421,8 +1490,8 @@ async function scrapeWebsite(
       const discoveredLinks = findRelevantSchoolLinks(rawHome, currentUrl, homeDoc);
       log(`Trovati ${discoveredLinks.length} link di sezioni d'interesse (Albo Online / Amministrazione Trasparente).`);
 
-      // Take top 5 highest priority links to crawl deeply
-      const topLinksToFetch = discoveredLinks.slice(0, 5);
+      // Take top 10 highest priority links to crawl deeply
+      const topLinksToFetch = discoveredLinks.slice(0, 10);
       for (const link of topLinksToFetch) {
         log(`Scansione approfondita sezione: "${link.title}" (${link.url})`);
         try {
@@ -1443,8 +1512,7 @@ async function scrapeWebsite(
           const subPagePdfs = extractPdfsFromHtml(rawSub, link.url);
           if (subPagePdfs.length > 0) {
             log(`Trovati ${subPagePdfs.length} documenti/allegati diretti nella sezione "${link.title}".`);
-            // Prendiamo fino a 8 allegati prioritari
-            const topSubPdfs = subPagePdfs.slice(0, 8);
+            const topSubPdfs = subPagePdfs.slice(0, 15);
             for (const pdfItem of topSubPdfs) {
               log(`Analisi allegato diretto di sezione: "${pdfItem.title}" (${pdfItem.url})`);
               try {
@@ -1453,17 +1521,7 @@ async function scrapeWebsite(
                   const { text: pText } = await extractTextFromPdfBuffer(pBufRes.data as ArrayBuffer);
                   if (pText && pText.trim().length > 30) {
                     log(`Estratti ${pText.length} caratteri da allegato di sezione "${pdfItem.title}"`);
-                    
-                    if (inputNominativo && inputNominativo.trim()) {
-                      if (textContainsName(pText, inputNominativo)) {
-                        log(`🎯 Nominativo cercato "${inputNominativo}" individuato nell'allegato diretto: ${pdfItem.url}`);
-                        allTexts.push(`=== DOCUMENTO/GRADUATORIA SEZIONE ALLEGATA "${pdfItem.title}" (${pdfItem.url}) ===\n${pText}`);
-                      } else {
-                        log(`Filtro: nominativo "${inputNominativo}" non presente nell'allegato di sezione.`);
-                      }
-                    } else {
-                      allTexts.push(`=== DOCUMENTO/GRADUATORIA SEZIONE ALLEGATA "${pdfItem.title}" (${pdfItem.url}) ===\n${pText}`);
-                    }
+                    allTexts.push(`=== DOCUMENTO/GRADUATORIA SEZIONE ALLEGATA "${pdfItem.title}" (${pdfItem.url}) ===\n${pText}`);
                   }
                 }
               } catch (pErr: any) {
@@ -1472,7 +1530,7 @@ async function scrapeWebsite(
             }
           }
 
-          // TASK 2: Extract individual acts (max 8-10 acts) and iterate over them
+          // TASK 2: Extract individual acts (up to 25 acts) and iterate over them
           const actLinks = findActLinks(rawSub, link.url, subDoc);
           if (actLinks.length > 0) {
             log(`Trovati ${actLinks.length} atti`);
@@ -1504,18 +1562,7 @@ async function scrapeWebsite(
                             const { text: actPdfText } = await extractTextFromPdfBuffer(actPdfBuf.data as ArrayBuffer);
                             if (actPdfText && actPdfText.trim().length > 30) {
                               log(`Estratti ${actPdfText.length} caratteri dal PDF dell'atto ${act.id}`);
-                              
-                              // Se stiamo cercando un nominativo specifico, verifichiamo se è presente
-                              if (inputNominativo && inputNominativo.trim()) {
-                                if (textContainsName(actPdfText, inputNominativo)) {
-                                  log(`🎯 Nominativo cercato "${inputNominativo}" individuato nel PDF dell'atto: ${pdfResolved}`);
-                                  allTexts.push(`=== ATTO ${act.id} TESTO PDF ALLEGATO (${pdfResolved}) ===\n${actPdfText}`);
-                                } else {
-                                  log(`Filtro: nominativo "${inputNominativo}" non presente nel PDF dell'atto. Salto.`);
-                                }
-                              } else {
-                                allTexts.push(`=== ATTO ${act.id} TESTO PDF ALLEGATO (${pdfResolved}) ===\n${actPdfText}`);
-                              }
+                              allTexts.push(`=== ATTO ${act.id} TESTO PDF ALLEGATO (${pdfResolved}) ===\n${actPdfText}`);
                             }
                           }
                         } catch (actPdfErr: any) {
@@ -3168,6 +3215,113 @@ const executeClientSideExtract = async (
                           <AlertCircle className="w-3.5 h-3.5 text-rose-400 shrink-0" />
                         )}
                         <span>{keyTestStatus.message}</span>
+                      </div>
+                    )}
+                  </div>
+                </div>
+              </div>
+
+              {/* DEEPSEEK API KEY CARD */}
+              <div className="bg-slate-950 border border-slate-800 rounded-lg p-5 space-y-3.5 relative overflow-hidden mt-4">
+                <div className="flex items-center justify-between flex-wrap gap-2">
+                  <div className="flex items-center gap-2">
+                    <div className="size-10 rounded-lg bg-emerald-500/10 text-emerald-400 flex items-center justify-center shrink-0">
+                      <Cpu className="size-[18px]" />
+                    </div>
+                    <label htmlFor="deepseek-api-key-input" className="text-sm font-semibold text-slate-100">
+                      DeepSeek API Key (Consigliato per Deep Research)
+                    </label>
+                    <span className="text-[10px] uppercase font-bold tracking-wider px-2 py-0.5 rounded-md bg-emerald-500/10 text-emerald-400 border border-emerald-500/20">
+                      Opzionale / Avanzato
+                    </span>
+                  </div>
+                  <a
+                    href="https://platform.deepseek.com/"
+                    target="_blank"
+                    rel="noopener noreferrer"
+                    className="text-xs text-emerald-400 hover:text-emerald-300 hover:underline flex items-center gap-1 font-medium transition-colors"
+                  >
+                    <span>Ottieni chiave su deepseek.com</span>
+                    <ExternalLink className="w-3 h-3" />
+                  </a>
+                </div>
+
+                <p className="text-xs text-slate-400 leading-relaxed">
+                  Inserisci la tua chiave DeepSeek per abilitare modelli avanzati di ragionamento (DeepSeek-Chat) per l'analisi e l'estrazione millimetrica dei dati da graduatorie e atti complessi.
+                </p>
+
+                <div className="space-y-2">
+                  <div className="relative flex items-center">
+                    <input
+                      id="deepseek-api-key-input"
+                      type={showDeepseekKey ? "text" : "password"}
+                      value={deepseekApiKey}
+                      onChange={(e) => {
+                        setDeepseekApiKey(e.target.value);
+                        setDeepseekTestStatus(null);
+                      }}
+                      placeholder="sk-xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx"
+                      className="w-full bg-slate-950 border border-slate-800 rounded-md h-10 pl-3 pr-24 py-2 text-sm text-slate-100 placeholder-slate-500 focus-visible:ring-2 ring-emerald-500 ring-offset-2 ring-offset-slate-950 font-mono outline-none transition-colors"
+                    />
+                    <div className="absolute right-2 flex items-center gap-1">
+                      {deepseekApiKey && (
+                        <button
+                          type="button"
+                          onClick={() => {
+                            setDeepseekApiKey("");
+                            setDeepseekTestStatus(null);
+                          }}
+                          aria-label="Svuota campo chiave DeepSeek"
+                          title="Svuota campo"
+                          className="size-8 flex items-center justify-center text-slate-400 hover:text-white rounded-md hover:bg-slate-800 transition-colors cursor-pointer"
+                        >
+                          <X className="w-3.5 h-3.5" />
+                        </button>
+                      )}
+                      <button
+                        type="button"
+                        onClick={() => setShowDeepseekKey(!showDeepseekKey)}
+                        aria-label={showDeepseekKey ? "Nascondi chiave" : "Mostra chiave"}
+                        title={showDeepseekKey ? "Nascondi chiave" : "Mostra chiave"}
+                        className="size-8 flex items-center justify-center text-slate-400 hover:text-white rounded-md hover:bg-slate-800 transition-colors cursor-pointer"
+                      >
+                        {showDeepseekKey ? <EyeOff className="w-4 h-4" /> : <Eye className="w-4 h-4" />}
+                      </button>
+                    </div>
+                  </div>
+
+                  <div className="flex items-center justify-between flex-wrap gap-2 pt-1">
+                    <button
+                      type="button"
+                      onClick={testDeepseekKey}
+                      disabled={!deepseekApiKey.trim() || isTestingDeepseek}
+                      className="h-10 px-4 rounded-md text-xs font-medium bg-slate-800 hover:bg-slate-700 text-slate-200 border border-slate-700 flex items-center justify-center gap-1.5 disabled:opacity-50 disabled:cursor-not-allowed transition-colors cursor-pointer"
+                    >
+                      {isTestingDeepseek ? (
+                        <>
+                          <Loader2 className="w-3.5 h-3.5 animate-spin text-emerald-400" />
+                          <span>Verifica connessione DeepSeek...</span>
+                        </>
+                      ) : (
+                        <>
+                          <ShieldCheck className="w-3.5 h-3.5 text-emerald-400" />
+                          <span>Testa Chiave DeepSeek</span>
+                        </>
+                      )}
+                    </button>
+
+                    {deepseekTestStatus && (
+                      <div className={`text-xs flex items-center gap-1.5 font-medium px-3 py-1.5 rounded-md ${
+                        deepseekTestStatus.valid 
+                          ? "bg-emerald-500/10 text-emerald-400 border border-emerald-500/20" 
+                          : "bg-rose-500/10 text-rose-400 border border-rose-500/20"
+                      }`}>
+                        {deepseekTestStatus.valid ? (
+                          <CheckCircle2 className="w-3.5 h-3.5 text-emerald-400 shrink-0" />
+                        ) : (
+                          <AlertCircle className="w-3.5 h-3.5 text-rose-400 shrink-0" />
+                        )}
+                        <span>{deepseekTestStatus.message}</span>
                       </div>
                     )}
                   </div>
