@@ -366,7 +366,7 @@ Leggi attentamente il testo ed estrai con la massima precisione:
    - È composto da esattamente 10 caratteri alfanumerici (2 lettere provincia + 2 lettere tipo scuola come IC, IS, PC, PS, TF, TD, RH, EE, MM + 5 cifre numeriche o caratteri + 1 lettera di controllo finale).
    - Cercalo ovunque: intestazione del documento, accanto a "C.M.", "Cod. Mecc.", "Codice Scuola", "Codice Univoco Ufficio", nel piè di pagina (footer) o nei contatti.
    - CERCA NELLE EMAIL O PEC ISTITUZIONALI: in Italia la casella di posta ministeriale della scuola contiene sempre il codice meccanografico nella forma "{codice}@istruzione.it" oppure "{codice}@pec.istruzione.it" (es. "chic81000a@istruzione.it" indica chiaramente il codice "CHIC81000A").
-   - Se menzionato nell'URL (es. "chic81000a.edu.it") o nel nome del file, estrailo come codice meccanografico ufficiale.
+   - Se menzionato nell'URL (es. "chic81000a.edu.it") o nel nome del file, estrailo como codice meccanografico ufficiale.
 3. CONTEGGIO GENERALE:
    - "convocazioni_collaboratore_scolastico", "convocazioni_assistente_amministrativo", "convocazioni_docenti", "convocazioni_assistente_tecnico", "convocazioni_cuoco", "convocazioni_assistente_agrario" (numero)
    - "pensionamenti_collaboratore_scolastico", "pensionamenti_assistente_amministrativo", "pensionamenti_docenti", "pensionamenti_assistente_tecnico", "pensionamenti_cuoco", "pensionamenti_assistente_agrario" (numero)
@@ -374,21 +374,32 @@ Leggi attentamente il testo ed estrai con la massima precisione:
    Per ciascuna voce specifica i seguenti campi:
    - "nominativo": nome e cognome del candidato o lavoratore nominato/individuato (es. "MARIO ROSSI"), se indicato. Se si tratta di un avviso o bando aperto senza nominativi di singoli candidati, lascia stringa vuota "".
    - "tipologia_personale": "ATA" per profili ATA (Collaboratore scolastico, Assistente Amministrativo, Assistente Tecnico, Cuoco, Guardarobiere, Operatore Scolastico, ecc.) oppure "DOCENTE" per insegnanti (Scuola Infanzia, Primaria, Secondaria I grado, Secondaria II grado, ITP, ecc.).
-   - "profilo_lavorativo": profilo completo e tipologia (es. "Collaboratore scolastico TD", "Assistente Tecnico AR02 - Elettronica", "Docente secondaria II grado A-22 - Lettere", "Docente Primaria posto comune", "Docente Sostegno secondaria I grado ADMM").
+   - "profilo_lavorativo": profilo completo e tipologia (es. "Collaboratore scolastico TD", "Assistente Amministrativo TD", "Assistente Tecnico AR02 - Elettronica", "Docente secondaria II grado A-22 - Lettere", "Docente Primaria posto comune", "Docente Sostegno secondaria I grado ADMM").
    - "classe_concorso_area_lab": per il personale DOCENTE indica la Classe di Concorso CDC ufficiale (es. "A-12", "A-22", "A-28", "A-48", "ADMM", "ADSS", "ADAA", "ADEE", "AAAA", "EEEE"); per Assistente Tecnico ATA indica l'Area di Laboratorio (es. "AR01", "AR02", "AR08", "AR20"); per gli altri profili ATA dove non applicabile scrivi "Non applicabile".
    - "tipo_posto": "comune" per posti ordinari/curricolari e ATA; "sostegno" per posti di sostegno / minorati psicofisici / uditivi / vista / cattedre sostegno ADAA/ADEE/ADMM/ADSS.
-   - "punteggio": NUMERO FLOAT DECIMALE (es. 13.17, 19.80, 54.5, 112.0) OPPURE null.
-     ⚠️ ISTRUZIONI CRITICHE SULL'ESTRAZIONE DEI PUNTEGGI:
-     - "punteggio" deve contenere SOLO ED ESCLUSIVAMENTE IL PUNTEGGIO REALE DEL CANDIDATO (es. punteggio individuale conseguito dal lavoratore/candidato in graduatoria o nel contratto).
-     - IMPORTANTE - LE SOGLIE DI CONVOCAZIONE NON VANNO IN PUNTEGGIO: formule come "fino a punteggio 12", "fino a punti 11", "da punti X a punti Y" NON sono il punteggio del candidato e NON devono essere inserite nel campo "punteggio". Se l'atto menziona solo una soglia di convocazione e nessun punteggio individuale del candidato, imposta "punteggio": null.
+   - "punteggio": NUMERO FLOAT DECIMALE (es. 13.17, 11.25, 19.80, 54.5, 112.0) OPPURE null.
+     ⚠️ ISTRUZIONI CRITICHE SULL'ESTRAZIONE DEI PUNTEGGI ATA E DOCENTE:
+     - "punteggio" deve contenere SOLO ED ESCLUSIVAMENTE IL PUNTEGGIO REALE DEL CANDIDATO (es. punteggio individuale conseguito dal lavoratore/candidato in graduatoria o nel bando o nel contratto di supplenza).
+     - SE C'È UN CANDIDATO O LAVORATORE SPECIFICO CON UN PUNTEGGIO (es. "Musella Isabella con punteggio 11,25" o "Mario Rossi punti 13,00"), QUESTO È IL SUO PUNTEGGIO INDIVIDUALE: ESTRAILO RIGOROSAMENTE come float decimale!
+     - IMPORTANTE - LE SOGLIE DI CONVOCAZIONE NON VANNO IN PUNTEGGIO: formule generiche come "fino a punteggio 12", "fino a punti 11", "da punti X a punti Y" che NON si riferiscono a un candidato specifico bensì a un limite del bando NON sono il punteggio del candidato e NON devono essere inserite nel campo "punteggio" (in quel caso se non vi sono candidati con punteggi individuali metti null).
      - Nelle graduatorie, bollettini o elenchi con tabelle (es. colonna PUNTI, PT, PUNTEGGIO, VALUTAZIONE), estrai per ogni candidato il proprio punteggio individuale.
-     - Converti sempre le virgole in punto decimale (es. "13,17" -> 13.17, "69,50" -> 69.5).
+     - Converti sempre le virgole in punto decimale (es. "11,25" -> 11.25, "13,17" -> 13.17, "69,50" -> 69.5).
      - Se manca il punteggio individuale reale del candidato/lavoratore, imposta sempre "punteggio": null.
-   - "posizione_graduatoria": posizione numerica in graduatoria (es. "1", "15", "313"). Cercala accanto a "posizione", "pos.", "posto", "n.", "collocato al n.". Se assente lascia stringa vuota o "Non disponibile".
-   - "fascia": fascia della graduatoria (es. "Prima fascia", "Seconda fascia", "Terza fascia", "Graduatoria d'Istituto", "Graduatoria permanente 24 mesi", "Interpello"). Se non specificata scrivi "Non disponibile".
+   - "posizione_graduatoria": posizione numerica in graduatoria (es. "1", "15", "301", "313"). Cercala accanto a "posizione", "pos.", "posto", "n.", "collocato al n.". Se assente lascia stringa vuota o "Non disponibile".
+   - "fascia": fascia della graduatoria (es. "Terza fascia", "Seconda fascia", "Prima fascia", "Graduatoria d'Istituto", "Graduatoria permanente 24 mesi", "Interpello"). Standardizza "III", "III fascia", "3 fascia", "3^ fascia" -> "Terza fascia"; "II", "II fascia", "2^ fascia" -> "Seconda fascia"; "I", "I fascia", "1^ fascia" -> "Prima fascia". Se non specificata scrivi "Non disponibile".
    - "ore_settimanali": orario di cattedra/servizio (es. "36 ore", "18 ore", "12 ore", "7 ore"). Se non menzionato scrivi ESATTAMENTE "Non disponibile".
-   - "decorrenza_contratto": intervallo esatto delle date di contratto nel formato "GG/MM/AAAA - GG/MM/AAAA" (es. "09/09/2026 - 30/06/2027", "23/09/2026 - 30/06/2027", "03/09/2026 - fine esigenze").
+   - "decorrenza_contratto": intervallo esatto delle date di contratto nel formato "GG/MM/AAAA - GG/MM/AAAA" (es. "09/09/2026 - 30/06/2027", "14/09/2026 - 31/08/2027", "03/09/2026 - fine esigenze").
    - "link_del_documento": URL dell'atto o documento di riferimento (se reperito nel testo, altrimenti stringa vuota).
+
+⚠️ ESEMPIO IMPORTANTE DI ESTRAZIONE ATA:
+Se il testo recita 'La Collaboratrice Scolastica MUSELLA ISABELLA collocata in posizione 301 con punteggio 11,25 nella III fascia delle Graduatorie d’Istituto del Personale ATA, con contratto dal 14/09/2026 al 31/08/2027', devi estrarre nel JSON:
+- "nominativo": "MUSELLA ISABELLA"
+- "tipologia_personale": "ATA"
+- "profilo_lavorativo": "Collaboratore scolastico TD"
+- "punteggio": 11.25 (convertito in float decimale con punto!)
+- "posizione_graduatoria": "301"
+- "fascia": "Terza fascia"
+- "decorrenza_contratto": "14/09/2026 - 31/08/2027"
 
 Restituisci ESCLUSIVAMENTE un oggetto JSON valido:
 {
@@ -447,21 +458,32 @@ CAMPI DA ESTRARRE:
   - Cerca anche nelle caselle di posta: es. "chic81000a@istruzione.it" o "@pec.istruzione.it" -> codice: "CHIC81000A".
 - "nominativo": nome e cognome del candidato o lavoratore individuato/nominato (es. "MARIO ROSSI"), se presente. Se l'atto è un bando aperto senza nominativi individuali, lascia stringa vuota "".
 - "tipologia_personale": "ATA" oppure "DOCENTE".
-- "profilo_lavorativo": profilo completo e tipologia (es. "Collaboratore scolastico TD", "Assistente Tecnico Area Laboratorio AR02", "Docente secondaria II grado posto comune TD", "Docente sostegno secondaria I grado ADMM").
+- "profilo_lavorativo": profilo completo e tipologia (es. "Collaboratore scolastico TD", "Assistente Amministrativo TD", "Assistente Tecnico Area Laboratorio AR02", "Docente secondaria II grado posto comune TD", "Docente sostegno secondaria I grado ADMM").
 - "classe_concorso_area_lab": per il personale DOCENTE il codice della Classe di Concorso CDC (es. "A-12", "A-22", "A-28", "ADMM", "ADSS", "EEEE", "AAAA"); per Assistente Tecnico ATA il codice Area di Laboratorio (es. "AR01", "AR02", "AR08", "AR20"); per gli altri profili ATA dove non applicabile scrivi "Non applicabile".
 - "tipo_posto": "comune" per posti ordinari/curricolari e ATA; "sostegno" per posti e cattedre di sostegno / minorati psicofisici / uditivi / della vista / ADAA / ADEE / ADMM / ADSS.
-- "punteggio": punteggio numerico float con punto decimale (es. 13.17, 19.80, 54.5, 112.0) OPPURE null.
-  ⚠️ ISTRUZIONI CRITICHE SULL'ESTRAZIONE DEI PUNTEGGI:
+- "punteggio": punteggio numerico float con punto decimale (es. 13.17, 11.25, 19.80, 54.5, 112.0) OPPURE null.
+  ⚠️ ISTRUZIONI CRITICHE SULL'ESTRAZIONE DEI PUNTEGGI ATA E DOCENTE:
   - "punteggio" deve contenere SOLO ED ESCLUSIVAMENTE IL PUNTEGGIO REALE DEL CANDIDATO (es. punteggio individuale in graduatoria o nel contratto).
+  - SE UN ATA O UN DOCENTE È NOMINATO CON UN PUNTEGGIO (es. "MUSELLA ISABELLA... con punteggio 11,25" o "Mario Rossi punti 13.00"), QUESTO È IL SUO PUNTEGGIO INDIVIDUALE E DEVE ESSERE RIGOROSAMENTE ESTRATTO come float decimale!
   - IMPORTANTE - LE SOGLIE DI CONVOCAZIONE NON VANNO IN PUNTEGGIO: formule come "fino a punteggio 12", "fino a punti 11", "da punti X a punti Y" NON sono il punteggio del candidato e NON devono essere inserite nel campo "punteggio". Se nel documento compare solo la soglia di convocazione senza il punteggio individuale del candidato, imposta "punteggio": null.
   - Nelle graduatorie o elenchi con tabella a colonne (es. colonna PUNTI, PT, PUNTEGGIO, VALUTAZIONE), estrai per ciascun candidato il suo punteggio individuale.
-  - Converti sempre le virgole in punto decimale (es. "13,17" -> 13.17, "69,50" -> 69.5).
+  - Converti sempre le virgole in punto decimale (es. "11,25" -> 11.25, "13,17" -> 13.17, "69,50" -> 69.5).
   - Se manca il punteggio individuale reale del lavoratore/candidato, imposta "punteggio": null.
-- "posizione_graduatoria": posizione numerica in graduatoria (es. "1", "15", "313"). Cercala accanto a "posizione", "pos.", "posto", "n.". Se assente scrivi "Non disponibile".
-- "fascia": fascia di graduatoria (es. "Prima fascia", "Seconda fascia", "Terza fascia", "Graduatoria d'Istituto", "Graduatoria permanente 24 mesi", "Interpello"). Se assente scrivi "Non disponibile".
+- "posizione_graduatoria": posizione numerica in graduatoria (es. "1", "15", "301", "313"). Cercala accanto a "posizione", "pos.", "posto", "n.". Se assente scrivi "Non disponibile".
+- "fascia": fascia di graduatoria (es. "Terza fascia", "Seconda fascia", "Prima fascia", "Graduatoria d'Istituto", "Graduatoria permanente 24 mesi", "Interpello"). Standardizza "III", "III fascia", "3 fascia", "3^ fascia" -> "Terza fascia"; "II", "II fascia", "2^ fascia" -> "Seconda fascia"; "I", "I fascia", "1^ fascia" -> "Prima fascia". Se assente scrivi "Non disponibile".
 - "ore_settimanali": orario di servizio (es. "36 ore", "18 ore", "12 ore", "7 ore"). Se non indicato scrivi ESATTAMENTE "Non disponibile".
-- "decorrenza_contratto": intervallo date contratto nel formato "GG/MM/AAAA - GG/MM/AAAA" (es. "09/09/2026 - 30/06/2027", "23/09/2026 - 30/06/2027"). Se presenti singole date "da" e "a", componi l'intervallo.
+- "decorrenza_contratto": intervallo date contratto nel formato "GG/MM/AAAA - GG/MM/AAAA" (es. "09/09/2026 - 30/06/2027", "14/09/2026 - 31/08/2027"). Se presenti singole date "da" e "a", componi l'intervallo.
 - "nomine_contratti": se il PDF contiene più nomine, assegnazioni o convocazioni distinte (es. tabella o elenco di candidati/posti), includile tutte in questo array rispettando la struttura sopra.
+
+⚠️ ESEMPIO IMPORTANTE DI ESTRAZIONE ATA:
+Se il testo recita 'La Collaboratrice Scolastica MUSELLA ISABELLA collocata in posizione 301 con punteggio 11,25 nella III fascia delle Graduatorie d’Istituto del Personale ATA, con contratto dal 14/09/2026 al 31/08/2027', devi estrarre nel JSON:
+- "nominativo": "MUSELLA ISABELLA"
+- "tipologia_personale": "ATA"
+- "profilo_lavorativo": "Collaboratore scolastico TD"
+- "punteggio": 11.25 (convertito in float decimale con punto!)
+- "posizione_graduatoria": "301"
+- "fascia": "Terza fascia"
+- "decorrenza_contratto": "14/09/2026 - 31/08/2027"
 
 Restituisci ESCLUSIVAMENTE un oggetto JSON valido:
 {
@@ -1507,6 +1529,46 @@ const executeClientSideExtract = async (
       const parsed = JSON.parse(res.content);
       extractedData = { ...defaultData, ...parsed };
 
+      // PROMOZIONE DEI CAMPI DA NOMINE_CONTRATTI AL LIVELLO ROOT SE VUOTI (ATA & DOCENTI)
+      if (Array.isArray(extractedData.nomine_contratti) && extractedData.nomine_contratti.length > 0) {
+        const firstNom = extractedData.nomine_contratti[0];
+        if (!extractedData.nominativo && firstNom.nominativo) {
+          extractedData.nominativo = firstNom.nominativo;
+        }
+        if (extractedData.punteggio === null || extractedData.punteggio === undefined || extractedData.punteggio === "") {
+          if (firstNom.punteggio !== null && firstNom.punteggio !== undefined && firstNom.punteggio !== "") {
+            extractedData.punteggio = firstNom.punteggio;
+          }
+        }
+        if (!extractedData.posizione_graduatoria && firstNom.posizione_graduatoria) {
+          extractedData.posizione_graduatoria = firstNom.posizione_graduatoria;
+        }
+        if (!extractedData.graduatoria_fascia && firstNom.fascia) {
+          extractedData.graduatoria_fascia = firstNom.fascia;
+        }
+        if (!extractedData.profilo_lavorativo && firstNom.profilo_lavorativo) {
+          extractedData.profilo_lavorativo = firstNom.profilo_lavorativo;
+        }
+        if (!extractedData.profilo_professionale && firstNom.profilo_lavorativo) {
+          extractedData.profilo_professionale = firstNom.profilo_lavorativo;
+        }
+        if (!extractedData.classe_concorso_area_lab && firstNom.classe_concorso_area_lab) {
+          extractedData.classe_concorso_area_lab = firstNom.classe_concorso_area_lab;
+        }
+        if (!extractedData.tipologia_personale && firstNom.tipologia_personale) {
+          extractedData.tipologia_personale = firstNom.tipologia_personale;
+        }
+        if (!extractedData.tipo_posto && firstNom.tipo_posto) {
+          extractedData.tipo_posto = firstNom.tipo_posto;
+        }
+        if (!extractedData.ore_settimanali && firstNom.ore_settimanali) {
+          extractedData.ore_settimanali = firstNom.ore_settimanali;
+        }
+        if (!extractedData.decorrenza_contratto && firstNom.decorrenza_contratto) {
+          extractedData.decorrenza_contratto = firstNom.decorrenza_contratto;
+        }
+      }
+
       if (inputNominativo && inputNominativo.trim() && !extractedData.nominativo) {
         extractedData.nominativo = safeDecodeURIComponent(inputNominativo.trim());
       } else if (extractedData.nominativo) {
@@ -1829,6 +1891,49 @@ const executeClientSideExtract = async (
       const content = respData?.choices?.[0]?.message?.content || "{}";
       const extracted = JSON.parse(content);
 
+      // PROMOZIONE DEI CAMPI DA NOMINE_CONTRATTI AL LIVELLO ROOT SE VUOTI (ATA & DOCENTI)
+      if (Array.isArray(extracted.nomine_contratti) && extracted.nomine_contratti.length > 0) {
+        const firstNom = extracted.nomine_contratti[0];
+        if (!extracted.nominativo && firstNom.nominativo) {
+          extracted.nominativo = firstNom.nominativo;
+        }
+        if (extracted.punteggio === null || extracted.punteggio === undefined || extracted.punteggio === "") {
+          if (firstNom.punteggio !== null && firstNom.punteggio !== undefined && firstNom.punteggio !== "") {
+            extracted.punteggio = firstNom.punteggio;
+          }
+        }
+        if (!extracted.posizione_graduatoria && firstNom.posizione_graduatoria) {
+          extracted.posizione_graduatoria = firstNom.posizione_graduatoria;
+        }
+        if (!extracted.graduatoria_fascia && firstNom.fascia) {
+          extracted.graduatoria_fascia = firstNom.fascia;
+        }
+        if (!extracted.fascia && firstNom.fascia) {
+          extracted.fascia = firstNom.fascia;
+        }
+        if (!extracted.profilo_lavorativo && firstNom.profilo_lavorativo) {
+          extracted.profilo_lavorativo = firstNom.profilo_lavorativo;
+        }
+        if (!extracted.profilo_professionale && firstNom.profilo_lavorativo) {
+          extracted.profilo_professionale = firstNom.profilo_lavorativo;
+        }
+        if (!extracted.classe_concorso_area_lab && firstNom.classe_concorso_area_lab) {
+          extracted.classe_concorso_area_lab = firstNom.classe_concorso_area_lab;
+        }
+        if (!extracted.tipologia_personale && firstNom.tipologia_personale) {
+          extracted.tipologia_personale = firstNom.tipologia_personale;
+        }
+        if (!extracted.tipo_posto && firstNom.tipo_posto) {
+          extracted.tipo_posto = firstNom.tipo_posto;
+        }
+        if (!extracted.ore_settimanali && firstNom.ore_settimanali) {
+          extracted.ore_settimanali = firstNom.ore_settimanali;
+        }
+        if (!extracted.decorrenza_contratto && firstNom.decorrenza_contratto) {
+          extracted.decorrenza_contratto = firstNom.decorrenza_contratto;
+        }
+      }
+
       // Rinforzo codice meccanografico per il PDF
       if (!isValidCodiceMeccanografico(extracted.codice_meccanografico)) {
         const found = extractCodiceMeccanograficoFromText(content, selectedPdfFile.name);
@@ -1881,6 +1986,43 @@ const executeClientSideExtract = async (
         }
       );
 
+      // Processa anche la lista nomine_contratti del singolo PDF
+      let processedNomine = extracted.nomine_contratti;
+      if (Array.isArray(processedNomine)) {
+        processedNomine = processedNomine.map((item: any) => {
+          const itemDuration = calculateContractDuration(item.decorrenza_contratto || "");
+          const itemTipologia = inferTipologiaPersonale(item);
+          const itemCdcArea = inferClasseConcorsoAreaLab(item, itemTipologia);
+          const itemTipoPosto = inferTipoPosto(item);
+          const itemPunt = normalizePunteggio(item.punteggio);
+
+          const baseItem = {
+            ...item,
+            nominativo: safeDecodeURIComponent(item.nominativo || extracted.nominativo || ""),
+            nome_istituto: safeDecodeURIComponent(item.nome_istituto || extracted.nome_istituto || cleanSchoolName),
+            codice_meccanografico: item.codice_meccanografico || extracted.codice_meccanografico || "",
+            tipologia_personale: itemTipologia,
+            profilo_lavorativo: safeDecodeURIComponent(item.profilo_lavorativo || item.profilo_professionale || (itemTipologia === "DOCENTE" ? "Docente TD" : "Collaboratore scolastico TD")),
+            classe_concorso_area_lab: standardizePlaceholder(itemCdcArea, isClasseConcorsoPertinent(itemTipologia, item.profilo_lavorativo || item.profilo_professionale || "")),
+            tipo_posto: itemTipoPosto,
+            classe_di_concorso: standardizePlaceholder(itemCdcArea, isClasseConcorsoPertinent(itemTipologia, item.profilo_lavorativo || item.profilo_professionale || "")),
+            punteggio: itemPunt,
+            posizione_graduatoria: standardizePlaceholder(item.posizione_graduatoria, true),
+            fascia: standardizePlaceholder(item.fascia || item.graduatoria_fascia, true),
+            ore_settimanali: standardizePlaceholder(item.ore_settimanali, true),
+            decorrenza_contratto: standardizePlaceholder(itemDuration.formattedPeriod, true),
+            durata_contratto_mesi: itemDuration.mesi,
+            durata_contratto_giorni: itemDuration.giorni,
+            link_del_documento: item.link_del_documento || cleanPdfName,
+          };
+
+          return crossReferenceNomina(baseItem, graduatorie, {
+            codice_meccanografico: baseItem.codice_meccanografico,
+            nome_istituto: baseItem.nome_istituto,
+          });
+        });
+      }
+
       setPdfExtractResult({
         success: true,
         filename: cleanPdfName,
@@ -1908,6 +2050,7 @@ const executeClientSideExtract = async (
           profilo_professionale: crossPdf.profilo_lavorativo,
           decorrenza_da: normalizeDateOutput(extracted.decorrenza_da || ""),
           decorrenza_a: normalizeDateOutput(extracted.decorrenza_a || ""),
+          nomine_contratti: processedNomine,
         }
       });
     } catch (err: any) {
