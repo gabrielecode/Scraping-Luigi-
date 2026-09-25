@@ -61,6 +61,7 @@ import {
   resolveValidDocumentLink,
   isClasseConcorsoPertinent,
   standardizePlaceholder,
+  normalizeDomainForComparison,
 } from "./services/graduatorieService";
 import {
   extractTextFromPdfBuffer,
@@ -970,7 +971,8 @@ async function fetchWithProxy(
   asArrayBuffer: boolean = false,
   onLog?: (msg: string) => void,
   customProxyUrl?: string,
-  failedProxiesByDomain?: Map<string, Set<string>>
+  failedProxiesByDomain?: Map<string, Set<string>>,
+  visitedHosts?: Set<string>
 ): Promise<{ data: any; method: string; format: "html" | "markdown" | "buffer" }> {
   let lastError = "";
   const currentDomain = extractDomain(url);
@@ -1073,6 +1075,11 @@ async function fetchWithProxy(
       clearTimeout(timeoutId);
 
       if (response.ok) {
+        if (visitedHosts) {
+          try {
+            visitedHosts.add(normalizeDomainForComparison(url));
+          } catch {}
+        }
         if (asArrayBuffer) {
           const buf = await response.arrayBuffer();
           return { data: buf, method: proxy.name, format: "buffer" };
@@ -1420,6 +1427,11 @@ async function scrapeWebsite(
     logs.push(msg);
   };
 
+  const visitedHosts = new Set<string>();
+  try {
+    visitedHosts.add(normalizeDomainForComparison(targetUrl));
+  } catch {}
+
   let currentUrl = targetUrl.startsWith("http") ? targetUrl : `https://${targetUrl}`;
   log(`Avvio estrazione approfondita per: ${currentUrl}${inputNominativo ? ` (Cercando nominativo: ${inputNominativo})` : ""}`);
 
@@ -1439,7 +1451,7 @@ async function scrapeWebsite(
     if (isDirectPdf) {
       log(`L'URL specificato è identificato come documento o download diretto: ${currentUrl}`);
       try {
-        const pdfBufRes = await fetchWithProxy(currentUrl, true, log, customProxyUrl, failedProxiesByDomain);
+        const pdfBufRes = await fetchWithProxy(currentUrl, true, log, customProxyUrl, failedProxiesByDomain, visitedHosts);
         if (pdfBufRes?.data) {
           const { text: pdfText } = await extractTextFromPdfBuffer(pdfBufRes.data as ArrayBuffer);
           log(`Estratti ${pdfText.length} caratteri dal PDF diretto.`);
@@ -1450,7 +1462,7 @@ async function scrapeWebsite(
       }
     } else {
       // 1. Download homepage / pagina principale
-      const homeRes = await fetchWithProxy(currentUrl, false, log, customProxyUrl, failedProxiesByDomain);
+      const homeRes = await fetchWithProxy(currentUrl, false, log, customProxyUrl, failedProxiesByDomain, visitedHosts);
       const rawHome = homeRes.data as string;
       let homeText = "";
       let homeDoc: Document | undefined;
@@ -1467,7 +1479,7 @@ async function scrapeWebsite(
           for (const pdfItem of topMainPdfs) {
             log(`Analisi allegato: "${pdfItem.title}" (${pdfItem.url})`);
             try {
-              const pBufRes = await fetchWithProxy(pdfItem.url, true, log, customProxyUrl, failedProxiesByDomain);
+              const pBufRes = await fetchWithProxy(pdfItem.url, true, log, customProxyUrl, failedProxiesByDomain, visitedHosts);
               if (pBufRes?.data) {
                 const { text: pText } = await extractTextFromPdfBuffer(pBufRes.data as ArrayBuffer);
                 if (pText && pText.trim().length > 30) {
@@ -1496,7 +1508,7 @@ async function scrapeWebsite(
         log(`Scansione approfondita sezione: "${link.title}" (${link.url})`);
         try {
           navigatedUrl = link.url;
-          const subRes = await fetchWithProxy(link.url, false, log, customProxyUrl, failedProxiesByDomain);
+          const subRes = await fetchWithProxy(link.url, false, log, customProxyUrl, failedProxiesByDomain, visitedHosts);
           const rawSub = subRes.data as string;
           let subText = "";
           let subDoc: Document | undefined;
@@ -1520,7 +1532,7 @@ async function scrapeWebsite(
                   const isTextFile = aLower.endsWith(".txt") || aLower.endsWith(".csv") || aLower.endsWith(".rtf") || aLower.includes("text/plain");
                   if (isTextFile) {
                     log(`Trovato file di testo puro collegato nella sezione: ${aResolved}`);
-                    const txtRes = await fetchWithProxy(aResolved, false, log, customProxyUrl, failedProxiesByDomain);
+                    const txtRes = await fetchWithProxy(aResolved, false, log, customProxyUrl, failedProxiesByDomain, visitedHosts);
                     if (txtRes?.data) {
                       const tContent = typeof txtRes.data === "string" ? txtRes.data : String(txtRes.data);
                       if (tContent && tContent.trim().length > 10) {
@@ -1542,7 +1554,7 @@ async function scrapeWebsite(
             for (const pdfItem of topSubPdfs) {
               log(`Analisi allegato diretto di sezione: "${pdfItem.title}" (${pdfItem.url})`);
               try {
-                const pBufRes = await fetchWithProxy(pdfItem.url, true, log, customProxyUrl, failedProxiesByDomain);
+                const pBufRes = await fetchWithProxy(pdfItem.url, true, log, customProxyUrl, failedProxiesByDomain, visitedHosts);
                 if (pBufRes?.data) {
                   const { text: pText } = await extractTextFromPdfBuffer(pBufRes.data as ArrayBuffer);
                   if (pText && pText.trim().length > 30) {
@@ -1564,7 +1576,7 @@ async function scrapeWebsite(
               log(`Apertura dettaglio atto ${act.id}`);
               try {
                 navigatedUrl = act.url;
-                const detailRes = await fetchWithProxy(act.url, false, log, customProxyUrl, failedProxiesByDomain);
+                const detailRes = await fetchWithProxy(act.url, false, log, customProxyUrl, failedProxiesByDomain, visitedHosts);
                 const rawDetail = detailRes.data as string;
                 let detailText = "";
                 if (detailRes.format === "html") {
@@ -1582,7 +1594,7 @@ async function scrapeWebsite(
                       if (isTextFile) {
                         log(`File di testo puro trovato nell'atto: ${pdfResolved}`);
                         try {
-                          const actTxtRes = await fetchWithProxy(pdfResolved, false, log, customProxyUrl, failedProxiesByDomain);
+                          const actTxtRes = await fetchWithProxy(pdfResolved, false, log, customProxyUrl, failedProxiesByDomain, visitedHosts);
                           if (actTxtRes?.data) {
                             const actTxtContent = typeof actTxtRes.data === "string" ? actTxtRes.data : String(actTxtRes.data);
                             if (actTxtContent && actTxtContent.trim().length > 10) {
@@ -1602,7 +1614,7 @@ async function scrapeWebsite(
 
                         // Estrai il testo completo del PDF dell'atto
                         try {
-                          const actPdfBuf = await fetchWithProxy(pdfResolved, true, log, customProxyUrl, failedProxiesByDomain);
+                          const actPdfBuf = await fetchWithProxy(pdfResolved, true, log, customProxyUrl, failedProxiesByDomain, visitedHosts);
                           if (actPdfBuf?.data) {
                             const { text: actPdfText } = await extractTextFromPdfBuffer(actPdfBuf.data as ArrayBuffer);
                             if (actPdfText && actPdfText.trim().length > 30) {
@@ -1656,7 +1668,7 @@ async function scrapeWebsite(
 
   if (!fullText || fullText.trim().length < 30) {
     log(`Nessun contenuto testuale utile reperito per l'analisi.`);
-    return { fullText: "", navigatedUrl, logs, content: "{}" };
+    return { fullText: "", navigatedUrl, logs, content: "{}", visitedHosts: Array.from(visitedHosts) };
   }
 
   log(`Invio di ${fullText.length} caratteri complessivi all'AI (Gemini 2.5 Flash) per estrazione approfondita...`);
@@ -1665,15 +1677,15 @@ async function scrapeWebsite(
     const resultJson = await extractWithOpenRouter(fullText, apiKey, systemPrompt);
     if (resultJson?.error) {
       log(`Errore restituito dall'API OpenRouter: ${resultJson.error.message || JSON.stringify(resultJson.error)}`);
-      return { fullText, navigatedUrl, logs, content: "{}" };
+      return { fullText, navigatedUrl, logs, content: "{}", visitedHosts: Array.from(visitedHosts) };
     }
 
     const content = resultJson?.choices?.[0]?.message?.content || "{}";
     log(`Analisi approfondita completata con successo dall'AI.`);
-    return { fullText, navigatedUrl, logs, content };
+    return { fullText, navigatedUrl, logs, content, visitedHosts: Array.from(visitedHosts) };
   } catch (aiErr: any) {
     log(`Errore durante l'elaborazione AI: ${aiErr.message}`);
-    return { fullText, navigatedUrl, logs, content: "{}" };
+    return { fullText, navigatedUrl, logs, content: "{}", visitedHosts: Array.from(visitedHosts) };
   }
 }
 
@@ -1830,7 +1842,7 @@ const executeClientSideExtract = async (
             const isSubpage = currentUrlObj.pathname.length > 2 || (targetUrl && targetUrl.length > rootUrl.length + 2);
             if (isSubpage) {
               res.logs.push(`🔍 Ricerca codice meccanografico nella homepage della scuola (${rootUrl})...`);
-              const homeRes = await fetchWithProxy(rootUrl, false, undefined, customProxy, failedProxiesByDomain);
+              const homeRes = await fetchWithProxy(rootUrl, false, undefined, customProxy, failedProxiesByDomain, visitedHosts);
               if (homeRes?.data) {
                 candidate = extractCodiceMeccanograficoFromText(String(homeRes.data), rootUrl);
               }
@@ -1838,7 +1850,7 @@ const executeClientSideExtract = async (
             if (!candidate) {
               const contattiUrl = `${rootUrl}/contatti`;
               try {
-                const contattiRes = await fetchWithProxy(contattiUrl, false, undefined, customProxy, failedProxiesByDomain);
+                const contattiRes = await fetchWithProxy(contattiUrl, false, undefined, customProxy, failedProxiesByDomain, visitedHosts);
                 if (contattiRes?.data) {
                   candidate = extractCodiceMeccanograficoFromText(String(contattiRes.data), contattiUrl);
                 }
@@ -2034,7 +2046,11 @@ const executeClientSideExtract = async (
       url: targetUrl,
       navigatedUrl: res.navigatedUrl,
       logs: res.logs,
-      data: extractedData,
+      data: {
+        ...extractedData,
+        visitedHosts: res.visitedHosts,
+      },
+      visitedHosts: res.visitedHosts,
       error: extractionError,
     };
 };
@@ -2639,6 +2655,7 @@ const executeClientSideExtract = async (
 
     for (const r of items) {
       const data = r.data || ({} as any);
+      const sessionVisitedHosts = r.visitedHosts ? (r.visitedHosts instanceof Set ? r.visitedHosts : new Set(r.visitedHosts)) : (data.visitedHosts ? new Set(data.visitedHosts) : undefined);
 
       // School Name: from data or URL
       let defaultSchoolName = data.nome_istituto ? safeDecodeURIComponent(data.nome_istituto) : "";
@@ -2687,7 +2704,7 @@ const executeClientSideExtract = async (
           const mesi = duration.mesi;
           const giorni = duration.giorni;
           const noteIncrocio = cleanFieldString(c.note_cross_reference, "");
-          const link = resolveValidDocumentLink(c.link_del_documento, r.navigatedUrl || r.url);
+          const link = resolveValidDocumentLink(c.link_del_documento, r.navigatedUrl || r.url, sessionVisitedHosts);
 
           rows.push([
             escapeCsvField(schoolName),
@@ -2729,7 +2746,7 @@ const executeClientSideExtract = async (
           const mesi = duration.mesi;
           const giorni = duration.giorni;
           const noteIncrocio = cleanFieldString(c.note_cross_reference, "");
-          const link = resolveValidDocumentLink(c.pdf_url, r.navigatedUrl || r.url);
+          const link = resolveValidDocumentLink(c.pdf_url, r.navigatedUrl || r.url, sessionVisitedHosts);
 
           rows.push([
             escapeCsvField(schoolName),
@@ -2780,7 +2797,7 @@ const executeClientSideExtract = async (
         const mesi = duration.mesi;
         const giorni = duration.giorni;
         const noteIncrocio = cleanFieldString(data.note_cross_reference, "");
-        const link = resolveValidDocumentLink(data.link_del_documento, r.navigatedUrl || r.url);
+        const link = resolveValidDocumentLink(data.link_del_documento, r.navigatedUrl || r.url, sessionVisitedHosts);
 
         rows.push([
           escapeCsvField(schoolName),

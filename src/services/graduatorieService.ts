@@ -408,17 +408,21 @@ export function formatCsvCodiceMeccanografico(val: any, wasSearched: boolean): s
  */
 export function resolveValidDocumentLink(
   rawLink: string | null | undefined,
-  visitedUrl: string | null | undefined
+  visitedUrl: string | null | undefined,
+  visitedHosts?: Set<string>
 ): string {
   // Calcola la homepage di fallback dal sito visitato da cui è partita la scansione
   let fallbackHomepage = "";
+  let baseDomain = "";
   if (visitedUrl && typeof visitedUrl === "string") {
     const cleanVisited = visitedUrl.trim();
     try {
       const u = new URL(cleanVisited.startsWith("http") ? cleanVisited : `https://${cleanVisited}`);
       fallbackHomepage = u.origin;
+      baseDomain = normalizeDomainForComparison(u.hostname);
     } catch {
       fallbackHomepage = cleanVisited.startsWith("http") ? cleanVisited : "";
+      baseDomain = normalizeDomainForComparison(fallbackHomepage);
     }
   }
 
@@ -458,6 +462,15 @@ export function resolveValidDocumentLink(
 
     const host = urlObj.hostname;
     if (!host || host.includes(" ") || (!host.includes(".") && host !== "localhost")) {
+      return fallbackHomepage || "";
+    }
+
+    const normHost = normalizeDomainForComparison(host);
+    const matchesBase = baseDomain && (normHost === baseDomain || baseDomain.endsWith("." + normHost) || normHost.endsWith("." + baseDomain));
+    const isVisited = visitedHosts ? (visitedHosts.has(normHost) || Array.from(visitedHosts).some(vh => normHost === vh || normHost.endsWith("." + vh) || vh.endsWith("." + normHost))) : false;
+    const isAllowedExt = isAllowedExternalDomain(normHost);
+
+    if (!matchesBase && !isVisited && !isAllowedExt && normHost !== "localhost") {
       return fallbackHomepage || "";
     }
 
@@ -1290,7 +1303,7 @@ REGOLE CRITICHE:
    - "fascia": es. "1", "2", "3", "Prima fascia", "Permanente" (oppure null).
    - "profilo_o_cdc": codice classe di concorso (es. "A-22", "A-12", "ADMM") o profilo ATA (es. "CS", "AA", "AT") (oppure null).
    - "anno_scolastico": es. "2024/2025", "2024/2027" (oppure null).
-   - REGOLA ASSOLUTA: Qualsiasi campo non presente nel testo deve essere RIGOROSAMENTE null, MAI inventato o presupposto.
+   - REGOLA ASSOLUTA (ZERO ALLUCINAZIONI): Qualsiasi campo non presente nel testo o illeggibile deve essere RIGOROSAMENTE null, MAI inventato o presupposto (mai inventare 0 o "N/D").
 2. "graduatoria_entries":
    - Ricevi la lista dei nominativi cercati nel prompt utente.
    - Restituisci SOLO ed ESCLUSIVAMENTE le righe corrispondenti a quei nominativi cercati (considera nome e cognome anche invertiti, es. "MARIO ROSSI" o "ROSSI MARIO").
@@ -1299,7 +1312,9 @@ REGOLE CRITICHE:
    - "posizione": Numero intero della posizione in graduatoria se presente, altrimenti null.
    - "classe_concorso": Codice classe di concorso o profilo ATA della riga/graduatoria.
    - "fascia": Fascia della graduatoria per questa specifica riga/candidato (es. "1", "2", "3", "Prima fascia", "Permanente", ecc., string | null) ricavata dalla sezione o intestazione a cui appartiene. Se non determinabile a livello di riga/sezione, imposta null.
-3. Rispondi RIGOROSAMENTE ed ESCLUSIVAMENTE con l'oggetto JSON richiesto, senza blocchi markdown esterni o testo addizionale.`;
+3. GERARCHIA FONTI IN CASO DI CONFLITTO: Dai priorità al dispositivo/tabella finale ("DECRETA", "DISPONE", tabelle nominative) rispetto alle premesse ("VISTO", "CONSIDERATO", che spesso citano soglie o casi diversi dal candidato).
+4. OCR/SCANSIONI: Se il testo sembra frutto di OCR impreciso, distingui con attenzione 0/O, 1/I, 5/S dal contesto numerico o alfabetico. Se una lettera/cifra è coperta o illeggibile, usa solo ciò che è visibile con certezza; in caso di dubbio reale, imposta il campo a null.
+5. Rispondi RIGOROSAMENTE ed ESCLUSIVAMENTE con l'oggetto JSON richiesto, senza blocchi markdown esterni o testo addizionale.`;
 
 /**
  * Prefiltra il testo di una pagina o documento di graduatoria:

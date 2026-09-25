@@ -106,6 +106,7 @@ export interface ExtractionData {
   albo_contratti?: AlboPretorioContract[];
   note_cross_reference?: string;
   pagine_graduatoria_esplorate?: string[];
+  visitedHosts?: string[];
 }
 
 export interface ExtractionResult {
