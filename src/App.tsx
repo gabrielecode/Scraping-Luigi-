@@ -31,11 +31,12 @@ import {
   getStoredGraduatorie, 
   saveStoredGraduatorie, 
   crossReferenceNomina, 
-  extractGraduatoriaWithRetry, 
   extractWithOpenRouter 
 } from "./services/graduatorieService";
+import { extractSchoolData } from "./services/schoolExtractorService";
 import { extractTextFromPdfBuffer, extractPdfsFromHtml } from "./services/pdfService";
 import { generateUnifiedCsvContent } from "./utils/exportUtils";
+import { parseSchoolUrlsFromCsv } from "./utils/csvParser";
 
 export default function App() {
   const { theme, toggleTheme } = useTheme();
@@ -135,18 +136,25 @@ export default function App() {
   const [isSearching, setIsSearching] = useState(false);
   const [searchError, setSearchError] = useState("");
 
-  // Proxy fetch helper
-  const fetchWithProxyRoute = async (targetUrl: string, asRaw: boolean = false) => {
-    const proxyUrl = `/api/proxy?url=${encodeURIComponent(targetUrl)}${asRaw ? "&raw=1" : ""}`;
+  // Proxy fetch helpers
+  const fetchWithProxyText = async (targetUrl: string): Promise<string> => {
+    const proxyUrl = `/api/proxy?url=${encodeURIComponent(targetUrl)}`;
     const res = await fetch(proxyUrl);
     if (!res.ok) {
       const errJson = await res.json().catch(() => ({}));
       throw new Error(errJson.error || `Errore HTTP ${res.status}`);
     }
-    if (asRaw) {
-      return await res.arrayBuffer();
-    }
     return await res.text();
+  };
+
+  const fetchWithProxyRaw = async (targetUrl: string): Promise<ArrayBuffer> => {
+    const proxyUrl = `/api/proxy?url=${encodeURIComponent(targetUrl)}&raw=1`;
+    const res = await fetch(proxyUrl);
+    if (!res.ok) {
+      const errJson = await res.json().catch(() => ({}));
+      throw new Error(errJson.error || `Errore HTTP ${res.status}`);
+    }
+    return await res.arrayBuffer();
   };
 
   const handleSingleProcess = async (e: React.FormEvent) => {
@@ -166,18 +174,18 @@ export default function App() {
 
     try {
       logs.push("Contatto server proxy e download pagina web...");
-      const htmlText = await fetchWithProxyRoute(singleUrl);
-      logs.push(`Pagina scaricata con successo (${htmlText.length} caratteri). Analisi LLM in corso...`);
+      const htmlText = await fetchWithProxyText(singleUrl);
+      logs.push(`Pagina scaricata con successo (${htmlText.length} caratteri). Analisi ed estrazione dati in corso...`);
 
-      const extractedData = await extractGraduatoriaWithRetry(
+      const extractedData = await extractSchoolData(
         htmlText,
-        openRouterApiKey.trim(),
         singleUrl,
+        openRouterApiKey.trim(),
         graduatorie,
         singleNominativo.trim() || undefined
       );
 
-      logs.push("Estrazione completata con successo tramite Gemini AI.");
+      logs.push("Estrazione e riscontro graduatorie completati con successo.");
 
       setSingleResult({
         url: singleUrl,
@@ -226,62 +234,64 @@ export default function App() {
 
     setIsProcessingBatch(true);
     setBatchError("");
-    setBatchLiveLog(["Lettura file CSV in corso..."]);
+    setBatchLiveLog(["Lettura e parsing del file CSV in corso..."]);
 
     const reader = new FileReader();
     reader.onload = async (event) => {
       try {
         const text = event.target?.result as string;
-        const lines = text.split(/\r?\n/).map(l => l.trim()).filter(Boolean);
-        const urls: string[] = [];
+        const parsedItems = parseSchoolUrlsFromCsv(text);
 
-        for (const line of lines) {
-          if (line.toLowerCase().startsWith("url") || line.startsWith("#")) continue;
-          const parts = line.split(/[;,]/);
-          const u = parts[0]?.replace(/^["']|["']$/g, "").trim();
-          if (u && (u.startsWith("http://") || u.startsWith("https://"))) {
-            urls.push(u);
-          }
+        if (parsedItems.length === 0) {
+          throw new Error(
+            "Nessun URL valido trovato nel file CSV. Assicurati che il file contenga i link delle scuole (in qualsiasi colonna) con indirizzo web o dominio (es. https://..., http://..., www. o .edu.it)."
+          );
         }
 
-        if (urls.length === 0) {
-          throwNopUrl: {
-            throw new Error("Nessun URL valido trovato nel file CSV. Assicurati che ogni riga inizi con http:// o https://.");
-          }
-        }
-
-        setBatchProgress({ current: 0, total: urls.length });
+        setBatchLiveLog(prev => [
+          ...prev,
+          `Identificati con successo ${parsedItems.length} istituti/URL nel file CSV.`
+        ]);
+        setBatchProgress({ current: 0, total: parsedItems.length });
         const results: ExtractionResult[] = [];
 
-        for (let i = 0; i < urls.length; i++) {
-          const u = urls[i];
-          setBatchLiveLog(prev => [...prev, `[${i + 1}/${urls.length}] Analisi URL: ${u}`]);
+        for (let i = 0; i < parsedItems.length; i++) {
+          const item = parsedItems[i];
+          const displayLabel = item.nome_istituto ? `${item.nome_istituto} (${item.url})` : item.url;
+          setBatchLiveLog(prev => [...prev, `[${i + 1}/${parsedItems.length}] Analisi: ${displayLabel}`]);
 
           try {
-            const html = await fetchWithProxyRoute(u);
-            const data = await extractGraduatoriaWithRetry(
+            const html = await fetchWithProxyText(item.url);
+            const data = await extractSchoolData(
               html,
+              item.url,
               openRouterApiKey.trim(),
-              u,
               graduatorie,
-              singleNominativo.trim() || undefined
+              singleNominativo.trim() || undefined,
+              {
+                nome_istituto: item.nome_istituto,
+                codice_meccanografico: item.codice_meccanografico
+              }
             );
+
             results.push({
-              url: u,
-              navigatedUrl: u,
+              url: item.url,
+              navigatedUrl: item.url,
               status: "success",
-              logs: [`Analisi completata con successo per ${u}`],
+              logs: [`Analisi completata con successo per ${item.url}`],
               data
             });
-            setBatchLiveLog(prev => [...prev, `[OK] Estratto istituto: ${data.nome_istituto || u}`]);
+            setBatchLiveLog(prev => [...prev, `[OK] Estratto: ${data.nome_istituto || item.url}`]);
           } catch (err: any) {
             results.push({
-              url: u,
-              navigatedUrl: u,
+              url: item.url,
+              navigatedUrl: item.url,
               status: "error",
               error: err.message,
               logs: [`Errore: ${err.message}`],
               data: {
+                nome_istituto: item.nome_istituto,
+                codice_meccanografico: item.codice_meccanografico,
                 convocazioni_collaboratore_scolastico: 0,
                 convocazioni_assistente_amministrativo: 0,
                 convocazioni_docenti: 0,
@@ -296,10 +306,10 @@ export default function App() {
                 pensionamenti_assistente_agrario: 0
               }
             });
-            setBatchLiveLog(prev => [...prev, `[ERRORE] ${u}: ${err.message}`]);
+            setBatchLiveLog(prev => [...prev, `[ERRORE] ${item.url}: ${err.message}`]);
           }
 
-          setBatchProgress({ current: i + 1, total: urls.length });
+          setBatchProgress({ current: i + 1, total: parsedItems.length });
         }
 
         setBatchResults(results);
@@ -331,7 +341,7 @@ export default function App() {
 
     try {
       logs.push("Scaricamento pagina e ricerca link Albo Pretorio / Trasparenza...");
-      const html = await fetchWithProxyRoute(alboUrlInput);
+      const html = await fetchWithProxyText(alboUrlInput);
       logs.push("Analisi struttura pagina e identificazione bandi...");
 
       const contratti = [
@@ -376,7 +386,7 @@ export default function App() {
 
     try {
       const buffer = await selectedPdfFile.arrayBuffer();
-      const text = await extractTextFromPdfBuffer(Buffer.from(buffer));
+      const pdfRes = await extractTextFromPdfBuffer(new Uint8Array(buffer));
       
       const extractedData = {
         nome_istituto: "Istituto Scolastico da PDF",
@@ -388,8 +398,8 @@ export default function App() {
       };
 
       setPdfExtractResult({
-        charsExtracted: text.length,
-        rawText: text.slice(0, 1500),
+        charsExtracted: pdfRes.text.length,
+        rawText: pdfRes.text.slice(0, 1500),
         data: extractedData
       });
     } catch (err: any) {

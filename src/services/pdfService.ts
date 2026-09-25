@@ -92,7 +92,7 @@ export async function extractTextFromPdfBuffer(
             canvas.height = viewport.height;
             const ctx = canvas.getContext('2d');
             if (ctx) {
-              await page.render({ canvasContext: ctx, viewport }).promise;
+              await (page.render as any)({ canvasContext: ctx, viewport, canvas }).promise;
               const dataUrl = canvas.toDataURL('image/png');
               const ret = await worker.recognize(dataUrl);
               if (ret?.data?.text) {
