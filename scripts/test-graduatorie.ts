@@ -1266,23 +1266,23 @@ async function runTests() {
   console.log("==========================================");
 
   // 9.1 Valido: positivo ("convocazione") + frase esatta ("contratto di supplenza") senza negativi
-  const testValid1 = filterSchoolDocument("Convocazione urgente per stipula contratto di supplenza annuale docente");
+  const testValid1 = await filterSchoolDocument("Convocazione urgente per stipula contratto di supplenza annuale docente");
   assert(testValid1.included === true, '9.1 Valido: convocazione + contratto di supplenza', testValid1);
 
   // 9.2 Valido: positivo ("interpello") + frase esatta ("decreto di individuazione tramite interpello")
-  const testValid2 = filterSchoolDocument("Decreto di individuazione tramite interpello per docenti classe di concorso A-22");
+  const testValid2 = await filterSchoolDocument("Decreto di individuazione tramite interpello per docenti classe di concorso A-22");
   assert(testValid2.included === true, '9.2 Valido: interpello + decreto di individuazione tramite interpello', testValid2);
 
   // 9.3 Scartato per assenza frase esatta obbligatoria
-  const testInvalidNoExact = filterSchoolDocument("Graduatoria d'istituto pubblicata per eventuali nomine");
+  const testInvalidNoExact = await filterSchoolDocument("Graduatoria d'istituto pubblicata per eventuali nomine");
   assert(testInvalidNoExact.included === false, '9.3 Scartato per mancanza frase esatta obbligatoria', testInvalidNoExact);
 
   // 9.4 Scartato per presenza di termine negativo ("assenze" o "assemblea sindacale")
-  const testNegative = filterSchoolDocument("Convocazione assemblea sindacale e contratto di supplenza");
+  const testNegative = await filterSchoolDocument("Convocazione assemblea sindacale e contratto di supplenza");
   assert(testNegative.included === false, '9.4 Scartato per presenza termine negativo (assemblea sindacale)', testNegative);
 
   // 9.5 Scartato per assenza di positivo
-  const testNoPositive = filterSchoolDocument("Contratto a tempo determinato stipulato");
+  const testNoPositive = await filterSchoolDocument("Contratto a tempo determinato stipulato");
   assert(testNoPositive.included === false, '9.5 Scartato per assenza di parola chiave positiva', testNoPositive);
 
   console.log("\n==========================================");

@@ -126,10 +126,44 @@ export function normalizeNomeIstituto(nome?: string | null): string {
 }
 
 /**
+ * Calcola la similarità normalizzata (Levenshtein normalizzato) tra due stringhe (0.0 a 1.0).
+ */
+export function calculateStringSimilarity(str1: string, str2: string): number {
+  if (!str1 || !str2) return 0;
+  const s1 = str1.toLowerCase().trim();
+  const s2 = str2.toLowerCase().trim();
+  if (s1 === s2) return 1.0;
+
+  const track = Array(s2.length + 1).fill(null).map(() =>
+    Array(s1.length + 1).fill(null)
+  );
+  for (let i = 0; i <= s1.length; i += 1) {
+    track[0][i] = i;
+  }
+  for (let j = 0; j <= s2.length; j += 1) {
+    track[j][0] = j;
+  }
+  for (let j = 1; j <= s2.length; j += 1) {
+    for (let i = 1; i <= s1.length; i += 1) {
+      const indicator = s1[i - 1] === s2[j - 1] ? 0 : 1;
+      track[j][i] = Math.min(
+        track[j][i - 1] + 1,
+        track[j - 1][i] + 1,
+        track[j - 1][i - 1] + indicator
+      );
+    }
+  }
+  const distance = track[s2.length][s1.length];
+  const maxLength = Math.max(s1.length, s2.length);
+  if (maxLength === 0) return 1.0;
+  return 1.0 - distance / maxLength;
+}
+
+/**
  * Cerca un candidato per posizione o nominativo in una graduatoria specifica.
  * Una graduatoria è candidata SOLO se il codice meccanografico coincide oppure,
- * senza codice, se coincide nome_istituto normalizzato (lowercase, senza punteggiatura).
- * Nessun match scuola = return null. Mai match per sola posizione.
+ * senza codice, se coincide nome_istituto normalizzato o tramite fallback fuzzy (similarity >= 0.85).
+ * Match esatti restano priorità 1, invariati.
  */
 export function lookupPunteggioGraduatoria(
   graduatorie: GraduatoriaIstituto[],
@@ -142,12 +176,10 @@ export function lookupPunteggioGraduatoria(
     posizione?: number;
     nominativo?: string;
   }
-): { punteggio: number; entry?: GraduatoriaIstitutoEntry; graduatoriaMatched?: GraduatoriaIstituto } | null {
+): { punteggio: number; entry?: GraduatoriaIstitutoEntry; graduatoriaMatched?: GraduatoriaIstituto; origine_punteggio?: OriginePunteggio; confidence?: number } | null {
   const normCodice = normalizeCodiceMeccanografico(criteri.codice_meccanografico);
   const normNomeCriteri = normalizeNomeIstituto(criteri.nome_istituto);
 
-  // Nessun match scuola possibile se mancano sia codice che nome istituto nei criteri:
-  // una graduatoria è candidata SOLO se la scuola coincide. Mai match per sola posizione.
   if (!normCodice && !normNomeCriteri) {
     return null;
   }
@@ -157,32 +189,44 @@ export function lookupPunteggioGraduatoria(
     ? normalizeFascia(criteri.fascia)
     : "";
 
-  // Filtriamo le graduatorie candidate
-  const candidateGrad = graduatorie.filter(g => {
+  const exactCandidates: GraduatoriaIstituto[] = [];
+  const fuzzyCandidates: Array<{ grad: GraduatoriaIstituto; confidence: number }> = [];
+
+  for (const g of graduatorie) {
     const gCodice = normalizeCodiceMeccanografico(g.codice_meccanografico);
     const gNome = normalizeNomeIstituto(g.nome_istituto);
 
-    // Candidata SOLO se il codice meccanografico coincide oppure, senza codice, se coincide nome_istituto normalizzato
-    let schoolMatch = false;
-    if (normCodice && gCodice) {
-      schoolMatch = (normCodice === gCodice);
-    } else if ((!normCodice || !gCodice) && normNomeCriteri && gNome) {
-      schoolMatch = (normNomeCriteri === gNome);
-    }
+    let isExactSchool = false;
+    let isFuzzySchool = false;
+    let fuzzyConf = 0;
 
-    if (!schoolMatch) {
-      return false;
+    if (normCodice && gCodice) {
+      if (normCodice === gCodice) {
+        isExactSchool = true;
+      }
+    } else if (normNomeCriteri && gNome) {
+      if (normNomeCriteri === gNome) {
+        isExactSchool = true;
+      } else {
+        const sim = calculateStringSimilarity(normNomeCriteri, gNome);
+        if (sim >= 0.85) {
+          isFuzzySchool = true;
+          fuzzyConf = Number(sim.toFixed(2));
+        }
+      }
+    } else if (!normCodice && !normNomeCriteri) {
+      continue;
     }
 
     // Tipologia personale
     if (criteri.tipologia_personale && g.tipologia_personale !== criteri.tipologia_personale) {
-      return false;
+      continue;
     }
 
-    // Profilo o CDC (solo uguaglianza dei valori canonici)
+    // Profilo o CDC
     if (criteri.profilo_o_cdc && g.profilo_o_cdc) {
       if (!isClassMatch(criteri.profilo_o_cdc, g.profilo_o_cdc)) {
-        return false;
+        continue;
       }
     }
 
@@ -190,83 +234,108 @@ export function lookupPunteggioGraduatoria(
     if (normFascia) {
       const gFascia = normalizeFascia(g.fascia);
       if (gFascia && gFascia !== normFascia) {
-        return false;
+        continue;
       }
     }
 
-    return true;
-  });
-
-  // Nessun match scuola = return null
-  if (candidateGrad.length === 0) {
-    return null;
+    if (isExactSchool) {
+      exactCandidates.push(g);
+    } else if (isFuzzySchool) {
+      fuzzyCandidates.push({ grad: g, confidence: fuzzyConf });
+    }
   }
 
-  // 1. Cerca per posizione se specificata
-  if (criteri.posizione && criteri.posizione > 0) {
-    const matched: Array<{
-      punteggio: number;
-      entry: GraduatoriaIstitutoEntry;
-      graduatoriaMatched: GraduatoriaIstituto;
-    }> = [];
+  const searchInGrads = (
+    gradsToSearch: GraduatoriaIstituto[],
+    origine: OriginePunteggio,
+    confidence: number
+  ) => {
+    if (criteri.posizione && criteri.posizione > 0) {
+      const matched: Array<{
+        punteggio: number;
+        entry: GraduatoriaIstitutoEntry;
+        graduatoriaMatched: GraduatoriaIstituto;
+        origine_punteggio: OriginePunteggio;
+        confidence: number;
+      }> = [];
 
-    for (const g of candidateGrad) {
-      const entry = g.graduatoria.find(e => e.posizione === criteri.posizione);
-      if (entry && typeof entry.punteggio === "number" && !isNaN(entry.punteggio)) {
-        // Se c'è anche il nominativo nei criteri, verifichiamo che non sia in conflitto
-        if (criteri.nominativo && criteri.nominativo.trim().length >= 3 && entry.cognome_nome) {
-          if (!isNameMatch(criteri.nominativo, entry.cognome_nome)) {
-            continue;
+      for (const g of gradsToSearch) {
+        const entry = g.graduatoria.find(e => e.posizione === criteri.posizione);
+        if (entry && typeof entry.punteggio === "number" && !isNaN(entry.punteggio)) {
+          if (criteri.nominativo && criteri.nominativo.trim().length >= 3 && entry.cognome_nome) {
+            if (!isNameMatch(criteri.nominativo, entry.cognome_nome)) {
+              continue;
+            }
+          }
+          matched.push({
+            punteggio: Number(entry.punteggio.toFixed(2)),
+            entry,
+            graduatoriaMatched: g,
+            origine_punteggio: origine,
+            confidence
+          });
+        }
+      }
+
+      if (matched.length > 0) {
+        if (!normFascia) {
+          const distinctScores = Array.from(new Set(matched.map(m => m.punteggio)));
+          if (distinctScores.length > 1) {
+            return null;
           }
         }
-        matched.push({
-          punteggio: Number(entry.punteggio.toFixed(2)),
-          entry,
-          graduatoriaMatched: g,
-        });
+        return matched[0];
       }
     }
 
-    if (matched.length > 0) {
-      // TASK 1-bis/1: Se fascia non è nei criteri e più graduatorie candidate hanno la posizione con punteggi diversi -> return null (mai la prima)
-      if (!normFascia) {
-        const distinctScores = Array.from(new Set(matched.map(m => m.punteggio)));
-        if (distinctScores.length > 1) {
-          return null;
+    if (criteri.nominativo && criteri.nominativo.trim().length >= 3) {
+      const matched: Array<{
+        punteggio: number;
+        entry: GraduatoriaIstitutoEntry;
+        graduatoriaMatched: GraduatoriaIstituto;
+        origine_punteggio: OriginePunteggio;
+        confidence: number;
+      }> = [];
+
+      for (const g of gradsToSearch) {
+        const entry = g.graduatoria.find(e => e.cognome_nome && isNameMatch(criteri.nominativo!, e.cognome_nome));
+        if (entry && typeof entry.punteggio === "number" && !isNaN(entry.punteggio)) {
+          matched.push({
+            punteggio: Number(entry.punteggio.toFixed(2)),
+            entry,
+            graduatoriaMatched: g,
+            origine_punteggio: origine,
+            confidence
+          });
         }
       }
-      return matched[0];
+
+      if (matched.length > 0) {
+        if (!normFascia) {
+          const distinctScores = Array.from(new Set(matched.map(m => m.punteggio)));
+          if (distinctScores.length > 1) {
+            return null;
+          }
+        }
+        return matched[0];
+      }
     }
+
+    return null;
+  };
+
+  // 1. Priorità 1: Match esatti
+  const exactRes = searchInGrads(exactCandidates, "Incrociato", 1.0);
+  if (exactRes) {
+    return exactRes;
   }
 
-  // 2. Cerca per nominativo se specificato
-  if (criteri.nominativo && criteri.nominativo.trim().length >= 3) {
-    const matched: Array<{
-      punteggio: number;
-      entry: GraduatoriaIstitutoEntry;
-      graduatoriaMatched: GraduatoriaIstituto;
-    }> = [];
-
-    for (const g of candidateGrad) {
-      const entry = g.graduatoria.find(e => e.cognome_nome && isNameMatch(criteri.nominativo!, e.cognome_nome));
-      if (entry && typeof entry.punteggio === "number" && !isNaN(entry.punteggio)) {
-        matched.push({
-          punteggio: Number(entry.punteggio.toFixed(2)),
-          entry,
-          graduatoriaMatched: g,
-        });
-      }
-    }
-
-    if (matched.length > 0) {
-      // TASK 1-bis/1: Se fascia non è nei criteri e più graduatorie candidate hanno il nominativo con punteggi diversi -> return null (mai la prima)
-      if (!normFascia) {
-        const distinctScores = Array.from(new Set(matched.map(m => m.punteggio)));
-        if (distinctScores.length > 1) {
-          return null;
-        }
-      }
-      return matched[0];
+  // 2. Priorità 2: Match fuzzy (con confidenza >= 0.85)
+  fuzzyCandidates.sort((a, b) => b.confidence - a.confidence);
+  for (const item of fuzzyCandidates) {
+    const fuzzyRes = searchInGrads([item.grad], "Incrociato (da verificare)", item.confidence);
+    if (fuzzyRes) {
+      return fuzzyRes;
     }
   }
 
@@ -282,7 +351,7 @@ export function crossReferenceNomina<T extends NominaContrattoItem | AlboPretori
   item: T,
   graduatorie: GraduatoriaIstituto[],
   scuolaContext?: { codice_meccanografico?: string; nome_istituto?: string }
-): T & { punteggio: number | null; origine_punteggio: OriginePunteggio; note_cross_reference?: string } {
+): T & { punteggio: number | null; origine_punteggio: OriginePunteggio; confidence?: number; note_cross_reference?: string } {
   const existingNotes = (item as any).note_cross_reference || "";
   const existingSoglia = existingNotes.includes("Soglia convocazione:")
     ? (existingNotes.split("|").find((s: string) => s.includes("Soglia convocazione:"))?.trim() || "")
@@ -294,6 +363,7 @@ export function crossReferenceNomina<T extends NominaContrattoItem | AlboPretori
       ...item,
       punteggio: Number(Number(item.punteggio).toFixed(2)),
       origine_punteggio: "Esplicito",
+      confidence: 1.0,
       note_cross_reference: existingNotes || "Punteggio estratto direttamente dal testo del documento/contratto.",
     };
   }
@@ -322,13 +392,17 @@ export function crossReferenceNomina<T extends NominaContrattoItem | AlboPretori
       const nomeGrad = match.graduatoriaMatched?.nome_istituto || match.graduatoriaMatched?.codice_meccanografico || "Graduatoria d'Istituto";
       const matchedPos = match.entry?.posizione || posNum || "N/D";
       const sogliaSuffix = existingSoglia ? ` | ${existingSoglia}` : "";
+      const origine = match.origine_punteggio || "Incrociato";
+      const conf = match.confidence !== undefined ? match.confidence : 1.0;
+      const confStr = conf < 1.0 ? ` (confidenza: ${Math.round(conf * 100)}%)` : "";
       return {
         ...item,
         codice_meccanografico: (item as any).codice_meccanografico || match.graduatoriaMatched?.codice_meccanografico || "",
         posizione_graduatoria: (item as any).posizione_graduatoria && (item as any).posizione_graduatoria !== "Non disponibile" ? (item as any).posizione_graduatoria : String(matchedPos),
         punteggio: match.punteggio,
-        origine_punteggio: "Incrociato",
-        note_cross_reference: `Punteggio incrociato con ${nomeGrad} (${match.graduatoriaMatched?.profilo_o_cdc}, Fascia ${match.graduatoriaMatched?.fascia}): pos. ${matchedPos} = ${match.punteggio.toFixed(2)} pt${match.entry?.cognome_nome ? ` [${match.entry.cognome_nome}]` : ""}${sogliaSuffix}`,
+        origine_punteggio: origine,
+        confidence: conf,
+        note_cross_reference: `Punteggio incrociato${confStr} con ${nomeGrad} (${match.graduatoriaMatched?.profilo_o_cdc}, Fascia ${match.graduatoriaMatched?.fascia}): pos. ${matchedPos} = ${match.punteggio.toFixed(2)} pt${match.entry?.cognome_nome ? ` [${match.entry.cognome_nome}]` : ""}${sogliaSuffix}`,
       } as any;
     }
   }
@@ -1629,8 +1703,21 @@ export function isClassMatch(classA?: string, classB?: string): boolean {
     return true;
   }
 
-  // SOLO uguaglianza dei valori canonici. Elimina ogni includes().
-  return normA === normB;
+  // Match esatti restano priorità 1, invariati.
+  if (normA === normB) {
+    return true;
+  }
+
+  // Non applicare fuzzy match tra codici strutturati distinti (es. A-01 vs A-02, AR01 vs AR02)
+  const isStructuredA = /^[A-Z]{1,2}-?[0-9]{2}$/i.test(normA) || /^AT_AR[0-9]{2}$/i.test(normA);
+  const isStructuredB = /^[A-Z]{1,2}-?[0-9]{2}$/i.test(normB) || /^AT_AR[0-9]{2}$/i.test(normB);
+  if (isStructuredA && isStructuredB) {
+    return false;
+  }
+
+  // Fallback fuzzy in isClassMatch per profilo/cdc (similarity >= 0.85)
+  const sim = calculateStringSimilarity(normA, normB);
+  return sim >= 0.85;
 }
 
 // -------------------------------------------------------------
@@ -2403,20 +2490,67 @@ export async function resolveFromGraduatorie<T extends ExtractionData>(
  */
 
 /**
+ * Esegue una richiesta di estrazione/validazione tramite OpenRouter (Gemini Flash/Pro).
+ */
+export async function extractWithOpenRouter(
+  prompt: string,
+  apiKey: string,
+  systemPrompt: string = "Sei un assistente esperto nell'analisi di documenti scolastici e amministrativi italiani."
+): Promise<string> {
+  const cleanKey = (apiKey || "").trim();
+  if (!cleanKey) {
+    throw new Error("API Key OpenRouter mancante.");
+  }
+
+  const res = await fetch("https://openrouter.ai/api/v1/chat/completions", {
+    method: "POST",
+    headers: {
+      "Authorization": `Bearer ${cleanKey}`,
+      "Content-Type": "application/json",
+      "HTTP-Referer": typeof window !== "undefined" ? window.location.origin : "https://scuola-ata.app",
+      "X-Title": "ScuolaATA Data Scraper"
+    },
+    body: JSON.stringify({
+      model: "google/gemini-flash-1.5",
+      messages: [
+        { role: "system", content: systemPrompt },
+        { role: "user", content: prompt }
+      ],
+      temperature: 0.1,
+      max_tokens: 1000
+    })
+  });
+
+  if (!res.ok) {
+    const errText = await res.text().catch(() => "");
+    throw new Error(`OpenRouter API Error (${res.status}): ${errText || res.statusText}`);
+  }
+
+  const data = await res.json();
+  const content = data?.choices?.[0]?.message?.content || "";
+  return content;
+}
+
+/**
  * Filtra un documento o testo scolastico in base ai criteri rigorosi richiesti:
  * - Almeno 1 parola chiave positiva
  * - Almeno 1 frase esatta obbligatoria
  * - Nessuna parola chiave o frase negativa (esclusione)
+ * - Fallback AI opzionale se escluso solo per mancanza keyword/frase esatta e apiKey presente.
  */
-export function filterSchoolDocument(textOrTitle: string): {
+export async function filterSchoolDocument(
+  textOrTitle: string,
+  apiKey?: string
+): Promise<{
   included: boolean;
   reason: string;
   matchedPositive?: string;
   matchedExact?: string;
-} {
+  note_cross_reference?: string;
+}> {
   const norm = (textOrTitle || "").toLowerCase().replace(/[\s_-]+/g, " ").trim();
 
-  // 1. Negative terms (escludere se presente)
+  // 1. Negative terms (escludere se presente - mai override da AI)
   const negativeTerms = [
     "assegnazione ai plessi",
     "assenze",
@@ -2481,13 +2615,6 @@ export function filterSchoolDocument(textOrTitle: string): {
     }
   }
 
-  if (!matchedPositive) {
-    return {
-      included: false,
-      reason: "Non contiene alcuna parola chiave positiva richiesta."
-    };
-  }
-
   // 3. Mandatory exact phrases (almeno 1)
   const mandatoryExactPhrases = [
     "contratto di supplenza",
@@ -2507,16 +2634,58 @@ export function filterSchoolDocument(textOrTitle: string): {
     }
   }
 
-  if (!matchedExact) {
+  const heuristicIncluded = Boolean(matchedPositive && matchedExact);
+
+  if (heuristicIncluded) {
     return {
-      included: false,
-      reason: "Non contiene alcuna frase esatta obbligatoria richiesta."
+      included: true,
+      reason: `Positiva: "${matchedPositive}" + Frase esatta: "${matchedExact}"`,
+      matchedPositive,
+      matchedExact
     };
   }
 
+  // Fallback AI se escluso solo per mancanza keyword positiva o frase esatta (e non per termine negativo) e apiKey presente
+  if (apiKey && apiKey.trim().length > 0) {
+    try {
+      const aiPrompt = `Valuta se il seguente testo/titolo di un documento scolastico è pertinente e rilevante per una convocazione, nomina, contratto di supplenza o graduatoria ATA/Docenti.\nRispondi strettamente in formato JSON con due campi:\n1. "pertinente": boolean (true o false)\n2. "motivazione": stringa breve.\n\nTesto:\n"""${textOrTitle}"""`;
+
+      const aiResponseText = await extractWithOpenRouter(
+        aiPrompt,
+        apiKey.trim(),
+        "Sei un assistente di IA per l'analisi di bandi scolastici italiani. Rispondi solo in JSON."
+      );
+
+      const cleanedJson = aiResponseText.replace(/```json/g, "").replace(/```/g, "").trim();
+      const parsedAi = JSON.parse(cleanedJson);
+
+      if (parsedAi && parsedAi.pertinente === true) {
+        const noteAi = `Controllo AI superato (pertinente): ${parsedAi.motivazione || "Documento pertinente"}`;
+        return {
+          included: true,
+          reason: `Incluso tramite fallback AI: ${parsedAi.motivazione || "Pertinente"}`,
+          note_cross_reference: noteAi
+        };
+      } else if (parsedAi) {
+        const noteAi = `Controllo AI fallito (non pertinente): ${parsedAi.motivazione || "Documento non pertinente"}`;
+        return {
+          included: false,
+          reason: `Escluso da euristiche e confermato non pertinente da AI: ${parsedAi.motivazione || "Non pertinente"}`,
+          note_cross_reference: noteAi
+        };
+      }
+    } catch {
+      // AI fallback error ignored, fall through to heuristic failure
+    }
+  }
+
+  const failReason = !matchedPositive 
+    ? "Non contiene alcuna parola chiave positiva richiesta." 
+    : "Non contiene alcuna frase esatta obbligatoria richiesta.";
+
   return {
-    included: true,
-    reason: `Positiva: "${matchedPositive}" + Frase esatta: "${matchedExact}"`,
+    included: false,
+    reason: failReason,
     matchedPositive,
     matchedExact
   };

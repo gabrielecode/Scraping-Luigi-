@@ -16,7 +16,7 @@ if (typeof window !== 'undefined' && pdfjsLib.GlobalWorkerOptions) {
 export async function extractTextFromPdfBuffer(
   buffer: ArrayBuffer | Uint8Array,
   maxPages = 100
-): Promise<{ text: string; numPages: number }> {
+): Promise<{ text: string; numPages: number; ocrUsed: boolean }> {
   try {
     const data = buffer instanceof Uint8Array ? buffer : new Uint8Array(buffer);
     const loadingTask = pdfjsLib.getDocument({
@@ -29,6 +29,7 @@ export async function extractTextFromPdfBuffer(
     const pagesToRead = Math.min(numPages, maxPages);
 
     let fullText = '';
+    let totalChars = 0;
 
     for (let pageNum = 1; pageNum <= pagesToRead; pageNum++) {
       try {
@@ -65,13 +66,54 @@ export async function extractTextFromPdfBuffer(
           lastY = curY;
         }
 
-        fullText += `\n--- PAGINA ${pageNum} DI ${numPages} ---\n${pageStr.trim()}\n`;
+        const cleaned = pageStr.trim();
+        totalChars += cleaned.length;
+        fullText += `\n--- PAGINA ${pageNum} DI ${numPages} ---\n${cleaned}\n`;
       } catch (pageErr: any) {
         fullText += `\n--- PAGINA ${pageNum} (Errore lettura: ${pageErr.message}) ---\n`;
       }
     }
 
-    return { text: fullText.trim(), numPages };
+    const avgCharsPerPage = pagesToRead > 0 ? totalChars / pagesToRead : 0;
+    let ocrUsed = false;
+
+    // TASK 5: Se caratteri estratti / pagina < 20 in media, fallback: render pagina su canvas (pdfjs) + OCR via tesseract.js
+    if (avgCharsPerPage < 20 && typeof document !== 'undefined') {
+      try {
+        const { createWorker } = await import('tesseract.js');
+        const worker = await createWorker('ita');
+        let ocrText = '';
+        for (let pageNum = 1; pageNum <= pagesToRead; pageNum++) {
+          try {
+            const page = await doc.getPage(pageNum);
+            const viewport = page.getViewport({ scale: 1.5 });
+            const canvas = document.createElement('canvas');
+            canvas.width = viewport.width;
+            canvas.height = viewport.height;
+            const ctx = canvas.getContext('2d');
+            if (ctx) {
+              await page.render({ canvasContext: ctx, viewport }).promise;
+              const dataUrl = canvas.toDataURL('image/png');
+              const ret = await worker.recognize(dataUrl);
+              if (ret?.data?.text) {
+                ocrText += `\n--- PAGINA ${pageNum} DI ${numPages} (OCR) ---\n${ret.data.text.trim()}\n`;
+              }
+            }
+          } catch {
+            // ignore individual page OCR error
+          }
+        }
+        await worker.terminate();
+        if (ocrText.trim().length > fullText.trim().length) {
+          fullText = ocrText;
+          ocrUsed = true;
+        }
+      } catch {
+        // OCR dynamic import or execution failed
+      }
+    }
+
+    return { text: fullText.trim(), numPages, ocrUsed };
   } catch (err: any) {
     throw new Error(`Estrazione PDF fallita: ${err.message}`);
   }

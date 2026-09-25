@@ -1,6 +1,6 @@
 export type TipologiaPersonale = "ATA" | "DOCENTE";
 export type TipoPosto = "comune" | "sostegno";
-export type OriginePunteggio = "Esplicito" | "Incrociato" | "Non disponibile";
+export type OriginePunteggio = "Esplicito" | "Incrociato" | "Incrociato (da verificare)" | "Non disponibile";
 
 export interface GraduatoriaIstitutoEntry {
   posizione: number;
@@ -32,6 +32,7 @@ export interface NominaContrattoItem {
   classe_di_concorso?: string;
   punteggio: number | null | string;
   origine_punteggio?: OriginePunteggio;
+  confidence?: number;
   posizione_graduatoria: string;
   fascia: string;
   ore_settimanali: string;
@@ -56,6 +57,7 @@ export interface AlboPretorioContract {
   graduatoria_fascia: string;
   punteggio?: number | null | string;
   origine_punteggio?: OriginePunteggio;
+  confidence?: number;
   posizione_graduatoria?: string;
   ore_settimanali: string;
   decorrenza_da: string;
@@ -93,6 +95,7 @@ export interface ExtractionData {
   graduatoria_fascia?: string;
   punteggio?: number | null | string;
   origine_punteggio?: OriginePunteggio;
+  confidence?: number;
   posizione_graduatoria?: string;
   profilo_professionale?: string;
   classe_di_concorso?: string;
