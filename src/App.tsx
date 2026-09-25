@@ -262,8 +262,14 @@ export default function App() {
           const displayLabel = item.nome_istituto ? `${item.nome_istituto} (${item.url})` : item.url;
           setBatchLiveLog(prev => [...prev, `[${i + 1}/${parsedItems.length}] Analisi: ${displayLabel}`]);
 
+          let html = "";
           try {
-            const html = await fetchWithProxyText(item.url);
+            html = await fetchWithProxyText(item.url);
+          } catch {
+            // Se l'URL del plesso non risponde, prosegui: extractSchoolData risolverà l'istituto madre e gli atti via web
+          }
+
+          try {
             const data = await extractSchoolData(
               html,
               item.url,
@@ -284,7 +290,8 @@ export default function App() {
               logs: [`Analisi completata con successo per ${item.url}`],
               data
             });
-            setBatchLiveLog(prev => [...prev, `[OK] Estratto: ${data.nome_istituto || item.url}`]);
+            const tot = (data.convocazioni_collaboratore_scolastico || 0) + (data.convocazioni_docenti || 0) + (data.convocazioni_assistente_amministrativo || 0);
+            setBatchLiveLog(prev => [...prev, `[OK] Estratto: ${data.nome_istituto || item.url} (${tot} atti rilevati)`]);
           } catch (err: any) {
             results.push({
               url: item.url,

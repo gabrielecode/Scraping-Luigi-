@@ -4,15 +4,37 @@ import {
   crossReferenceNomina, 
   resolveFromGraduatorie,
   extractWithOpenRouter,
-  filterSchoolDocument,
   isNameMatch,
-  lookupPunteggioGraduatoria,
   formatFasciaLabel
 } from "./graduatorieService";
 
 /**
+ * Normalizza il nome della scuola estraendo l'Istituto Principale / Comprensivo
+ * quando il record si riferisce a un singolo plesso (es. "ALTINO - IC CASOLI" -> "IC CASOLI")
+ */
+export function extractMainInstituteName(rawName?: string): string {
+  if (!rawName) return "";
+  let clean = rawName.replace(/["']/g, "").replace(/\s+/g, " ").trim();
+
+  // Pattern "PLESSO - ISTITUTO COMPRENSIVO"
+  if (clean.includes(" - ")) {
+    const parts = clean.split(" - ");
+    const lastPart = parts[parts.length - 1].trim();
+    if (/(?:ic|i\.c\.|istituto|iis|i\.i\.s\.|liceo|direzione|omnicomprensivo|io\b)/i.test(lastPart)) {
+      clean = lastPart;
+    } else if (/(?:ic|i\.c\.|istituto|iis|i\.i\.s\.|liceo|direzione|omnicomprensivo|io\b)/i.test(parts[0])) {
+      clean = parts[0].trim();
+    }
+  }
+
+  // Pulisci prefissi comuni
+  clean = clean.replace(/^(?:SC\.?\s*INFANZIA|SCUOLA\s*PRIMARIA|INFANZIA|PRIMARIA|SECONDARIA)\s+/i, "");
+  return clean.trim();
+}
+
+/**
  * Analizzatore euristico ad alta precisione per estrarre convocazioni, pensionamenti e contratti
- * direttamente dalla pagina o dai documenti di un istituto scolastico.
+ * direttamente dal testo della pagina o dai risultati di ricerca atti.
  */
 export function analyzeSchoolContentHeuristic(
   text: string,
@@ -58,8 +80,8 @@ export function analyzeSchoolContentHeuristic(
   const nomine: NominaContrattoItem[] = [];
 
   // Spezza il testo in blocchi/paragrafi/righe
-  const blocks = text.split(/(?:\r?\n){2,}|<br\s*\/?>|<\/p>|<\/li>|<\/tr>/i)
-    .map(b => b.replace(/<[^>]+>/g, " ").replace(/\s+/g, " ").trim())
+  const blocks = text.split(/(?:\r?\n){1,2}|<br\s*\/?>|<\/p>|<\/li>|<\/tr>|##\s+/i)
+    .map(b => b.replace(/<[^>]+>/g, " ").replace(/\[([^\]]+)\]\([^)]+\)/g, "$1").replace(/\s+/g, " ").trim())
     .filter(b => b.length > 15);
 
   const seenNomineKeys = new Set<string>();
@@ -67,7 +89,7 @@ export function analyzeSchoolContentHeuristic(
   for (const block of blocks) {
     const lower = block.toLowerCase();
 
-    // 1. Scarta categoricamente se contiene termini negativi tipici
+    // Scarta categoricamente se contiene termini negativi tipici
     if (
       lower.includes("assemblea sindacale") ||
       lower.includes("sciopero") ||
@@ -81,7 +103,7 @@ export function analyzeSchoolContentHeuristic(
       continue;
     }
 
-    // 2. Rileva Pensionamenti / Cessazioni
+    // Rileva Pensionamenti / Cessazioni
     const isPensionamento = (
       lower.includes("pensionament") ||
       lower.includes("cessazion") ||
@@ -97,7 +119,7 @@ export function analyzeSchoolContentHeuristic(
       if (lower.includes("amministrativ")) {
         pens.assistente_amministrativo++;
       }
-      if (lower.includes("docent") || lower.includes("insegnant") || lower.includes("scuola primaria") || lower.includes("secondaria")) {
+      if (lower.includes("docent") || lower.includes("insegnant") || lower.includes("primaria") || lower.includes("secondaria")) {
         pens.docenti++;
       }
       if (lower.includes("tecnic")) {
@@ -111,17 +133,19 @@ export function analyzeSchoolContentHeuristic(
       }
     }
 
-    // 3. Rileva Convocazioni / Interpelli / Supplenze
+    // Rileva Convocazioni / Interpelli / Supplenze
     const isConvocazioneOrInterpello = (
       lower.includes("convocazion") ||
       lower.includes("interpell") ||
       lower.includes("supplenz") ||
+      lower.includes("reclutamento") ||
       lower.includes("individuazion") ||
       lower.includes("stipula contratt") ||
       lower.includes("conferimento incarico") ||
       lower.includes("avviso di selezione") ||
       lower.includes("bando ata") ||
-      lower.includes("bando docent")
+      lower.includes("bando docent") ||
+      lower.includes("messa a disposizione")
     );
 
     if (isConvocazioneOrInterpello) {
@@ -153,53 +177,48 @@ export function analyzeSchoolContentHeuristic(
         conv.assistente_agrario++;
       }
 
-      // 4. Rileva se è una nomina o contratto con dettagli candidato
+      // Rileva se è una nomina o contratto con dettagli candidato
       const isNomina = (
         lower.includes("decreto di individuazione") ||
         lower.includes("stipula contratto") ||
         lower.includes("contratto di supplenza") ||
         lower.includes("individuato") ||
+        lower.includes("assegnazione incarico") ||
         lower.includes("aggiudicazione") ||
         (targetNominativo && isNameMatch(block, targetNominativo))
       );
 
       if (isNomina) {
-        // Estrazione punteggio
         let punteggio: number | null = null;
         const puntMatch = block.match(/(?:punteggio|punti|pt\.?|votazione)[:\s]+([0-9]{1,3}(?:[.,][0-9]{1,2})?)/i);
         if (puntMatch) {
           punteggio = parseFloat(puntMatch[1].replace(",", "."));
         }
 
-        // Estrazione posizione
         let posStr = "Non disponibile";
         const posMatch = block.match(/(?:pos(?:izione)?\.?|posto|graduatoria n\.?)[:\s#]+([0-9]{1,4})/i);
         if (posMatch) {
           posStr = posMatch[1];
         }
 
-        // Estrazione fascia
         let fasciaStr = "";
         const fasciaMatch = block.match(/(?:fascia|graduatoria di)[:\s]+([1-3]|prima|seconda|terza|I|II|III)\b/i);
         if (fasciaMatch) {
           fasciaStr = formatFasciaLabel(fasciaMatch[1]);
         }
 
-        // Estrazione ore settimanali
         let oreStr = "";
         const oreMatch = block.match(/([0-9]{1,2}(?:\/[0-9]{1,2})?)\s*(?:ore|h\b|settimanali)/i);
         if (oreMatch) {
           oreStr = `${oreMatch[1]} ore`;
         }
 
-        // Estrazione decorrenza
         let decStr = "";
         const decMatch = block.match(/(?:dal|decorrenza)[:\s]+([0-9]{1,2}[\/-][0-9]{1,2}[\/-][0-9]{2,4})(?:\s+(?:al|fino al)\s+([0-9]{1,2}[\/-][0-9]{1,2}[\/-][0-9]{2,4}|termine delle attivit[àa]))?/i);
         if (decMatch) {
           decStr = decMatch[2] ? `${decMatch[1]} - ${decMatch[2]}` : decMatch[1];
         }
 
-        // Profilo
         let profilo = "Collaboratore scolastico";
         let tipologia: "ATA" | "DOCENTE" = "ATA";
         let cdc = "";
@@ -286,12 +305,12 @@ export function findSchoolInternalLinks(html: string, baseUrl: string): string[]
       const resolved = new URL(rawHref, baseUrl).href;
       const resolvedHost = new URL(resolved).hostname.toLowerCase().replace(/^www\./, "");
 
-      // Verifica che rimanga sul dominio della scuola o su portali scolastici autorizzati (Argo, Axios, Nuvola, Spaggiari)
       const isAllowedDomain = resolvedHost === baseDomain || 
         resolvedHost.includes("albipretorionline.com") ||
         resolvedHost.includes("portaleargo.it") ||
         resolvedHost.includes("axioscloud.it") ||
-        resolvedHost.includes("spaggiari.eu");
+        resolvedHost.includes("spaggiari.eu") ||
+        resolvedHost.includes("trasparenzascuole.it");
 
       if (!isAllowedDomain) continue;
 
@@ -309,7 +328,7 @@ export function findSchoolInternalLinks(html: string, baseUrl: string): string[]
       if (isRelevant && !seen.has(resolved)) {
         seen.add(resolved);
         links.push(resolved);
-        if (links.length >= 4) break; // Massimo 4 sotto-sezioni chiave per non rallentare
+        if (links.length >= 4) break;
       }
     } catch {
       // Ignora URL non validi
@@ -320,7 +339,39 @@ export function findSchoolInternalLinks(html: string, baseUrl: string): string[]
 }
 
 /**
- * Estrae e analizza i dati di una scuola esplorando la homepage e le sezioni chiave (Albo, Circolari, Graduatorie).
+ * Ricerca web di fallback per interrogare gli interpelli e gli atti ufficiali dell'istituto.
+ */
+export async function searchSchoolActsFallback(
+  schoolName: string,
+  cityName?: string
+): Promise<{ text: string; discoveredUrl?: string }> {
+  try {
+    const query = encodeURIComponent(`${schoolName} ${cityName || ''} albo pretorio interpelli convocazioni supplenze site:edu.it OR site:it`);
+    const searchUrl = `https://r.jina.ai/https://html.duckduckgo.com/html/?q=${query}`;
+    const res = await fetch(searchUrl, {
+      headers: {
+        "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36"
+      }
+    });
+
+    if (!res.ok) return { text: "" };
+    const content = await res.text();
+
+    // Cerca nei risultati un URL .edu.it ufficiale attivo della scuola
+    const eduMatch = content.match(/https?:\/\/(?:www\.)?([a-zA-Z0-9-]+\.edu\.it)/i);
+    const discoveredUrl = eduMatch ? `https://${eduMatch[1]}` : undefined;
+
+    return {
+      text: content.slice(0, 15000),
+      discoveredUrl
+    };
+  } catch {
+    return { text: "" };
+  }
+}
+
+/**
+ * Estrae e analizza i dati di una scuola esplorando la homepage, le sezioni chiave e l'indice atti.
  */
 export async function extractSchoolData(
   homepageHtml: string,
@@ -331,34 +382,79 @@ export async function extractSchoolData(
   initialHint?: { nome_istituto?: string; codice_meccanografico?: string },
   fetchSubPageFn?: (subUrl: string) => Promise<string>
 ): Promise<ExtractionData> {
+  const mainInstituteName = extractMainInstituteName(initialHint?.nome_istituto) || initialHint?.nome_istituto || "";
   const detectedMecc = initialHint?.codice_meccanografico || extractCodiceMeccanograficoFromText(homepageHtml, url);
-  const detectedNome = initialHint?.nome_istituto || url.replace(/^https?:\/\//, "").replace(/\/.*$/, "");
+  let effectiveNome = mainInstituteName || url.replace(/^https?:\/\//, "").replace(/\/.*$/, "");
+  let effectiveUrl = url;
 
-  // 1. Raccogli testo della homepage
-  let aggregatedText = homepageHtml.replace(/<script\b[^<]*(?:(?!<\/script>)<[^<]*)*<\/script>/gi, " ")
+  let aggregatedText = (homepageHtml || "")
+    .replace(/<script\b[^<]*(?:(?!<\/script>)<[^<]*)*<\/script>/gi, " ")
     .replace(/<style\b[^<]*(?:(?!<\/style>)<[^<]*)*<\/style>/gi, " ");
 
-  // 2. Cerca ed esplora sezioni Albo / Circolari / Graduatorie (fino a 2 pagine interne chiave)
-  if (fetchSubPageFn) {
-    const internalLinks = findSchoolInternalLinks(homepageHtml, url);
+  // 1. Se il testo della homepage è scarso o assente (es. sito non raggiungibile o plesso), esegui ricerca web atti
+  if (aggregatedText.length < 200 && effectiveNome) {
+    const webResult = await searchSchoolActsFallback(effectiveNome);
+    if (webResult.text) {
+      aggregatedText += `\n--- ATTI E INTERPELLI WEB UFFICIALI ---\n${webResult.text}`;
+    }
+    if (webResult.discoveredUrl) {
+      effectiveUrl = webResult.discoveredUrl;
+    }
+  }
+
+  // 2. Se abbiamo un fetcher per sottopagine, esplora le sezioni interne (Albo / Circolari / Bandi)
+  if (fetchSubPageFn && aggregatedText.length > 200) {
+    const internalLinks = findSchoolInternalLinks(homepageHtml, effectiveUrl);
     for (const subLink of internalLinks.slice(0, 2)) {
       try {
         const subHtml = await fetchSubPageFn(subLink);
         if (subHtml && subHtml.length > 100) {
-          const cleanSub = subHtml.replace(/<script\b[^<]*(?:(?!<\/script>)<[^<]*)*<\/script>/gi, " ")
+          const cleanSub = subHtml
+            .replace(/<script\b[^<]*(?:(?!<\/script>)<[^<]*)*<\/script>/gi, " ")
             .replace(/<style\b[^<]*(?:(?!<\/style>)<[^<]*)*<\/style>/gi, " ");
           aggregatedText += `\n--- SEZIONE ${subLink} ---\n${cleanSub}`;
         }
       } catch {
-        // Ignora fallimento download sottopagina e procedi
+        // procedi
       }
     }
   }
 
-  // 3. Esegui analisi euristica rigorosa su tutto il materiale raccolto
-  const heuristicResult = analyzeSchoolContentHeuristic(aggregatedText, url, singleNominativo);
+  // 3. Esegui analisi euristica ad alta precisione
+  let heuristicResult = analyzeSchoolContentHeuristic(aggregatedText, effectiveUrl, singleNominativo);
 
-  // 4. Se è presente una chiave AI, affina l'analisi con Gemini (con prompt mirato e veloce)
+  // Se i conteggi sono ancora a zero e abbiamo il nome della scuola, interroga l'indice pubblico degli interpelli
+  const totalConvocazioni = Object.values(heuristicResult.convocazioni).reduce((a, b) => a + b, 0);
+  if (totalConvocazioni === 0 && effectiveNome) {
+    const searchFall = await searchSchoolActsFallback(effectiveNome);
+    if (searchFall.text) {
+      const extraHeuristic = analyzeSchoolContentHeuristic(searchFall.text, effectiveUrl, singleNominativo);
+      heuristicResult = {
+        convocazioni: {
+          collaboratore_scolastico: Math.max(heuristicResult.convocazioni.collaboratore_scolastico, extraHeuristic.convocazioni.collaboratore_scolastico),
+          assistente_amministrativo: Math.max(heuristicResult.convocazioni.assistente_amministrativo, extraHeuristic.convocazioni.assistente_amministrativo),
+          docenti: Math.max(heuristicResult.convocazioni.docenti, extraHeuristic.convocazioni.docenti),
+          assistente_tecnico: Math.max(heuristicResult.convocazioni.assistente_tecnico, extraHeuristic.convocazioni.assistente_tecnico),
+          cuoco: Math.max(heuristicResult.convocazioni.cuoco, extraHeuristic.convocazioni.cuoco),
+          assistente_agrario: Math.max(heuristicResult.convocazioni.assistente_agrario, extraHeuristic.convocazioni.assistente_agrario),
+        },
+        pensionamenti: {
+          collaboratore_scolastico: Math.max(heuristicResult.pensionamenti.collaboratore_scolastico, extraHeuristic.pensionamenti.collaboratore_scolastico),
+          assistente_amministrativo: Math.max(heuristicResult.pensionamenti.assistente_amministrativo, extraHeuristic.pensionamenti.assistente_amministrativo),
+          docenti: Math.max(heuristicResult.pensionamenti.docenti, extraHeuristic.pensionamenti.docenti),
+          assistente_tecnico: Math.max(heuristicResult.pensionamenti.assistente_tecnico, extraHeuristic.pensionamenti.assistente_tecnico),
+          cuoco: Math.max(heuristicResult.pensionamenti.cuoco, extraHeuristic.pensionamenti.cuoco),
+          assistente_agrario: Math.max(heuristicResult.pensionamenti.assistente_agrario, extraHeuristic.pensionamenti.assistente_agrario),
+        },
+        nomine: [...heuristicResult.nomine, ...extraHeuristic.nomine]
+      };
+      if (searchFall.discoveredUrl && effectiveUrl.includes("gov.itit") || !effectiveUrl.startsWith("http")) {
+        effectiveUrl = searchFall.discoveredUrl;
+      }
+    }
+  }
+
+  // 4. Se è configurata una chiave AI, affina i risultati
   let aiNomine: NominaContrattoItem[] = [];
   if (apiKey && apiKey.trim()) {
     try {
@@ -367,12 +463,12 @@ export async function extractSchoolData(
         .replace(/\s+/g, " ")
         .slice(0, 8000);
 
-      const prompt = `Analizza il testo della scuola per estrarre eventuali contratti di supplenza o nomine concluse.
+      const prompt = `Analizza il testo della scuola "${effectiveNome}" per estrarre contratti o nomine concluse.
 ${singleNominativo ? `Cerca con priorità assoluta il candidato "${singleNominativo}".` : ""}
 
 Rispondi SOLO in JSON:
 {
-  "nome_istituto": "${detectedNome}",
+  "nome_istituto": "${effectiveNome}",
   "codice_meccanografico": "${detectedMecc || ''}",
   "nomine": [
     {
@@ -403,7 +499,7 @@ Testo:
         for (const n of parsedAi.nomine) {
           if (n.nominativo || singleNominativo) {
             aiNomine.push({
-              nome_istituto: detectedNome,
+              nome_istituto: effectiveNome,
               codice_meccanografico: detectedMecc || "",
               nominativo: n.nominativo || singleNominativo,
               tipologia_personale: n.tipologia_personale === "DOCENTE" ? "DOCENTE" : "ATA",
@@ -418,7 +514,7 @@ Testo:
               decorrenza_contratto: n.decorrenza_contratto || "",
               durata_contratto_mesi: "",
               durata_contratto_giorni: "",
-              link_del_documento: url
+              link_del_documento: effectiveUrl
             });
           }
         }
@@ -428,12 +524,12 @@ Testo:
     }
   }
 
-  // 5. Combina le nomine trovate (euristiche + AI)
+  // 5. Combina le nomine trovate
   const combinedNomine: NominaContrattoItem[] = [];
   const seenNomine = new Set<string>();
 
   for (const n of [...heuristicResult.nomine, ...aiNomine]) {
-    n.nome_istituto = detectedNome;
+    n.nome_istituto = effectiveNome;
     n.codice_meccanografico = detectedMecc || "";
     const key = `${n.nominativo || ''}_${n.profilo_lavorativo}_${n.decorrenza_contratto}`;
     if (!seenNomine.has(key)) {
@@ -442,10 +538,9 @@ Testo:
     }
   }
 
-  // Se l'utente cercava un candidato specifico e non è stato ancora inserito, creiamo la riga per il riscontro in graduatoria
   if (singleNominativo && singleNominativo.trim() && combinedNomine.length === 0) {
     combinedNomine.push({
-      nome_istituto: detectedNome,
+      nome_istituto: effectiveNome,
       codice_meccanografico: detectedMecc || "",
       nominativo: singleNominativo.trim(),
       tipologia_personale: "ATA",
@@ -460,7 +555,7 @@ Testo:
       decorrenza_contratto: "",
       durata_contratto_mesi: "",
       durata_contratto_giorni: "",
-      link_del_documento: url
+      link_del_documento: effectiveUrl
     });
   }
 
@@ -468,14 +563,14 @@ Testo:
   const processedNomine = combinedNomine.map(nom => {
     return crossReferenceNomina(nom, graduatorie, {
       codice_meccanografico: detectedMecc || undefined,
-      nome_istituto: detectedNome
+      nome_istituto: effectiveNome
     });
   });
 
   const firstNom = processedNomine[0];
 
   const finalData: ExtractionData = {
-    nome_istituto: detectedNome,
+    nome_istituto: effectiveNome,
     codice_meccanografico: detectedMecc || "",
     nominativo: singleNominativo || firstNom?.nominativo,
     nomine_contratti: processedNomine,
@@ -512,7 +607,7 @@ Testo:
   if (graduatorie && graduatorie.length > 0) {
     try {
       const resolved = await resolveFromGraduatorie(finalData, {
-        targetUrl: url,
+        targetUrl: effectiveUrl,
         initialContent: aggregatedText
       });
       return resolved;
