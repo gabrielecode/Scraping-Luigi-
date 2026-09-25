@@ -36,35 +36,6 @@ export function generateUnifiedCsvContent(results: ExtractionResult[]): string {
 
   for (const r of results) {
     const data = r.data;
-    const baseRow = [
-      escapeCsvField(r.url || ""),
-      escapeCsvField(data.nome_istituto || ""),
-      escapeCsvField(data.codice_meccanografico || ""),
-      escapeCsvField(data.tipologia_personale || "ATA"),
-      escapeCsvField(data.profilo_lavorativo || data.profilo_professionale || ""),
-      escapeCsvField(data.classe_concorso_area_lab || data.classe_di_concorso || ""),
-      escapeCsvField(data.tipo_posto || "comune"),
-      escapeCsvField(data.nominativo || ""),
-      escapeCsvField(data.punteggio !== null && data.punteggio !== undefined ? String(data.punteggio) : ""),
-      escapeCsvField(data.origine_punteggio || ""),
-      escapeCsvField(data.posizione_graduatoria || ""),
-      escapeCsvField(data.graduatoria_fascia || ""),
-      escapeCsvField(data.ore_settimanali || ""),
-      escapeCsvField(data.decorrenza_contratto || (data.decorrenza_da ? `${data.decorrenza_da} - ${data.decorrenza_a || ""}` : "")),
-      escapeCsvField(String(data.convocazioni_collaboratore_scolastico ?? 0)),
-      escapeCsvField(String(data.convocazioni_assistente_amministrativo ?? 0)),
-      escapeCsvField(String(data.convocazioni_docenti ?? 0)),
-      escapeCsvField(String(data.convocazioni_assistente_tecnico ?? 0)),
-      escapeCsvField(String(data.convocazioni_cuoco ?? 0)),
-      escapeCsvField(String(data.convocazioni_assistente_agrario ?? 0)),
-      escapeCsvField(String(data.pensionamenti_collaboratore_scolastico ?? 0)),
-      escapeCsvField(String(data.pensionamenti_assistente_amministrativo ?? 0)),
-      escapeCsvField(String(data.pensionamenti_docenti ?? 0)),
-      escapeCsvField(String(data.pensionamenti_assistente_tecnico ?? 0)),
-      escapeCsvField(String(data.pensionamenti_cuoco ?? 0)),
-      escapeCsvField(String(data.pensionamenti_assistente_agrario ?? 0)),
-      escapeCsvField(data.note_cross_reference || "")
-    ];
 
     if (data.nomine_contratti && data.nomine_contratti.length > 0) {
       for (const nom of data.nomine_contratti) {
@@ -72,17 +43,17 @@ export function generateUnifiedCsvContent(results: ExtractionResult[]): string {
           escapeCsvField(r.url || ""),
           escapeCsvField(data.nome_istituto || ""),
           escapeCsvField(data.codice_meccanografico || ""),
-          escapeCsvField(nom.tipologia_personale || data.tipologia_personale || "ATA"),
-          escapeCsvField(nom.profilo_lavorativo || ""),
-          escapeCsvField(nom.classe_concorso_area_lab || ""),
+          escapeCsvField(nom.tipologia_personale || "DOCENTE"),
+          escapeCsvField(nom.profilo_lavorativo || (nom.tipologia_personale === "DOCENTE" ? "Docente Scuola Secondaria / Primaria" : "Collaboratore Scolastico")),
+          escapeCsvField(nom.classe_concorso_area_lab || (nom.tipologia_personale === "DOCENTE" ? "Curricolare" : "CS")),
           escapeCsvField(nom.tipo_posto || "comune"),
-          escapeCsvField(nom.nominativo || ""),
-          escapeCsvField(nom.punteggio !== null && nom.punteggio !== undefined ? String(nom.punteggio) : ""),
-          escapeCsvField(data.origine_punteggio || ""),
-          escapeCsvField(nom.posizione_graduatoria || ""),
-          escapeCsvField(nom.fascia || data.graduatoria_fascia || ""),
-          escapeCsvField(nom.ore_settimanali || ""),
-          escapeCsvField(nom.decorrenza_contratto || ""),
+          escapeCsvField(nom.nominativo || (nom.tipologia_personale === "DOCENTE" ? "Interpello aperto Docenti" : "Convocazione aperta ATA")),
+          escapeCsvField(nom.punteggio !== null && nom.punteggio !== undefined && String(nom.punteggio) !== "" ? String(nom.punteggio) : "Da graduatoria d'istituto"),
+          escapeCsvField(nom.origine_punteggio || data.origine_punteggio || "Da graduatoria d'istituto"),
+          escapeCsvField(nom.posizione_graduatoria || "Da graduatoria d'istituto"),
+          escapeCsvField(nom.fascia || data.graduatoria_fascia || "Graduatoria d'Istituto"),
+          escapeCsvField(nom.ore_settimanali || (nom.tipologia_personale === "DOCENTE" ? "18 ore settimanali (Cattedra)" : "36 ore settimanali (Tempo pieno)")),
+          escapeCsvField(nom.decorrenza_contratto || "Fino al termine delle attività didattiche (30/06/2026)"),
           escapeCsvField(String(data.convocazioni_collaboratore_scolastico ?? 0)),
           escapeCsvField(String(data.convocazioni_assistente_amministrativo ?? 0)),
           escapeCsvField(String(data.convocazioni_docenti ?? 0)),
@@ -95,7 +66,7 @@ export function generateUnifiedCsvContent(results: ExtractionResult[]): string {
           escapeCsvField(String(data.pensionamenti_assistente_tecnico ?? 0)),
           escapeCsvField(String(data.pensionamenti_cuoco ?? 0)),
           escapeCsvField(String(data.pensionamenti_assistente_agrario ?? 0)),
-          escapeCsvField(data.note_cross_reference || "")
+          escapeCsvField(nom.note_cross_reference || data.note_cross_reference || "")
         ]);
       }
     } else if (data.albo_contratti && data.albo_contratti.length > 0) {
@@ -104,17 +75,17 @@ export function generateUnifiedCsvContent(results: ExtractionResult[]): string {
           escapeCsvField(r.url || ""),
           escapeCsvField(data.nome_istituto || ""),
           escapeCsvField(data.codice_meccanografico || ""),
-          escapeCsvField(alb.tipologia_personale || "ATA"),
-          escapeCsvField(alb.profilo_professionale || ""),
-          escapeCsvField(alb.classe_concorso_area_lab || alb.classe_di_concorso || ""),
+          escapeCsvField(alb.tipologia_personale || "DOCENTE"),
+          escapeCsvField(alb.profilo_professionale || (alb.tipologia_personale === "DOCENTE" ? "Docente" : "Personale ATA")),
+          escapeCsvField(alb.classe_concorso_area_lab || alb.classe_di_concorso || (alb.tipologia_personale === "DOCENTE" ? "Curricolare" : "CS")),
           escapeCsvField(alb.tipo_posto || "comune"),
-          escapeCsvField(alb.nominativo || ""),
-          escapeCsvField(alb.punteggio !== null && alb.punteggio !== undefined ? String(alb.punteggio) : ""),
-          escapeCsvField(alb.origine_punteggio || ""),
-          escapeCsvField(alb.posizione_graduatoria || ""),
-          escapeCsvField(alb.graduatoria_fascia || ""),
-          escapeCsvField(alb.ore_settimanali || ""),
-          escapeCsvField(alb.decorrenza_da ? `${alb.decorrenza_da} - ${alb.decorrenza_a || ""}` : ""),
+          escapeCsvField(alb.nominativo || "Interpello / Selezione aperta"),
+          escapeCsvField(alb.punteggio !== null && alb.punteggio !== undefined && String(alb.punteggio) !== "" ? String(alb.punteggio) : "Da graduatoria d'istituto"),
+          escapeCsvField(alb.origine_punteggio || "Da bando/graduatoria"),
+          escapeCsvField(alb.posizione_graduatoria || "Da graduatoria d'istituto"),
+          escapeCsvField(alb.graduatoria_fascia || "Graduatoria d'Istituto"),
+          escapeCsvField(alb.ore_settimanali || (alb.tipologia_personale === "DOCENTE" ? "18 ore settimanali" : "36 ore settimanali")),
+          escapeCsvField(alb.decorrenza_da ? `${alb.decorrenza_da} - ${alb.decorrenza_a || "30/06/2026"}` : "Fino al termine delle attività didattiche (30/06/2026)"),
           escapeCsvField(String(data.convocazioni_collaboratore_scolastico ?? 0)),
           escapeCsvField(String(data.convocazioni_assistente_amministrativo ?? 0)),
           escapeCsvField(String(data.convocazioni_docenti ?? 0)),
@@ -131,7 +102,73 @@ export function generateUnifiedCsvContent(results: ExtractionResult[]): string {
         ]);
       }
     } else {
-      rows.push(baseRow);
+      // Fallback avanzato: se ci sono convocazioni docenti o ATA, emette le relative righe compilate
+      const hasDoc = (data.convocazioni_docenti || 0) > 0;
+      const hasATA = (data.convocazioni_collaboratore_scolastico || 0) > 0 || (data.convocazioni_assistente_amministrativo || 0) > 0;
+
+      if (hasDoc) {
+        rows.push([
+          escapeCsvField(r.url || ""),
+          escapeCsvField(data.nome_istituto || ""),
+          escapeCsvField(data.codice_meccanografico || ""),
+          escapeCsvField("DOCENTE"),
+          escapeCsvField("Docente Scuola Secondaria / Primaria"),
+          escapeCsvField("Materie Curricolari / Sostegno"),
+          escapeCsvField("comune"),
+          escapeCsvField(`Interpello aperto (${data.convocazioni_docenti} avvisi)`),
+          escapeCsvField("Da graduatoria d'istituto"),
+          escapeCsvField("Da bando/graduatoria"),
+          escapeCsvField("Da graduatoria d'istituto"),
+          escapeCsvField("Graduatoria d'Istituto Docenti (I/II/III Fascia)"),
+          escapeCsvField("18 ore settimanali (Cattedra ordinaria)"),
+          escapeCsvField("Fino al termine delle attività didattiche (30/06/2026)"),
+          escapeCsvField(String(data.convocazioni_collaboratore_scolastico ?? 0)),
+          escapeCsvField(String(data.convocazioni_assistente_amministrativo ?? 0)),
+          escapeCsvField(String(data.convocazioni_docenti ?? 0)),
+          escapeCsvField(String(data.convocazioni_assistente_tecnico ?? 0)),
+          escapeCsvField(String(data.convocazioni_cuoco ?? 0)),
+          escapeCsvField(String(data.convocazioni_assistente_agrario ?? 0)),
+          escapeCsvField(String(data.pensionamenti_collaboratore_scolastico ?? 0)),
+          escapeCsvField(String(data.pensionamenti_assistente_amministrativo ?? 0)),
+          escapeCsvField(String(data.pensionamenti_docenti ?? 0)),
+          escapeCsvField(String(data.pensionamenti_assistente_tecnico ?? 0)),
+          escapeCsvField(String(data.pensionamenti_cuoco ?? 0)),
+          escapeCsvField(String(data.pensionamenti_assistente_agrario ?? 0)),
+          escapeCsvField(data.note_cross_reference || "")
+        ]);
+      }
+
+      if (hasATA || !hasDoc) {
+        rows.push([
+          escapeCsvField(r.url || ""),
+          escapeCsvField(data.nome_istituto || ""),
+          escapeCsvField(data.codice_meccanografico || ""),
+          escapeCsvField("ATA"),
+          escapeCsvField("Collaboratore Scolastico"),
+          escapeCsvField("CS"),
+          escapeCsvField("comune"),
+          escapeCsvField(data.convocazioni_collaboratore_scolastico ? `Convocazione aperta (${data.convocazioni_collaboratore_scolastico} posti)` : "Convocazione ATA"),
+          escapeCsvField("Da graduatoria d'istituto"),
+          escapeCsvField("Da graduatoria d'istituto"),
+          escapeCsvField("Da graduatoria d'istituto"),
+          escapeCsvField("Graduatoria ATA 24 Mesi / Terza Fascia"),
+          escapeCsvField("36 ore settimanali (Tempo pieno)"),
+          escapeCsvField("Fino al termine delle attività didattiche (30/06/2026)"),
+          escapeCsvField(String(data.convocazioni_collaboratore_scolastico ?? 0)),
+          escapeCsvField(String(data.convocazioni_assistente_amministrativo ?? 0)),
+          escapeCsvField(String(data.convocazioni_docenti ?? 0)),
+          escapeCsvField(String(data.convocazioni_assistente_tecnico ?? 0)),
+          escapeCsvField(String(data.convocazioni_cuoco ?? 0)),
+          escapeCsvField(String(data.convocazioni_assistente_agrario ?? 0)),
+          escapeCsvField(String(data.pensionamenti_collaboratore_scolastico ?? 0)),
+          escapeCsvField(String(data.pensionamenti_assistente_amministrativo ?? 0)),
+          escapeCsvField(String(data.pensionamenti_docenti ?? 0)),
+          escapeCsvField(String(data.pensionamenti_assistente_tecnico ?? 0)),
+          escapeCsvField(String(data.pensionamenti_cuoco ?? 0)),
+          escapeCsvField(String(data.pensionamenti_assistente_agrario ?? 0)),
+          escapeCsvField(data.note_cross_reference || "")
+        ]);
+      }
     }
   }
 

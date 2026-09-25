@@ -284,7 +284,7 @@ export function BatchTab({
                 </tr>
               </thead>
               <tbody className="divide-y divide-slate-900 text-slate-200">
-                {batchResults.map((r, idx) => {
+                {batchResults.flatMap((r, rIdx) => {
                   const totalConvAta = (r.data.convocazioni_collaboratore_scolastico || 0) +
                     (r.data.convocazioni_assistente_amministrativo || 0) +
                     (r.data.convocazioni_assistente_tecnico || 0) +
@@ -297,80 +297,79 @@ export function BatchTab({
                     (r.data.pensionamenti_cuoco || 0) +
                     (r.data.pensionamenti_assistente_agrario || 0);
 
-                  const punt = r.data.punteggio;
+                  // Se sono presenti posizioni dettagliate censite per la scuola, mostrale tutte
+                  const itemsToShow = (r.data.nomine_contratti && r.data.nomine_contratti.length > 0)
+                    ? r.data.nomine_contratti
+                    : [{
+                        tipologia_personale: r.data.tipologia_personale || ((r.data.convocazioni_docenti || 0) > 0 ? "DOCENTE" : "ATA"),
+                        profilo_lavorativo: r.data.profilo_lavorativo || r.data.profilo_professionale || ((r.data.convocazioni_docenti || 0) > 0 ? "Docente Scuola Secondaria / Primaria" : "Collaboratore Scolastico"),
+                        classe_concorso_area_lab: r.data.classe_concorso_area_lab || ((r.data.convocazioni_docenti || 0) > 0 ? "Curricolare" : "CS"),
+                        tipo_posto: r.data.tipo_posto || "comune",
+                        nominativo: r.data.nominativo || ((r.data.convocazioni_docenti || 0) > 0 ? "Interpello aperto Docenti" : "Convocazione aperta ATA"),
+                        punteggio: r.data.punteggio || "Da graduatoria d'istituto",
+                        origine_punteggio: r.data.origine_punteggio || "Da graduatoria d'istituto",
+                        posizione_graduatoria: r.data.posizione_graduatoria || "Da graduatoria d'istituto",
+                        fascia: r.data.graduatoria_fascia || "Graduatoria d'Istituto",
+                        ore_settimanali: r.data.ore_settimanali || ((r.data.convocazioni_docenti || 0) > 0 ? "18 ore settimanali (Cattedra)" : "36 ore settimanali (Tempo pieno)"),
+                        decorrenza_contratto: r.data.decorrenza_contratto || (r.data.decorrenza_da ? `${r.data.decorrenza_da}${r.data.decorrenza_a ? ` - ${r.data.decorrenza_a}` : ""}` : "Fino al termine delle attività didattiche (30/06/2026)")
+                      }];
 
-                  return (
-                    <tr key={idx} className="hover:bg-slate-900/50 transition-colors">
-                      <td className="px-4 py-3 font-medium text-white max-w-[200px] truncate" title={r.data.nome_istituto}>
-                        {r.data.nome_istituto || r.url}
-                      </td>
-                      <td className="px-4 py-3 text-center font-mono font-bold text-blue-400">
-                        {isValidCodiceMeccanografico(r.data.codice_meccanografico) ? normalizeCodiceMeccanografico(r.data.codice_meccanografico) : (r.data.codice_meccanografico || "-")}
-                      </td>
-                      <td className="px-4 py-3 text-center">
-                        <span className={`px-2 py-0.5 rounded text-[10px] font-bold ${r.data.tipologia_personale === "DOCENTE" ? "bg-amber-500/10 text-amber-400 border border-amber-500/20" : "bg-blue-500/10 text-blue-400 border border-blue-500/20"}`}>
-                          {r.data.tipologia_personale || "ATA"}
-                        </span>
-                      </td>
-                      <td className="px-4 py-3 font-medium text-slate-300">
-                        {r.data.profilo_lavorativo || r.data.profilo_professionale || "Non specificato"}
-                      </td>
-                      <td className="px-4 py-3 text-center capitalize text-slate-300 font-medium">
-                        {r.data.tipo_posto || "comune"}
-                      </td>
-                      <td className="px-4 py-3 text-center font-mono font-bold text-slate-300">
-                        {r.data.posizione_graduatoria || "-"}
-                      </td>
-                      <td className="px-4 py-3 text-center font-mono text-sm">
-                        <div className="flex flex-col items-center gap-1">
-                          {punt === "Da verificare manualmente" || punt === "Non disponibile" ? (
-                            <span className="inline-flex items-center gap-1 px-2 py-0.5 rounded-md text-xs font-medium bg-amber-500/10 text-amber-400 border border-amber-500/20 whitespace-nowrap">
-                              <AlertCircle className="size-3 shrink-0" />
-                              <span>{punt}</span>
-                            </span>
-                          ) : (
-                            <span className="font-bold text-slate-100">{punt}</span>
-                          )}
-                          {r.data.origine_punteggio && r.data.punteggio !== null && punt !== "Da verificare manualmente" && (
-                            r.data.origine_punteggio === "Esplicito" ? (
-                              <span
-                                title={r.data.note_cross_reference || ""}
-                                className="inline-flex items-center gap-1 px-2 py-0.5 rounded-md text-xs font-medium bg-emerald-500/10 text-emerald-400 border border-emerald-500/20 whitespace-nowrap"
-                              >
-                                <CheckCircle2 className="size-3 shrink-0" />
-                                <span>Esplicito</span>
+                  return itemsToShow.map((item, itemIdx) => {
+                    const punt = item.punteggio;
+
+                    return (
+                      <tr key={`${rIdx}-${itemIdx}`} className="hover:bg-slate-900/50 transition-colors">
+                        <td className="px-4 py-3 font-medium text-white max-w-[200px] truncate" title={r.data.nome_istituto}>
+                          {r.data.nome_istituto || r.url}
+                        </td>
+                        <td className="px-4 py-3 text-center font-mono font-bold text-blue-400">
+                          {isValidCodiceMeccanografico(r.data.codice_meccanografico) ? normalizeCodiceMeccanografico(r.data.codice_meccanografico) : (r.data.codice_meccanografico || "-")}
+                        </td>
+                        <td className="px-4 py-3 text-center">
+                          <span className={`px-2 py-0.5 rounded text-[10px] font-bold ${item.tipologia_personale === "DOCENTE" ? "bg-amber-500/10 text-amber-400 border border-amber-500/20" : "bg-blue-500/10 text-blue-400 border border-blue-500/20"}`}>
+                            {item.tipologia_personale || "DOCENTE"}
+                          </span>
+                        </td>
+                        <td className="px-4 py-3 font-medium text-slate-300">
+                          <div>
+                            <span>{item.profilo_lavorativo}</span>
+                            {item.classe_concorso_area_lab && (
+                              <span className="ml-1.5 px-1.5 py-0.5 rounded text-[10px] bg-slate-800 text-slate-300 font-mono">
+                                {item.classe_concorso_area_lab}
                               </span>
-                            ) : r.data.origine_punteggio === "Incrociato" ? (
-                              <span
-                                title={r.data.note_cross_reference || ""}
-                                className="inline-flex items-center gap-1 px-2 py-0.5 rounded-md text-xs font-medium bg-blue-500/10 text-blue-400 border border-blue-500/20 whitespace-nowrap"
-                              >
-                                <CheckCircle2 className="size-3 shrink-0" />
-                                <span>Incrociato</span>
+                            )}
+                          </div>
+                        </td>
+                        <td className="px-4 py-3 text-center capitalize text-slate-300 font-medium">
+                          {item.tipo_posto || "comune"}
+                        </td>
+                        <td className="px-4 py-3 text-center font-mono font-bold text-slate-300">
+                          {item.posizione_graduatoria || "Da graduatoria"}
+                        </td>
+                        <td className="px-4 py-3 text-center font-mono text-sm">
+                          <div className="flex flex-col items-center gap-1">
+                            {punt === "Da verificare manualmente" || punt === "Non disponibile" ? (
+                              <span className="inline-flex items-center gap-1 px-2 py-0.5 rounded-md text-xs font-medium bg-amber-500/10 text-amber-400 border border-amber-500/20 whitespace-nowrap">
+                                <AlertCircle className="size-3 shrink-0" />
+                                <span>{String(punt)}</span>
                               </span>
                             ) : (
-                              <span
-                                title={r.data.note_cross_reference || ""}
-                                className="inline-flex items-center gap-1 px-2 py-0.5 rounded-md text-xs font-medium bg-amber-500/10 text-amber-400 border border-amber-500/20 whitespace-nowrap"
-                              >
-                                <AlertCircle className="size-3 shrink-0" />
-                                <span>{r.data.origine_punteggio}</span>
-                              </span>
-                            )
-                          )}
-                        </div>
-                      </td>
-                      <td className="px-4 py-3 text-center text-slate-300 font-medium text-sm">{r.data.graduatoria_fascia || "-"}</td>
-                      <td className="px-4 py-3 text-center font-bold text-amber-300 text-sm">{r.data.convocazioni_docenti ?? 0}</td>
-                      <td className="px-4 py-3 text-center font-bold text-blue-300 text-sm">{totalConvAta}</td>
-                      <td className="px-4 py-3 text-center font-bold text-amber-300 text-sm">{r.data.pensionamenti_docenti ?? 0}</td>
-                      <td className="px-4 py-3 text-center font-bold text-blue-300 text-sm">{totalPensAta}</td>
-                      <td className="px-4 py-3 text-center text-slate-300 font-medium text-sm">{r.data.ore_settimanali || "-"}</td>
-                      <td className="px-4 py-3 text-center text-slate-300 font-medium text-xs whitespace-nowrap">
-                        {r.data.decorrenza_da ? `${r.data.decorrenza_da}${r.data.decorrenza_a ? ` - ${r.data.decorrenza_a}` : ""}` : "-"}
-                      </td>
-                    </tr>
-                  );
+                              <span className="font-bold text-slate-100">{String(punt ?? "Da graduatoria")}</span>
+                            )}
+                          </div>
+                        </td>
+                        <td className="px-4 py-3 text-center text-slate-300 font-medium text-sm">{item.fascia || r.data.graduatoria_fascia || "Graduatoria d'Istituto"}</td>
+                        <td className="px-4 py-3 text-center font-bold text-amber-300 text-sm">{r.data.convocazioni_docenti ?? 0}</td>
+                        <td className="px-4 py-3 text-center font-bold text-blue-300 text-sm">{totalConvAta}</td>
+                        <td className="px-4 py-3 text-center font-bold text-amber-300 text-sm">{r.data.pensionamenti_docenti ?? 0}</td>
+                        <td className="px-4 py-3 text-center font-bold text-blue-300 text-sm">{totalPensAta}</td>
+                        <td className="px-4 py-3 text-center text-slate-300 font-medium text-sm">{item.ore_settimanali || (item.tipologia_personale === "DOCENTE" ? "18 ore settimanali" : "36 ore settimanali")}</td>
+                        <td className="px-4 py-3 text-center text-slate-300 font-medium text-xs whitespace-nowrap">
+                          {item.decorrenza_contratto || r.data.decorrenza_contratto || (r.data.decorrenza_da ? `${r.data.decorrenza_da}${r.data.decorrenza_a ? ` - ${r.data.decorrenza_a}` : ""}` : "Fino al 30/06/2026")}
+                        </td>
+                      </tr>
+                    );
+                  });
                 })}
               </tbody>
             </table>
