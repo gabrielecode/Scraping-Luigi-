@@ -64,6 +64,7 @@ export function detectDelimiter(text: string): string {
 
 /**
  * Normalizza e convalida una stringa per verificare se rappresenta un URL.
+ * Ripara automaticamente prefissi malformati (es. https//, http//, https://https//, .gov.itit).
  */
 export function cleanAndValidateUrl(rawVal: string): string | null {
   if (!rawVal) return null;
@@ -71,42 +72,35 @@ export function cleanAndValidateUrl(rawVal: string): string | null {
 
   // Rimuovi spazi interni accidentali
   val = val.replace(/\s+/g, '');
-
   if (val.length < 4) return null;
 
-  // Se inizia con http:// o https://
-  if (/^https?:\/\//i.test(val)) {
-    try {
-      new URL(val);
-      return val;
-    } catch {
-      return null;
-    }
+  // 1. Rimuovi qualsiasi combinazione ripetuta o corrotta di protocolli
+  // Gestisce: "https//", "http//", "https://https//", "http://http//", "https://", ecc.
+  let prevVal = "";
+  while (prevVal !== val && /^(https?[:/]+)+/i.test(val)) {
+    prevVal = val;
+    val = val.replace(/^(https?[:/]+)+/i, '');
   }
 
-  // Se inizia con www.
-  if (/^www\./i.test(val)) {
-    const formatted = `https://${val}`;
-    try {
-      new URL(formatted);
-      return formatted;
-    } catch {
+  // 2. Correzione typo comuni nei TLD (es. .gov.itit -> .gov.it, .edu.itit -> .edu.it)
+  val = val.replace(/\.itit(\/|$)/i, '.it$1');
+
+  // 3. Verifica presenza di un dominio plausibile
+  if (!val.includes('.')) return null;
+
+  // 4. Anteponi https:// pulito e valida con l'API URL standard
+  const formatted = `https://${val}`;
+  try {
+    const parsed = new URL(formatted);
+    const host = parsed.hostname.toLowerCase();
+    if (!host || !host.includes('.') || host.endsWith('.')) {
       return null;
     }
+    // Ritorna con hostname in minuscolo ma mantenendo eventuale path/query
+    return `${parsed.protocol}//${parsed.host.toLowerCase()}${parsed.pathname}${parsed.search}`;
+  } catch {
+    return null;
   }
-
-  // Se sembra un dominio scuola (es. .edu.it, .gov.it, .istruzione.it, o dominio con estensione nota)
-  if (/\.(edu\.it|gov\.it|istruzione\.it|it|com|org|net)(\/|$)/i.test(val)) {
-    const formatted = `https://${val}`;
-    try {
-      new URL(formatted);
-      return formatted;
-    } catch {
-      return null;
-    }
-  }
-
-  return null;
 }
 
 /**

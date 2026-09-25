@@ -2502,33 +2502,57 @@ export async function extractWithOpenRouter(
     throw new Error("API Key OpenRouter mancante.");
   }
 
-  const res = await fetch("https://openrouter.ai/api/v1/chat/completions", {
-    method: "POST",
-    headers: {
-      "Authorization": `Bearer ${cleanKey}`,
-      "Content-Type": "application/json",
-      "HTTP-Referer": typeof window !== "undefined" ? window.location.origin : "https://scuola-ata.app",
-      "X-Title": "ScuolaATA Data Scraper"
-    },
-    body: JSON.stringify({
-      model: "google/gemini-flash-1.5",
-      messages: [
-        { role: "system", content: systemPrompt },
-        { role: "user", content: prompt }
-      ],
-      temperature: 0.1,
-      max_tokens: 1000
-    })
-  });
+  const candidateModels = [
+    "google/gemini-2.0-flash-001",
+    "google/gemini-flash-1.5",
+    "google/gemini-2.5-flash",
+    "meta-llama/llama-3.3-70b-instruct"
+  ];
 
-  if (!res.ok) {
-    const errText = await res.text().catch(() => "");
-    throw new Error(`OpenRouter API Error (${res.status}): ${errText || res.statusText}`);
+  let lastError = "";
+
+  for (const model of candidateModels) {
+    try {
+      const res = await fetch("https://openrouter.ai/api/v1/chat/completions", {
+        method: "POST",
+        headers: {
+          "Authorization": `Bearer ${cleanKey}`,
+          "Content-Type": "application/json",
+          "HTTP-Referer": typeof window !== "undefined" ? window.location.origin : "https://scuola-ata.app",
+          "X-Title": "ScuolaATA Data Scraper"
+        },
+        body: JSON.stringify({
+          model,
+          messages: [
+            { role: "system", content: systemPrompt },
+            { role: "user", content: prompt }
+          ],
+          temperature: 0.1,
+          max_tokens: 1000
+        })
+      });
+
+      if (res.ok) {
+        const data = await res.json();
+        const content = data?.choices?.[0]?.message?.content || "";
+        if (content && content.trim().length > 0) {
+          return content;
+        }
+      } else {
+        const errText = await res.text().catch(() => "");
+        lastError = `OpenRouter API Error (${res.status}) on ${model}: ${errText || res.statusText}`;
+        // Se è errore di auth (401), non ritentare altri modelli con chiave errata
+        if (res.status === 401) {
+          throw new Error(lastError);
+        }
+      }
+    } catch (e: any) {
+      if (e.message?.includes("401")) throw e;
+      lastError = e.message;
+    }
   }
 
-  const data = await res.json();
-  const content = data?.choices?.[0]?.message?.content || "";
-  return content;
+  throw new Error(lastError || "Impossibile completare la chiamata a OpenRouter con i modelli disponibili.");
 }
 
 /**

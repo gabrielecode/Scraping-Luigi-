@@ -182,7 +182,9 @@ export default function App() {
         singleUrl,
         openRouterApiKey.trim(),
         graduatorie,
-        singleNominativo.trim() || undefined
+        singleNominativo.trim() || undefined,
+        undefined,
+        (subUrl) => fetchWithProxyText(subUrl)
       );
 
       logs.push("Estrazione e riscontro graduatorie completati con successo.");
@@ -271,7 +273,8 @@ export default function App() {
               {
                 nome_istituto: item.nome_istituto,
                 codice_meccanografico: item.codice_meccanografico
-              }
+              },
+              (subUrl) => fetchWithProxyText(subUrl)
             );
 
             results.push({
