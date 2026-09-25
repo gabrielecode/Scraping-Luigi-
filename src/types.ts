@@ -1,6 +1,14 @@
 export type TipologiaPersonale = "ATA" | "DOCENTE";
 export type TipoPosto = "comune" | "sostegno";
-export type OriginePunteggio = "Esplicito" | "Incrociato" | "Incrociato (da verificare)" | "Non disponibile";
+export type OriginePunteggio = 
+  | "Esplicito" 
+  | "Incrociato" 
+  | "Incrociato (da verificare)" 
+  | "Decreto di Individuazione"
+  | "Graduatoria Definitiva d'Istituto"
+  | "Graduatoria Permanente ATA 24 Mesi"
+  | "Non disponibile"
+  | (string & {});
 
 export interface GraduatoriaIstitutoEntry {
   posizione: number;

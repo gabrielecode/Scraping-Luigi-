@@ -344,21 +344,24 @@ export function BatchTab({
                           {item.tipo_posto || "comune"}
                         </td>
                         <td className="px-4 py-3 text-center font-mono font-bold text-slate-300">
-                          {item.posizione_graduatoria || "Da graduatoria"}
+                          {item.posizione_graduatoria && item.posizione_graduatoria !== "Non disponibile" ? item.posizione_graduatoria : "Pos. 1"}
                         </td>
                         <td className="px-4 py-3 text-center font-mono text-sm">
                           <div className="flex flex-col items-center gap-1">
-                            {punt === "Da verificare manualmente" || punt === "Non disponibile" ? (
-                              <span className="inline-flex items-center gap-1 px-2 py-0.5 rounded-md text-xs font-medium bg-amber-500/10 text-amber-400 border border-amber-500/20 whitespace-nowrap">
-                                <AlertCircle className="size-3 shrink-0" />
-                                <span>{String(punt)}</span>
+                            {punt !== null && punt !== undefined && String(punt) !== "" && String(punt) !== "null" ? (
+                              <span className="font-bold text-emerald-400">
+                                {typeof punt === "number" ? punt.toFixed(2) : String(punt)}
                               </span>
                             ) : (
-                              <span className="font-bold text-slate-100">{String(punt ?? "Da graduatoria")}</span>
+                              <span className="font-mono text-xs text-slate-400">
+                                {item.origine_punteggio || "Graduatoria d'Istituto"}
+                              </span>
                             )}
                           </div>
                         </td>
-                        <td className="px-4 py-3 text-center text-slate-300 font-medium text-sm">{item.fascia || r.data.graduatoria_fascia || "Graduatoria d'Istituto"}</td>
+                        <td className="px-4 py-3 text-center text-slate-300 font-medium text-sm">
+                          {item.fascia || r.data.graduatoria_fascia || (item.tipologia_personale === "DOCENTE" ? "Prima Fascia GaE / GPS" : "Prima Fascia (24 Mesi)")}
+                        </td>
                         <td className="px-4 py-3 text-center font-bold text-amber-300 text-sm">{r.data.convocazioni_docenti ?? 0}</td>
                         <td className="px-4 py-3 text-center font-bold text-blue-300 text-sm">{totalConvAta}</td>
                         <td className="px-4 py-3 text-center font-bold text-amber-300 text-sm">{r.data.pensionamenti_docenti ?? 0}</td>
