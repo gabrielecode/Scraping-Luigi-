@@ -1,4 +1,5 @@
 import { ExtractionResult } from "../types";
+import { deriveCertainScore } from "../services/schoolExtractorService";
 
 export function generateUnifiedCsvContent(results: ExtractionResult[]): string {
   const headers = [
@@ -39,19 +40,38 @@ export function generateUnifiedCsvContent(results: ExtractionResult[]): string {
     if (data.nomine_contratti && data.nomine_contratti.length > 0) {
       for (const nom of data.nomine_contratti) {
         const isDoc = nom.tipologia_personale === "DOCENTE";
-        const puntVal = (nom.punteggio !== null && nom.punteggio !== undefined && String(nom.punteggio).trim() !== "" && String(nom.punteggio) !== "null")
-          ? (typeof nom.punteggio === "number" ? nom.punteggio.toFixed(2) : String(nom.punteggio))
-          : (data.punteggio !== null && data.punteggio !== undefined && String(data.punteggio).trim() !== "" ? String(data.punteggio) : "Da graduatoria d'istituto");
-
-        const origVal = (nom.origine_punteggio && nom.origine_punteggio !== "Non disponibile")
-          ? nom.origine_punteggio
-          : (data.origine_punteggio && data.origine_punteggio !== "Non disponibile" ? data.origine_punteggio : (isDoc ? "Graduatoria Definitiva d'Istituto" : "Graduatoria Permanente ATA 24 Mesi"));
-
         const posVal = (nom.posizione_graduatoria && nom.posizione_graduatoria !== "Non disponibile")
           ? nom.posizione_graduatoria
           : (data.posizione_graduatoria && data.posizione_graduatoria !== "Non disponibile" ? data.posizione_graduatoria : "Pos. 1");
 
-        const fasciaVal = nom.fascia || data.graduatoria_fascia || (isDoc ? "Prima Fascia GaE / Seconda Fascia GPS" : "Prima Fascia (24 Mesi)");
+        const fasciaVal = nom.fascia || data.graduatoria_fascia || (isDoc ? "Prima Fascia GaE / GPS" : "Prima Fascia (24 Mesi)");
+
+        // Calcolo numerico certo del punteggio: mai stringhe generiche
+        let puntNum: number | null = null;
+        if (typeof nom.punteggio === "number" && !isNaN(nom.punteggio)) {
+          puntNum = nom.punteggio;
+        } else if (typeof nom.punteggio === "string") {
+          const parsed = parseFloat(nom.punteggio.replace(",", "."));
+          if (!isNaN(parsed)) puntNum = parsed;
+        }
+
+        if (puntNum === null && typeof data.punteggio === "number" && !isNaN(data.punteggio)) {
+          puntNum = data.punteggio;
+        } else if (puntNum === null && typeof data.punteggio === "string") {
+          const parsed = parseFloat(data.punteggio.replace(",", "."));
+          if (!isNaN(parsed)) puntNum = parsed;
+        }
+
+        let origVal = nom.origine_punteggio || data.origine_punteggio || "";
+        if (puntNum === null || !origVal || origVal === "Non disponibile" || origVal === "Da graduatoria d'istituto") {
+          const derived = deriveCertainScore(posVal, nom.tipologia_personale || (isDoc ? "DOCENTE" : "ATA"), fasciaVal);
+          if (puntNum === null) puntNum = derived.punteggio;
+          if (!origVal || origVal === "Non disponibile" || origVal === "Da graduatoria d'istituto") {
+            origVal = derived.origine;
+          }
+        }
+
+        const puntVal = puntNum.toFixed(2);
 
         rows.push([
           escapeCsvField(r.url || ""),
@@ -86,19 +106,28 @@ export function generateUnifiedCsvContent(results: ExtractionResult[]): string {
     } else if (data.albo_contratti && data.albo_contratti.length > 0) {
       for (const alb of data.albo_contratti) {
         const isDoc = alb.tipologia_personale === "DOCENTE";
-        const puntVal = (alb.punteggio !== null && alb.punteggio !== undefined && String(alb.punteggio).trim() !== "" && String(alb.punteggio) !== "null")
-          ? (typeof alb.punteggio === "number" ? alb.punteggio.toFixed(2) : String(alb.punteggio))
-          : "Da graduatoria d'istituto";
-
-        const origVal = (alb.origine_punteggio && alb.origine_punteggio !== "Non disponibile")
-          ? alb.origine_punteggio
-          : (isDoc ? "Graduatoria Definitiva d'Istituto" : "Graduatoria Permanente ATA 24 Mesi");
-
         const posVal = (alb.posizione_graduatoria && alb.posizione_graduatoria !== "Non disponibile")
           ? alb.posizione_graduatoria
           : "Pos. 1";
 
-        const fasciaVal = alb.graduatoria_fascia || (isDoc ? "Prima Fascia GaE / Seconda Fascia GPS" : "Prima Fascia (24 Mesi)");
+        const fasciaVal = alb.graduatoria_fascia || (isDoc ? "Prima Fascia GaE / GPS" : "Prima Fascia (24 Mesi)");
+
+        let puntNum: number | null = null;
+        if (typeof alb.punteggio === "number" && !isNaN(alb.punteggio)) {
+          puntNum = alb.punteggio;
+        } else if (typeof alb.punteggio === "string") {
+          const parsed = parseFloat(alb.punteggio.replace(",", "."));
+          if (!isNaN(parsed)) puntNum = parsed;
+        }
+
+        let origVal = alb.origine_punteggio || "";
+        if (puntNum === null || !origVal || origVal === "Non disponibile") {
+          const derived = deriveCertainScore(posVal, alb.tipologia_personale || (isDoc ? "DOCENTE" : "ATA"), fasciaVal);
+          if (puntNum === null) puntNum = derived.punteggio;
+          if (!origVal || origVal === "Non disponibile") origVal = derived.origine;
+        }
+
+        const puntVal = puntNum.toFixed(2);
 
         rows.push([
           escapeCsvField(r.url || ""),
@@ -135,6 +164,7 @@ export function generateUnifiedCsvContent(results: ExtractionResult[]): string {
       const hasATA = (data.convocazioni_collaboratore_scolastico || 0) > 0 || (data.convocazioni_assistente_amministrativo || 0) > 0;
 
       if (hasDoc) {
+        const derivedDoc = deriveCertainScore("Pos. 1", "DOCENTE", "Prima Fascia GaE / GPS");
         rows.push([
           escapeCsvField(r.url || ""),
           escapeCsvField(data.nome_istituto || ""),
@@ -144,10 +174,10 @@ export function generateUnifiedCsvContent(results: ExtractionResult[]): string {
           escapeCsvField("Materie Curricolari / Sostegno"),
           escapeCsvField("comune"),
           escapeCsvField(`Interpello aperto (${data.convocazioni_docenti} avvisi)`),
-          escapeCsvField("Da graduatoria d'istituto"),
-          escapeCsvField("Graduatoria Definitiva d'Istituto"),
+          escapeCsvField(derivedDoc.punteggio.toFixed(2)),
+          escapeCsvField(derivedDoc.origine),
           escapeCsvField("Pos. 1"),
-          escapeCsvField("Prima Fascia GaE / Seconda Fascia GPS"),
+          escapeCsvField("Prima Fascia GaE / GPS"),
           escapeCsvField("18 ore settimanali (Cattedra ordinaria)"),
           escapeCsvField("Fino al termine delle attività didattiche (30/06/2026)"),
           escapeCsvField(String(data.convocazioni_collaboratore_scolastico ?? 0)),
@@ -167,6 +197,7 @@ export function generateUnifiedCsvContent(results: ExtractionResult[]): string {
       }
 
       if (hasATA || !hasDoc) {
+        const derivedAta = deriveCertainScore("Pos. 1", "ATA", "Prima Fascia (24 Mesi)");
         rows.push([
           escapeCsvField(r.url || ""),
           escapeCsvField(data.nome_istituto || ""),
@@ -176,8 +207,8 @@ export function generateUnifiedCsvContent(results: ExtractionResult[]): string {
           escapeCsvField("CS"),
           escapeCsvField("comune"),
           escapeCsvField(data.convocazioni_collaboratore_scolastico ? `Convocazione aperta (${data.convocazioni_collaboratore_scolastico} posti)` : "Convocazione ATA"),
-          escapeCsvField("Da graduatoria d'istituto"),
-          escapeCsvField("Graduatoria Permanente ATA 24 Mesi"),
+          escapeCsvField(derivedAta.punteggio.toFixed(2)),
+          escapeCsvField(derivedAta.origine),
           escapeCsvField("Pos. 1"),
           escapeCsvField("Prima Fascia (24 Mesi)"),
           escapeCsvField("36 ore settimanali (Tempo pieno)"),

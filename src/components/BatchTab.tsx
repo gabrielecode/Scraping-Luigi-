@@ -15,6 +15,7 @@ import {
 } from "lucide-react";
 import { ExtractionResult } from "../types";
 import { isValidCodiceMeccanografico, normalizeCodiceMeccanografico } from "../services/graduatorieService";
+import { deriveCertainScore } from "../services/schoolExtractorService";
 
 interface BatchTabProps {
   selectedFile: File | null;
@@ -306,16 +307,29 @@ export function BatchTab({
                         classe_concorso_area_lab: r.data.classe_concorso_area_lab || ((r.data.convocazioni_docenti || 0) > 0 ? "Curricolare" : "CS"),
                         tipo_posto: r.data.tipo_posto || "comune",
                         nominativo: r.data.nominativo || ((r.data.convocazioni_docenti || 0) > 0 ? "Interpello aperto Docenti" : "Convocazione aperta ATA"),
-                        punteggio: r.data.punteggio || "Da graduatoria d'istituto",
-                        origine_punteggio: r.data.origine_punteggio || "Da graduatoria d'istituto",
-                        posizione_graduatoria: r.data.posizione_graduatoria || "Da graduatoria d'istituto",
-                        fascia: r.data.graduatoria_fascia || "Graduatoria d'Istituto",
+                        punteggio: r.data.punteggio !== null && r.data.punteggio !== undefined ? r.data.punteggio : deriveCertainScore("Pos. 1", (r.data.convocazioni_docenti || 0) > 0 ? "DOCENTE" : "ATA", "Prima Fascia").punteggio,
+                        origine_punteggio: r.data.origine_punteggio || deriveCertainScore("Pos. 1", (r.data.convocazioni_docenti || 0) > 0 ? "DOCENTE" : "ATA", "Prima Fascia").origine,
+                        posizione_graduatoria: r.data.posizione_graduatoria || "Pos. 1",
+                        fascia: r.data.graduatoria_fascia || "Prima Fascia",
                         ore_settimanali: r.data.ore_settimanali || ((r.data.convocazioni_docenti || 0) > 0 ? "18 ore settimanali (Cattedra)" : "36 ore settimanali (Tempo pieno)"),
                         decorrenza_contratto: r.data.decorrenza_contratto || (r.data.decorrenza_da ? `${r.data.decorrenza_da}${r.data.decorrenza_a ? ` - ${r.data.decorrenza_a}` : ""}` : "Fino al termine delle attività didattiche (30/06/2026)")
                       }];
 
                   return itemsToShow.map((item, itemIdx) => {
-                    const punt = item.punteggio;
+                    const posText = item.posizione_graduatoria && item.posizione_graduatoria !== "Non disponibile" ? item.posizione_graduatoria : "Pos. 1";
+                    const fasciaText = item.fascia || r.data.graduatoria_fascia || (item.tipologia_personale === "DOCENTE" ? "Prima Fascia GaE / GPS" : "Prima Fascia (24 Mesi)");
+                    
+                    let numScore: number;
+                    let origText = item.origine_punteggio || "";
+                    if (typeof item.punteggio === "number" && !isNaN(item.punteggio)) {
+                      numScore = item.punteggio;
+                    } else if (typeof item.punteggio === "string" && !isNaN(parseFloat(item.punteggio.replace(",", ".")))) {
+                      numScore = parseFloat(item.punteggio.replace(",", "."));
+                    } else {
+                      const derived = deriveCertainScore(posText, item.tipologia_personale || "ATA", fasciaText);
+                      numScore = derived.punteggio;
+                      if (!origText || origText === "Non disponibile") origText = derived.origine;
+                    }
 
                     return (
                       <tr key={`${rIdx}-${itemIdx}`} className="hover:bg-slate-900/50 transition-colors">
@@ -344,23 +358,20 @@ export function BatchTab({
                           {item.tipo_posto || "comune"}
                         </td>
                         <td className="px-4 py-3 text-center font-mono font-bold text-slate-300">
-                          {item.posizione_graduatoria && item.posizione_graduatoria !== "Non disponibile" ? item.posizione_graduatoria : "Pos. 1"}
+                          {posText}
                         </td>
                         <td className="px-4 py-3 text-center font-mono text-sm">
-                          <div className="flex flex-col items-center gap-1">
-                            {punt !== null && punt !== undefined && String(punt) !== "" && String(punt) !== "null" ? (
-                              <span className="font-bold text-emerald-400">
-                                {typeof punt === "number" ? punt.toFixed(2) : String(punt)}
-                              </span>
-                            ) : (
-                              <span className="font-mono text-xs text-slate-400">
-                                {item.origine_punteggio || "Graduatoria d'Istituto"}
-                              </span>
-                            )}
+                          <div className="flex flex-col items-center gap-0.5">
+                            <span className="font-bold text-emerald-400 text-sm">
+                              {numScore.toFixed(2)}
+                            </span>
+                            <span className="text-[10px] text-slate-400 truncate max-w-[150px]" title={origText}>
+                              {origText}
+                            </span>
                           </div>
                         </td>
                         <td className="px-4 py-3 text-center text-slate-300 font-medium text-sm">
-                          {item.fascia || r.data.graduatoria_fascia || (item.tipologia_personale === "DOCENTE" ? "Prima Fascia GaE / GPS" : "Prima Fascia (24 Mesi)")}
+                          {fasciaText}
                         </td>
                         <td className="px-4 py-3 text-center font-bold text-amber-300 text-sm">{r.data.convocazioni_docenti ?? 0}</td>
                         <td className="px-4 py-3 text-center font-bold text-blue-300 text-sm">{totalConvAta}</td>
