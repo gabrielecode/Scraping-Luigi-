@@ -138,43 +138,10 @@ export function extractScoreRobust(line: string): number | null {
 }
 
 /**
- * Calcola il punteggio numerico certo e verificato per una posizione e fascia quando
- * l'atto riporta la posizione ma non esplicita il numero del punteggio nella riga.
+ * Restituisce valori vuoti/non disponibili per punteggio e origine senza formule inventate.
  */
-export function deriveCertainScore(posStr: string, tipologia: string, fascia: string): { punteggio: number; origine: string } {
-  const posMatch = posStr.match(/([0-9]+)/);
-  const pos = posMatch ? parseInt(posMatch[1], 10) : 1;
-
-  if (tipologia === 'ATA') {
-    if (fascia.includes('24') || fascia.includes('Prima') || fascia.includes('1')) {
-      const score = Math.max(10.50, 75.00 - Math.log(pos) * 10.50);
-      return {
-        punteggio: Number(score.toFixed(2)),
-        origine: `Graduatoria Permanente ATA 24 Mesi (Pos. ${pos} verificata)`
-      };
-    } else {
-      const score = Math.max(7.50, 24.00 - Math.log(pos) * 2.80);
-      return {
-        punteggio: Number(score.toFixed(2)),
-        origine: `Graduatoria III Fascia d'Istituto (Pos. ${pos} verificata)`
-      };
-    }
-  } else {
-    // DOCENTE
-    if (fascia.includes('Prima') || fascia.includes('1') || fascia.includes('GaE')) {
-      const score = Math.max(24.00, 120.00 - Math.log(pos) * 16.00);
-      return {
-        punteggio: Number(score.toFixed(2)),
-        origine: `Graduatoria GaE / GPS 1 (Pos. ${pos} verificata)`
-      };
-    } else {
-      const score = Math.max(18.00, 85.00 - Math.log(pos) * 12.00);
-      return {
-        punteggio: Number(score.toFixed(2)),
-        origine: `Graduatoria GPS 2 / Istituto (Pos. ${pos} verificata)`
-      };
-    }
-  }
+export function deriveCertainScore(posStr: string, tipologia: string, fascia: string): { punteggio: number | null; origine: string } {
+  return { punteggio: null, origine: "Non disponibile" };
 }
 
 /**
@@ -201,56 +168,42 @@ export function extractGraduatoriaTableEntries(text: string, schoolUrl: string):
 
     // Se la riga ha almeno punteggio o posizione unita a profilo/nomina
     if (puntDetected !== null || (posMatch && (fasciaMatch || lower.includes("decreto") || lower.includes("individuato")))) {
-      let posStr = posMatch ? `Pos. ${posMatch[1]}` : "Pos. 1";
-      let fasciaStr = fasciaMatch ? formatFasciaLabel(fasciaMatch[0]) : "Prima Fascia";
-      let oreStr = oreMatch ? `${oreMatch[1]} ore settimanali` : "";
+      let posStr = posMatch ? `Pos. ${posMatch[1]}` : "Non disponibile";
+      let fasciaStr = fasciaMatch ? formatFasciaLabel(fasciaMatch[0]) : "Non disponibile";
+      let oreStr = oreMatch ? `${oreMatch[1]} ore settimanali` : "Non disponibile";
 
-      let tipologia: TipologiaPersonale = "ATA";
-      let profilo = "Collaboratore Scolastico";
-      let cdc = "CS";
+      let tipologia: TipologiaPersonale = lower.includes("docent") || lower.includes("prof") || lower.includes("insegnant") || /\b[a-z]{1,2}-[0-9]{2}\b/i.test(lower) ? "DOCENTE" : "ATA";
+      let profilo = "Non disponibile";
+      let cdc = "Non disponibile";
       let tipoPosto: TipoPosto = lower.includes("sostegno") ? "sostegno" : "comune";
 
-      if (lower.includes("docent") || lower.includes("prof") || lower.includes("insegnant") || /\b[a-z]{1,2}-[0-9]{2}\b/i.test(lower)) {
-        tipologia = "DOCENTE";
-        profilo = "Docente Scuola Secondaria";
-        cdc = "A-22";
+      if (tipologia === "DOCENTE") {
+        profilo = "Docente";
+        cdc = "Non disponibile";
         const cdcM = line.match(/\b([A-B]-?[0-9]{2}|ADMM|ADSS|ADEE|AAAA|EEEE)\b/i);
         if (cdcM) {
           cdc = cdcM[1].toUpperCase();
           profilo = cdc.startsWith("AD") ? `Docente Sostegno ${cdc}` : `Docente ${cdc}`;
         }
-        if (!oreStr) oreStr = "18 ore settimanali (Cattedra ordinaria)";
+        if (oreMatch) oreStr = `${oreMatch[1]} ore settimanali`;
       } else if (lower.includes("amministrativ") || lower.includes("profilo aa")) {
         profilo = "Assistente Amministrativo";
         cdc = "AA";
-        if (!oreStr) oreStr = "36 ore settimanali (Tempo pieno)";
       } else if (lower.includes("tecnic") || lower.includes("profilo at")) {
         profilo = "Assistente Tecnico";
         cdc = "AT";
-        if (!oreStr) oreStr = "36 ore settimanali (Tempo pieno)";
-      } else {
+      } else if (lower.includes("collaboratore") || lower.includes("scolastico") || lower.includes("profilo cs")) {
         profilo = "Collaboratore Scolastico";
         cdc = "CS";
-        if (!oreStr) oreStr = "36 ore settimanali (Tempo pieno)";
       }
 
-      // Risolvi punteggio certo: prioritario quello estratto dal testo, altrimenti derivato da posizione e fascia
-      let punteggio: number;
-      let originePunteggio: string;
-
-      if (puntDetected !== null) {
-        punteggio = puntDetected;
-        originePunteggio = lower.includes("decreto") ? "Decreto di Individuazione (Estratto da atto)" : "Graduatoria Ufficiale (Punteggio certificato)";
-      } else {
-        const derived = deriveCertainScore(posStr, tipologia, fasciaStr);
-        punteggio = derived.punteggio;
-        originePunteggio = derived.origine;
-      }
+      let punteggio: number | null = puntDetected;
+      let originePunteggio: string = puntDetected !== null ? (lower.includes("decreto") ? "Decreto di Individuazione" : "Graduatoria Ufficiale") : "Non disponibile";
 
       // Nominativo
       const nomMatch = line.match(/[-–]\s*([A-Z\s]{4,30})\s*[-–]/) ||
                        line.match(/(?:candidat[oa]|nominat[oa]|individuato|a favore di|al sig\.?|alla sig\.?ra)[:\s]+([A-Z][a-zàèéìòù]+(?:\s+[A-Z][a-zàèéìòù]+){1,3})/i);
-      const nominativo = nomMatch ? nomMatch[1].trim() : `Nominativo individuato (${posStr})`;
+      const nominativo = nomMatch ? nomMatch[1].trim() : "Non disponibile";
 
       const key = `${tipologia}_${profilo}_${punteggio}_${posStr}_${nominativo}`;
       if (!seen.has(key)) {
@@ -268,8 +221,8 @@ export function extractGraduatoriaTableEntries(text: string, schoolUrl: string):
           posizione_graduatoria: posStr,
           fascia: fasciaStr,
           ore_settimanali: oreStr,
-          decorrenza_contratto: "Fino al termine delle attività didattiche (30/06/2026)",
-          durata_contratto_mesi: "9 mesi",
+          decorrenza_contratto: "Non disponibile",
+          durata_contratto_mesi: "Non disponibile",
           durata_contratto_giorni: "",
           link_del_documento: schoolUrl
         });
@@ -439,140 +392,63 @@ export function analyzeSchoolContentHeuristic(
       // Estrai dettagli numerici esatti
       const puntDetected = extractScoreRobust(block);
 
-      let posStr = "Pos. 1";
       const posMatch = block.match(/(?:pos(?:izione)?\.?|posto|graduatoria n\.?)[:\s#]+([0-9]{1,4})/i);
-      if (posMatch) {
-        posStr = `Pos. ${posMatch[1]}`;
-      }
+      let posStr = posMatch ? `Pos. ${posMatch[1]}` : "Non disponibile";
 
-      let fasciaStr = "Prima Fascia";
       const fasciaMatch = block.match(/(?:fascia|graduatoria di)[:\s]+([1-3]|prima|seconda|terza|I|II|III)\b/i);
-      if (fasciaMatch) {
-        fasciaStr = formatFasciaLabel(fasciaMatch[1]);
-      } else if (lower.includes("24 mesi") || lower.includes("permanente")) {
-        fasciaStr = "Prima Fascia (24 Mesi)";
-      } else if (lower.includes("seconda fascia") || lower.includes("gps 1")) {
-        fasciaStr = "Seconda Fascia";
-      } else if (lower.includes("terza fascia") || lower.includes("gps 2")) {
-        fasciaStr = "Terza Fascia";
-      }
+      let fasciaStr = fasciaMatch ? formatFasciaLabel(fasciaMatch[1]) : (lower.includes("24 mesi") ? "Prima Fascia (24 Mesi)" : "Non disponibile");
 
-      // Ore settimanali
-      let oreStr = "";
       const oreMatch = block.match(/([0-9]{1,2}(?:\/[0-9]{1,2})?)\s*(?:ore|h\b|settimanali)/i);
-      if (oreMatch) {
-        oreStr = `${oreMatch[1]} ore settimanali`;
-      }
+      let oreStr = oreMatch ? `${oreMatch[1]} ore settimanali` : "Non disponibile";
 
       // Decorrenza
-      let decStr = "";
+      let decStr = "Non disponibile";
       const decMatch = block.match(/(?:dal|decorrenza)[:\s]+([0-9]{1,2}[\/-][0-9]{1,2}[\/-][0-9]{2,4})(?:\s+(?:al|fino al)\s+([0-9]{1,2}[\/-][0-9]{1,2}[\/-][0-9]{2,4}|termine delle attivit[àa]))?/i);
       if (decMatch) {
         decStr = decMatch[2] ? `${decMatch[1]} - ${decMatch[2]}` : decMatch[1];
-      } else if (lower.includes("30/06") || lower.includes("30 giugno") || lower.includes("termine delle attivit")) {
-        decStr = "Fino al termine delle attività didattiche (30/06/2026)";
-      } else if (lower.includes("31/08") || lower.includes("31 agosto") || lower.includes("annuale")) {
-        decStr = "Fino al termine dell'anno scolastico (31/08/2026)";
-      } else if (lower.includes("avente diritto")) {
-        decStr = "Fino all'avente diritto";
+      } else if (lower.includes("30/06") || lower.includes("30 giugno")) {
+        decStr = "30/06/2026";
+      } else if (lower.includes("31/08") || lower.includes("31 agosto")) {
+        decStr = "31/08/2026";
       }
 
       // Tipologia, Profilo, Classe di concorso, Tipo posto
-      let tipologia: TipologiaPersonale = "ATA";
-      let profilo = "Collaboratore Scolastico";
-      let cdc = "CS";
+      let tipologia: TipologiaPersonale = lower.includes("docent") || lower.includes("prof") || lower.includes("insegnant") || /\b[a-z]{1,2}-[0-9]{2}\b/i.test(lower) ? "DOCENTE" : "ATA";
+      let profilo = "Non disponibile";
+      let cdc = "Non disponibile";
       let tipoPosto: TipoPosto = lower.includes("sostegno") ? "sostegno" : "comune";
 
-      if (isDocente) {
-        tipologia = "DOCENTE";
-        profilo = "Docente Scuola Secondaria / Primaria";
-        cdc = "A-22";
-
+      if (tipologia === "DOCENTE") {
+        profilo = "Docente";
         const cdcMatch = block.match(/\b([A-B]-?[0-9]{2}|ADMM|ADSS|ADEE|AAAA|EEEE|AB24|AA24|AC24)\b/i);
         if (cdcMatch) {
           cdc = cdcMatch[1].toUpperCase();
-          if (cdc === "ADMM") {
-            profilo = "Docente Sostegno Scuola Secondaria I Grado";
-            tipoPosto = "sostegno";
-          } else if (cdc === "ADSS") {
-            profilo = "Docente Sostegno Scuola Secondaria II Grado";
-            tipoPosto = "sostegno";
-          } else if (cdc === "ADEE") {
-            profilo = "Docente Sostegno Scuola Primaria";
-            tipoPosto = "sostegno";
-          } else if (cdc === "EEEE") {
-            profilo = "Docente Scuola Primaria";
-          } else if (cdc === "AAAA") {
-            profilo = "Docente Scuola dell'Infanzia";
-          } else {
-            profilo = `Docente Classe di Concorso ${cdc}`;
-          }
-        } else if (lower.includes("primaria")) {
-          profilo = "Docente Scuola Primaria";
-          cdc = tipoPosto === "sostegno" ? "ADEE" : "EEEE";
-        } else if (lower.includes("infanzia")) {
-          profilo = "Docente Scuola dell'Infanzia";
-          cdc = "AAAA";
-        } else if (lower.includes("secondaria")) {
-          profilo = "Docente Scuola Secondaria";
-          cdc = tipoPosto === "sostegno" ? "ADMM" : "A-22";
-        }
-
-        if (!oreStr) {
-          oreStr = lower.includes("primaria") ? "24 ore settimanali" : lower.includes("infanzia") ? "25 ore settimanali" : "18 ore settimanali (Cattedra)";
-        }
-        if (!decStr) {
-          decStr = "Fino al termine delle attività didattiche (30/06/2026)";
+          profilo = cdc.startsWith("AD") ? `Docente Sostegno ${cdc}` : `Docente ${cdc}`;
         }
       } else if (isAA) {
-        tipologia = "ATA";
         profilo = "Assistente Amministrativo";
         cdc = "AA";
-        if (!oreStr) oreStr = "36 ore settimanali (Tempo pieno)";
-        if (!decStr) decStr = "Fino al termine delle attività didattiche (30/06/2026)";
       } else if (isAT) {
-        tipologia = "ATA";
         profilo = "Assistente Tecnico";
         cdc = "AT";
-        if (!oreStr) oreStr = "36 ore settimanali (Tempo pieno)";
-        if (!decStr) decStr = "Fino al termine delle attività didattiche (30/06/2026)";
       } else if (isCuoco) {
-        tipologia = "ATA";
         profilo = "Cuoco";
         cdc = "CS";
-        if (!oreStr) oreStr = "36 ore settimanali (Tempo pieno)";
-        if (!decStr) decStr = "Fino al termine delle attività didattiche (30/06/2026)";
       } else if (isAgrario) {
-        tipologia = "ATA";
         profilo = "Addetto alle aziende agrarie";
         cdc = "CR";
-        if (!oreStr) oreStr = "36 ore settimanali (Tempo pieno)";
-        if (!decStr) decStr = "Fino al termine delle attività didattiche (30/06/2026)";
-      } else {
-        tipologia = "ATA";
+      } else if (isCS || lower.includes("collaboratore")) {
         profilo = "Collaboratore Scolastico";
         cdc = "CS";
-        if (!oreStr) oreStr = "36 ore settimanali (Tempo pieno)";
-        if (!decStr) decStr = "Fino al termine delle attività didattiche (30/06/2026)";
       }
 
-      // Risolvi punteggio certo: prioritario quello estratto dal testo, altrimenti derivato da posizione e fascia
-      let punteggio: number;
-      let originePunteggio: string;
-
-      if (puntDetected !== null) {
-        punteggio = puntDetected;
-        originePunteggio = lower.includes("decreto") ? "Decreto di Individuazione (Estratto da atto)" : "Graduatoria Ufficiale (Punteggio certificato)";
-      } else {
-        const derived = deriveCertainScore(posStr, tipologia, fasciaStr);
-        punteggio = derived.punteggio;
-        originePunteggio = derived.origine;
-      }
+      let punteggio: number | null = puntDetected;
+      let originePunteggio: string = puntDetected !== null ? (lower.includes("decreto") ? "Decreto di Individuazione" : "Graduatoria Ufficiale") : "Non disponibile";
 
       // Nominativo
       let candidateName = targetNominativo || (block.match(/(?:nominativo|candidat[oa]|docente|supplente|alla sig\.?ra|al sig\.?|individuato|assegnato a)[:\s]+([A-Z][a-zàèéìòù]+(?:\s+[A-Z][a-zàèéìòù]+){1,3})/)?.[1]);
       if (!candidateName) {
-        candidateName = lower.includes("interpell") ? "Interpello aperto / Selezione pubblica" : "Convocazione / Selezione aperta";
+        candidateName = "Non disponibile";
       }
 
       const key = `${tipologia}_${profilo}_${cdc}_${decStr}`;
@@ -592,81 +468,12 @@ export function analyzeSchoolContentHeuristic(
           fascia: fasciaStr,
           ore_settimanali: oreStr,
           decorrenza_contratto: decStr,
-          durata_contratto_mesi: "",
+          durata_contratto_mesi: "Non disponibile",
           durata_contratto_giorni: "",
           link_del_documento: url
         });
       }
     }
-  }
-
-  // 3. Se sono state contate convocazioni (es. Docenti o ATA) ma mancavano dettagli singoli:
-  const schoolProfile = deduceSchoolOrderAndProfile(schoolNameHint || "");
-
-  if (conv.docenti > 0 && !nomine.some(n => n.tipologia_personale === "DOCENTE")) {
-    const derivedDoc = deriveCertainScore("Pos. 1", "DOCENTE", "Prima Fascia GaE / Seconda Fascia GPS");
-    nomine.push({
-      nome_istituto: "",
-      codice_meccanografico: "",
-      nominativo: targetNominativo || `Interpello aperto (${conv.docenti} posti/avvisi)`,
-      tipologia_personale: "DOCENTE",
-      profilo_lavorativo: schoolProfile.tipologiaDocente,
-      classe_concorso_area_lab: schoolProfile.defaultCdc,
-      tipo_posto: "comune",
-      punteggio: derivedDoc.punteggio,
-      origine_punteggio: derivedDoc.origine,
-      posizione_graduatoria: "Pos. 1",
-      fascia: "Prima Fascia GaE / Seconda Fascia GPS",
-      ore_settimanali: schoolProfile.defaultOreDocente,
-      decorrenza_contratto: "Fino al termine delle attività didattiche (30/06/2026)",
-      durata_contratto_mesi: "9 mesi",
-      durata_contratto_giorni: "",
-      link_del_documento: url
-    });
-  }
-
-  if (conv.collaboratore_scolastico > 0 && !nomine.some(n => n.profilo_lavorativo.includes("Collaboratore"))) {
-    const derivedAta = deriveCertainScore("Pos. 1", "ATA", "Prima Fascia (24 Mesi)");
-    nomine.push({
-      nome_istituto: "",
-      codice_meccanografico: "",
-      nominativo: targetNominativo || `Convocazione aperta (${conv.collaboratore_scolastico} posti/avvisi)`,
-      tipologia_personale: "ATA",
-      profilo_lavorativo: "Collaboratore Scolastico",
-      classe_concorso_area_lab: "CS",
-      tipo_posto: "comune",
-      punteggio: derivedAta.punteggio,
-      origine_punteggio: derivedAta.origine,
-      posizione_graduatoria: "Pos. 1",
-      fascia: "Prima Fascia (24 Mesi)",
-      ore_settimanali: "36 ore settimanali (Tempo pieno)",
-      decorrenza_contratto: "Fino al termine delle attività didattiche (30/06/2026)",
-      durata_contratto_mesi: "9 mesi",
-      durata_contratto_giorni: "",
-      link_del_documento: url
-    });
-  }
-
-  if (conv.assistente_amministrativo > 0 && !nomine.some(n => n.profilo_lavorativo.includes("Amministrativo"))) {
-    const derivedAa = deriveCertainScore("Pos. 1", "ATA", "Prima Fascia (24 Mesi)");
-    nomine.push({
-      nome_istituto: "",
-      codice_meccanografico: "",
-      nominativo: targetNominativo || `Convocazione aperta (${conv.assistente_amministrativo} posti/avvisi)`,
-      tipologia_personale: "ATA",
-      profilo_lavorativo: "Assistente Amministrativo",
-      classe_concorso_area_lab: "AA",
-      tipo_posto: "comune",
-      punteggio: derivedAa.punteggio,
-      origine_punteggio: derivedAa.origine,
-      posizione_graduatoria: "Pos. 1",
-      fascia: "Prima Fascia (24 Mesi)",
-      ore_settimanali: "36 ore settimanali (Tempo pieno)",
-      decorrenza_contratto: "Fino al termine delle attività didattiche (30/06/2026)",
-      durata_contratto_mesi: "9 mesi",
-      durata_contratto_giorni: "",
-      link_del_documento: url
-    });
   }
 
   return {
@@ -985,18 +792,40 @@ Testo:
     note_cross_reference: firstNom?.note_cross_reference || ""
   };
 
-  // Se ci sono graduatorie caricate nel sistema, applica resolveFromGraduatorie
-  if (graduatorie && graduatorie.length > 0) {
-    try {
-      const resolved = await resolveFromGraduatorie(finalData, {
-        targetUrl: effectiveUrl,
-        initialContent: aggregatedText
-      });
-      return resolved;
-    } catch {
-      return finalData;
-    }
+  // Applica resolveFromGraduatorie con fetchProxyFn, fetchAiFn e pdfTextExtractor
+  try {
+    const resolved = await resolveFromGraduatorie(finalData, {
+      apiKey: apiKey,
+      targetUrl: effectiveUrl,
+      initialContent: aggregatedText,
+      fetchProxyFn: async (subUrl: string, asArrayBuffer?: boolean) => {
+        if (!fetchSubPageFn) {
+          return { data: null, format: "html" };
+        }
+        const targetFetchUrl = asArrayBuffer ? `${subUrl}${subUrl.includes('?') ? '&' : '?'}raw=1` : subUrl;
+        const resText = await fetchSubPageFn(targetFetchUrl);
+        if (asArrayBuffer) {
+          const buf = new TextEncoder().encode(resText).buffer;
+          return { data: buf, format: "buffer" };
+        }
+        return { data: resText, format: "html" };
+      },
+      fetchAiFn: async (promptText: string, sysPrompt: string) => {
+        if (!apiKey || !apiKey.trim()) throw new Error("API Key mancante");
+        const resStr = await extractWithOpenRouter(promptText, apiKey, sysPrompt);
+        try {
+          return JSON.parse(resStr);
+        } catch {
+          return resStr;
+        }
+      },
+      pdfTextExtractor: async (buffer: ArrayBuffer, maxPages?: number) => {
+        const res = await extractTextFromPdfBuffer(new Uint8Array(buffer), maxPages);
+        return { text: res.text, numPages: res.numPages };
+      }
+    });
+    return resolved;
+  } catch {
+    return finalData;
   }
-
-  return finalData;
 }

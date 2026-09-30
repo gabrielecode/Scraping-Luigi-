@@ -31,9 +31,10 @@ import {
   getStoredGraduatorie, 
   saveStoredGraduatorie, 
   crossReferenceNomina, 
-  extractWithOpenRouter 
+  extractWithOpenRouter,
+  findGraduatoriaCandidateLinks
 } from "./services/graduatorieService";
-import { extractSchoolData } from "./services/schoolExtractorService";
+import { extractSchoolData, analyzeSchoolContentHeuristic } from "./services/schoolExtractorService";
 import { extractTextFromPdfBuffer, extractPdfsFromHtml } from "./services/pdfService";
 import { generateUnifiedCsvContent } from "./utils/exportUtils";
 import { parseSchoolUrlsFromCsv } from "./utils/csvParser";
@@ -337,11 +338,6 @@ export default function App() {
   const handleAlboScan = async (e: React.FormEvent) => {
     e.preventDefault();
     if (!alboUrlInput.trim()) return;
-    if (!openRouterApiKey.trim()) {
-      setAlboScanError("Inserisci una chiave API OpenRouter valida nelle impostazioni.");
-      setIsSettingsOpen(true);
-      return;
-    }
 
     setIsScanningAlbo(true);
     setAlboScanError("");
@@ -354,33 +350,61 @@ export default function App() {
       const html = await fetchWithProxyText(alboUrlInput);
       logs.push("Analisi struttura pagina e identificazione bandi...");
 
-      const contratti = [
-        {
-          titolo_bando: "Avviso convocazione supplenza annuale Collaboratore Scolastico",
-          data_pubblicazione: "10/09/2026",
-          tipologia_personale: "ATA",
-          profilo_professionale: "Collaboratore scolastico TD",
-          graduatoria_fascia: "Terza fascia",
-          punteggio: 11.25,
-          origine_punteggio: "Esplicito",
-          posizione_graduatoria: "301",
-          ore_settimanali: "36 ore",
-          decorrenza_da: "14/09/2026",
-          decorrenza_a: "31/08/2027",
-          note_filtro: "Conforme 6 mesi",
-          pdf_url: alboUrlInput
+      const candidateLinks = findGraduatoriaCandidateLinks(html, alboUrlInput);
+      const linksToScan = candidateLinks.length > 0 ? candidateLinks.slice(0, 6) : [alboUrlInput];
+      logs.push(`Trovati ${linksToScan.length} link da analizzare.`);
+
+      const allContratti: any[] = [];
+      let detectedFascia = "Non disponibile";
+      let detectedProfilo = "Non disponibile";
+
+      for (const link of linksToScan) {
+        try {
+          const subHtml = await fetchWithProxyText(link);
+          const analysis = analyzeSchoolContentHeuristic(subHtml, link);
+
+          if (analysis.nomine && analysis.nomine.length > 0) {
+            for (const nom of analysis.nomine) {
+              allContratti.push({
+                titolo_bando: nom.nominativo !== "Non disponibile" ? `Nomina / Atto: ${nom.nominativo}` : `Bando / Convocazione (${nom.profilo_lavorativo})`,
+                data_pubblicazione: "Non disponibile",
+                tipologia_personale: nom.tipologia_personale,
+                profilo_professionale: nom.profilo_lavorativo,
+                graduatoria_fascia: nom.fascia || "Non disponibile",
+                punteggio: nom.punteggio,
+                origine_punteggio: nom.origine_punteggio,
+                posizione_graduatoria: nom.posizione_graduatoria,
+                ore_settimanali: nom.ore_settimanali,
+                decorrenza_da: nom.decorrenza_contratto,
+                decorrenza_a: "Non disponibile",
+                note_filtro: "Estratto da atto reale",
+                pdf_url: link
+              });
+              if (nom.fascia && nom.fascia !== "Non disponibile") detectedFascia = nom.fascia;
+              if (nom.profilo_lavorativo && nom.profilo_lavorativo !== "Non disponibile") detectedProfilo = nom.profilo_lavorativo;
+            }
+          }
+        } catch {
+          // skip failed sublink
         }
-      ];
+      }
+
+      if (allContratti.length === 0) {
+        logs.push("Nessun atto trovato.");
+        setAlboScanError("Nessun atto trovato.");
+      } else {
+        logs.push(`Trovati ${allContratti.length} atti conformi.`);
+      }
 
       setAlboScanResult({
         alboUrl: alboUrlInput,
-        graduatoria_fascia: "Terza fascia",
-        profilo_professionale: "Collaboratore scolastico TD",
-        contratti,
-        logs: [...logs, "Trovati 1 atti conformi negli ultimi 6 mesi."]
+        graduatoria_fascia: detectedFascia,
+        profilo_professionale: detectedProfilo,
+        contratti: allContratti,
+        logs
       });
     } catch (err: any) {
-      setAlboScanError(err.message || "Errore durante la scansione dell'albo.");
+      setAlboScanError(err.message || "Nessun atto trovato.");
     } finally {
       setIsScanningAlbo(false);
     }
@@ -398,13 +422,16 @@ export default function App() {
       const buffer = await selectedPdfFile.arrayBuffer();
       const pdfRes = await extractTextFromPdfBuffer(new Uint8Array(buffer));
       
+      const heuristic = analyzeSchoolContentHeuristic(pdfRes.text, selectedPdfFile.name);
+      const firstNom = heuristic.nomine[0];
+
       const extractedData = {
-        nome_istituto: "Istituto Scolastico da PDF",
-        codice_meccanografico: "CHIC81000A",
-        profilo_lavorativo: "Collaboratore scolastico TD",
-        punteggio: 11.25,
-        origine_punteggio: "Esplicito" as const,
-        decorrenza_contratto: "14/09/2026 - 31/08/2027"
+        nome_istituto: firstNom?.nome_istituto || "Non disponibile",
+        codice_meccanografico: firstNom?.codice_meccanografico || "Non disponibile",
+        profilo_lavorativo: firstNom?.profilo_lavorativo || "Non disponibile",
+        punteggio: firstNom?.punteggio ?? null,
+        origine_punteggio: firstNom?.origine_punteggio || "Non disponibile",
+        decorrenza_contratto: firstNom?.decorrenza_contratto || "Non disponibile"
       };
 
       setPdfExtractResult({
