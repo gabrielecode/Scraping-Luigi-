@@ -185,17 +185,38 @@ export function extractGraduatoriaTableEntries(text: string, schoolUrl: string):
     if (line.length < 15) continue;
     const lower = line.toLowerCase();
 
-    // Rileva riga con posizione e/o punteggio
-    let posMatch = line.match(/(?:pos(?:izione)?\.?|posto)\s*[:=\s#]*([0-9]{1,4})\b/i);
-    if (!posMatch && (lower.includes("graduatoria") || lower.includes("fascia"))) {
-      posMatch = line.match(/\bn\.\s*([0-9]{1,4})\b/i);
+    // Pattern dedicato inizio riga con numero progressivo e nominativo maiuscolo (applicato PRIMA)
+    const startRowMatch = line.match(/^\s*([0-9]{1,4})[\s.\|]+([A-ZÀÈÉÌÒÙ'\s]{4,40})\s/);
+    let posMatch: RegExpMatchArray | null = null;
+    let rawNom = "Non disponibile";
+
+    if (startRowMatch) {
+      posMatch = [startRowMatch[1], startRowMatch[1]] as any;
+      const candidateRaw = startRowMatch[2].trim();
+      if (isPlausibleName(candidateRaw)) {
+        rawNom = candidateRaw;
+      }
+    }
+
+    if (!posMatch) {
+      posMatch = line.match(/(?:pos(?:izione)?\.?|posto)\s*[:=\s#]*([0-9]{1,4})\b/i);
+      if (!posMatch && (lower.includes("graduatoria") || lower.includes("fascia"))) {
+        posMatch = line.match(/\bn\.\s*([0-9]{1,4})\b/i);
+      }
+    }
+    if (posMatch) {
+      const capturedNum = posMatch[1];
+      const protCheck = new RegExp(`prot(?:ocollo)?\\.?(?:\\s+\\w+){0,5}\\s*(?:n\\.?\\s*)?0*${capturedNum}\\b`, "i");
+      if (protCheck.test(line)) {
+        posMatch = null;
+      }
     }
     const puntDetected = extractScoreRobust(line);
-    const fasciaMatch = line.match(/(?:prima|seconda|terza|[1-3]\^?|[1-3]°)\s*fascia\b/i);
+    const fasciaMatch = line.match(/(?:prima|seconda|terza|[1-3]\^?|[1-3]°)\s*fascia\b|\b(I{1,3}|IV)\s*fascia\b/i);
     const oreMatch = line.match(/([0-9]{1,2}(?:\/[0-9]{1,2})?)\s*(?:ore|h\b|settimanali)/i);
 
-    // Se la riga ha almeno punteggio o posizione unita a profilo/nomina
-    if (puntDetected !== null || (posMatch && (fasciaMatch || lower.includes("decreto") || lower.includes("individuato")))) {
+    // Se la riga ha almeno punteggio o posizione unita a profilo/nomina/startRowMatch
+    if (puntDetected !== null || (posMatch && (fasciaMatch || lower.includes("decreto") || lower.includes("individuato") || startRowMatch))) {
       let posStr = posMatch ? `Pos. ${posMatch[1]}` : "Non disponibile";
       let fasciaStr = fasciaMatch ? formatFasciaLabel(fasciaMatch[0]) : "Non disponibile";
       let oreStr = oreMatch ? `${oreMatch[1]} ore settimanali` : "Non disponibile";
@@ -229,11 +250,14 @@ export function extractGraduatoriaTableEntries(text: string, schoolUrl: string):
       let originePunteggio: string = puntDetected !== null ? (lower.includes("decreto") ? "Decreto di Individuazione" : "Graduatoria Ufficiale") : "Non disponibile";
 
       // Nominativo
-      const nomMatch = line.match(/\|\s*([A-ZÀÈÉÌÒÙ\s]{4,30})\s*\|/) ||
-                       line.match(/[-–]\s*([A-Z\s]{4,30})\s*[-–]/) ||
-                       line.match(/(?:candidat[oa]|nominat[oa]|individuato|a favore di|al sig\.?|alla sig\.?ra)[:\s]+([A-Z][a-zàèéìòù]+(?:\s+[A-Z][a-zàèéìòù]+){1,3})/i);
-      const rawNom = nomMatch ? nomMatch[1].trim() : "Non disponibile";
-      const nominativo = isPlausibleName(rawNom) ? rawNom : "Non disponibile";
+      let nominativo = rawNom !== "Non disponibile" ? rawNom : "Non disponibile";
+      if (nominativo === "Non disponibile") {
+        const nomMatch = line.match(/\|\s*([A-ZÀÈÉÌÒÙ\s]{4,30})\s*\|/) ||
+                         line.match(/[-–]\s*([A-Z\s]{4,30})\s*[-–]/) ||
+                         line.match(/(?:candidat[oa]|nominat[oa]|individuato|a favore di|al sig\.?|alla sig\.?ra)[:\s]+([A-Z][a-zàèéìòù]+(?:\s+[A-Z][a-zàèéìòù]+){1,3})/i);
+        const rNom = nomMatch ? nomMatch[1].trim() : "Non disponibile";
+        nominativo = isPlausibleName(rNom) ? rNom : "Non disponibile";
+      }
 
       const key = `${tipologia}_${profilo}_${punteggio}_${posStr}_${nominativo}`;
       if (!seen.has(key)) {
@@ -430,10 +454,17 @@ export function analyzeSchoolContentHeuristic(
       if (!posMatch && (lower.includes("graduatoria") || lower.includes("fascia"))) {
         posMatch = block.match(/(?:graduatoria\s+)?n\.\s*([0-9]{1,4})\b/i);
       }
+      if (posMatch) {
+        const capturedNum = posMatch[1];
+        const protCheck = new RegExp(`prot(?:ocollo)?\\.?(?:\\s+\\w+){0,5}\\s*(?:n\\.?\\s*)?0*${capturedNum}\\b`, "i");
+        if (protCheck.test(block)) {
+          posMatch = null;
+        }
+      }
       let posStr = posMatch ? `Pos. ${posMatch[1]}` : "Non disponibile";
 
-      const fasciaMatch = block.match(/(?:fascia|graduatoria di)[:\s]+([1-3]|prima|seconda|terza|I|II|III)\b/i);
-      let fasciaStr = fasciaMatch ? formatFasciaLabel(fasciaMatch[1]) : (lower.includes("24 mesi") ? "Prima Fascia (24 Mesi)" : "Non disponibile");
+      const fasciaMatch = block.match(/(?:fascia|graduatoria di)[:\s]+([1-3]|4|prima|seconda|terza|quarta|I{1,3}|IV)\b|\b(I{1,3}|IV)\s*fascia\b/i);
+      let fasciaStr = fasciaMatch ? formatFasciaLabel(fasciaMatch[1] || fasciaMatch[0]) : (lower.includes("24 mesi") ? "Prima Fascia (24 Mesi)" : "Non disponibile");
 
       const oreMatch = block.match(/([0-9]{1,2}(?:\/[0-9]{1,2})?)\s*(?:ore|h\b|settimanali)/i);
       let oreStr = oreMatch ? `${oreMatch[1]} ore settimanali` : "Non disponibile";

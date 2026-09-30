@@ -685,32 +685,37 @@ export function normalizeFascia(val: string): string {
     return re.test(s);
   };
 
-  // 1. terza|iii|3 → "3"
+  // 1. quarta|iv|4 → "4"
+  if (matchToken("(?:quarta|iv|4[ª°]?)")) {
+    return "4";
+  }
+
+  // 2. terza|iii|3 → "3"
   if (matchToken("(?:terza|iii|3[ª°]?)")) {
     return "3";
   }
 
-  // 2. seconda|ii|2 → "2"
+  // 3. seconda|ii|2 → "2"
   if (matchToken("(?:seconda|ii|2[ª°]?)")) {
     return "2";
   }
 
-  // 3. prima|i|1 → "1"
+  // 4. prima|i|1 → "1"
   if (matchToken("(?:prima|i|1[ª°]?)")) {
     return "1";
   }
 
-  // 4. "permanente" → "1"
+  // 5. "permanente" → "1"
   if (matchToken("permanente")) {
     return "1";
   }
 
-  // 5. "istituto" senza numero → "GI"
+  // 6. "istituto" senza numero → "GI"
   if (matchToken("istituto")) {
     return "GI";
   }
 
-  // 6. "interpello" → "INT"
+  // 7. "interpello" → "INT"
   if (matchToken("interpello")) {
     return "INT";
   }
@@ -719,8 +724,8 @@ export function normalizeFascia(val: string): string {
 }
 
 /**
- * Mappa il valore normalizzato di una fascia ("1", "2", "3", "GI")
- * all'etichetta contrattuale standard ("Prima fascia", "Seconda fascia", "Terza fascia", "Graduatoria d'Istituto").
+ * Mappa il valore normalizzato di una fascia ("1", "2", "3", "4", "GI")
+ * all'etichetta contrattuale standard ("Prima fascia", "Seconda fascia", "Terza fascia", "Quarta fascia", "Graduatoria d'Istituto").
  */
 export function formatFasciaLabel(normFascia: string): string {
   if (!normFascia) return "";
@@ -728,6 +733,7 @@ export function formatFasciaLabel(normFascia: string): string {
   if (norm === "1") return "Prima fascia";
   if (norm === "2") return "Seconda fascia";
   if (norm === "3") return "Terza fascia";
+  if (norm === "4") return "Quarta fascia";
   if (norm === "GI") return "Graduatoria d'Istituto";
   return normFascia;
 }
