@@ -35,7 +35,7 @@ import {
   findGraduatoriaCandidateLinks,
   validateSchoolPageWithAi
 } from "./services/graduatorieService";
-import { extractSchoolData, analyzeSchoolContentHeuristic } from "./services/schoolExtractorService";
+import { extractSchoolData, analyzeSchoolContentHeuristic, verifyScoresFormatPostProcessing } from "./services/schoolExtractorService";
 import { extractTextFromPdfBuffer, extractPdfsFromHtml } from "./services/pdfService";
 import { generateUnifiedCsvContent } from "./utils/exportUtils";
 import { parseSchoolUrlsFromCsv } from "./utils/csvParser";
@@ -301,6 +301,10 @@ export default function App() {
             });
             const tot = (data.convocazioni_collaboratore_scolastico || 0) + (data.convocazioni_docenti || 0) + (data.convocazioni_assistente_amministrativo || 0);
             setBatchLiveLog(prev => [...prev, `[OK] Estratto: ${data.nome_istituto || item.url} (${tot} atti rilevati)`]);
+
+            verifyScoresFormatPostProcessing(data, (msg) => {
+              setBatchLiveLog(prev => [...prev, msg]);
+            });
           } catch (err: any) {
             results.push({
               url: item.url,

@@ -838,6 +838,85 @@ export async function handleSchoolPlatformPortal(
 export const handleSpaggiariPortal = handleSchoolPlatformPortal;
 
 /**
+ * Controllo post-estrazione: verifica la presenza del punteggio numerico in ogni record estratto.
+ * Se il punteggio risulta mancante o non valido, attiva un prompt di rifinitura per Gemini
+ * che tenta di isolare il valore numerico specifico dalla stringa dell'atto originale o dal testo aggregato.
+ */
+export async function refineMissingScoresWithAi(
+  nomine: any[],
+  aggregatedText: string,
+  apiKey: string
+): Promise<any[]> {
+  if (!apiKey || !apiKey.trim() || nomine.length === 0) return nomine;
+
+  const refined = [...nomine];
+  const missingScoreIndices: number[] = [];
+
+  for (let i = 0; i < refined.length; i++) {
+    const item = refined[i];
+    if (item.punteggio === null || item.punteggio === undefined || isNaN(Number(item.punteggio))) {
+      missingScoreIndices.push(i);
+    }
+  }
+
+  if (missingScoreIndices.length === 0) return refined;
+
+  const targetsSummary = missingScoreIndices.map(idx => {
+    const it = refined[idx];
+    return `- Candidato: "${it.nominativo}", Profilo: "${it.profilo_lavorativo}", Classe/Area: "${it.classe_concorso_area_lab}"`;
+  }).join("\n");
+
+  try {
+    const prompt = `Sei un assistente di precisione per l'estrazione di punteggi da graduatorie e atti scolastici italiani.
+I seguenti candidati estratti non hanno un punteggio numerico valido o risulta mancante:
+${targetsSummary}
+
+Analizza il testo sottostante ed estrai ESCLUSIVAMENTE per ciascuno di questi candidati il punteggio numerico esatto (con eventuali decimali, es. 45.50 o 112.00) riportato vicino al loro nominativo o nella riga dell'atto.
+
+Rispondi SOLO in formato JSON con la lista dei punteggi trovati:
+{
+  "risultati": [
+    {
+      "nominativo": "<nome esatto del candidato>",
+      "punteggio": <numero decimale o null>,
+      "origine_punteggio": "<origine esatta o 'Graduatoria Istituto / Decreto'>"
+    }
+  ]
+}
+
+Testo dell'atto / documenti:
+"""${aggregatedText.slice(0, 10000)}"""`;
+
+    const response = await extractWithOpenRouter(
+      prompt,
+      apiKey.trim(),
+      "Sei un estrattore di punteggi scolastici di massima precisione. Rispondi solo in JSON valido."
+    );
+
+    const cleanJson = response.replace(/```json/g, "").replace(/```/g, "").trim();
+    const parsed = JSON.parse(cleanJson);
+
+    if (Array.isArray(parsed?.risultati)) {
+      for (const res of parsed.risultati) {
+        if (!res?.nominativo) continue;
+        const foundIdx = refined.findIndex(it => isNameMatch(it.nominativo, res.nominativo));
+        if (foundIdx !== -1 && typeof res.punteggio === "number" && !isNaN(res.punteggio)) {
+          refined[foundIdx] = {
+            ...refined[foundIdx],
+            punteggio: Number(res.punteggio.toFixed(2)),
+            origine_punteggio: res.origine_punteggio || "Graduatoria Istituto / Decreto Ufficiale"
+          };
+        }
+      }
+    }
+  } catch {
+    // Fallthrough on refinement error
+  }
+
+  return refined;
+}
+
+/**
  * Estrae e analizza i dati di una scuola esplorando la homepage, le sezioni chiave, PDF e graduatorie.
  */
 export async function extractSchoolData(
@@ -1115,13 +1194,19 @@ Testo:
     });
   });
 
-  const firstNom = processedNomine[0];
+  // 6b. Controllo post-estrazione: rifinitura AI dei punteggi mancanti o non validi
+  let finalNomine = processedNomine;
+  if (apiKey && apiKey.trim()) {
+    finalNomine = await refineMissingScoresWithAi(processedNomine, aggregatedText, apiKey.trim());
+  }
+
+  const firstNom = finalNomine[0];
 
   const finalData: ExtractionData = {
     nome_istituto: effectiveNome,
     codice_meccanografico: detectedMecc || "",
     nominativo: singleNominativo || firstNom?.nominativo,
-    nomine_contratti: processedNomine,
+    nomine_contratti: finalNomine,
 
     convocazioni_collaboratore_scolastico: heuristicResult.convocazioni.collaboratore_scolastico,
     convocazioni_assistente_amministrativo: heuristicResult.convocazioni.assistente_amministrativo,
@@ -1183,4 +1268,49 @@ Testo:
   } catch {
     return finalData;
   }
+}
+
+/**
+ * Modulo di 'Post-Processing Verifica':
+ * Isola ogni punteggio estratto e lo confronta con una regex standard per il formato numerico italiano (es. 'XX,XX'),
+ * segnalando nel log batch ogni valore che richiede una correzione manuale o un re-invio all'AI per chiarimento.
+ */
+export function verifyScoresFormatPostProcessing(
+  data: ExtractionData,
+  onLog?: (msg: string) => void
+): { validCount: number; flaggedCount: number; warnings: string[] } {
+  const warnings: string[] = [];
+  let validCount = 0;
+  let flaggedCount = 0;
+
+  const italianNumberRegex = /^[0-9]{1,3}(?:[.,][0-9]{1,2})?$/;
+
+  const recordsToCheck = data.nomine_contratti && data.nomine_contratti.length > 0 
+    ? data.nomine_contratti 
+    : [{ nominativo: data.nominativo, punteggio: data.punteggio, origine_punteggio: data.origine_punteggio }];
+
+  for (const rec of recordsToCheck) {
+    const punt = rec.punteggio;
+    const nom = rec.nominativo || "Candidato sconosciuto";
+
+    if (punt === null || punt === undefined || (typeof punt === "string" && !String(punt).trim())) {
+      flaggedCount++;
+      const msg = `[Post-Processing Verifica] ⚠️ Punteggio MANCANTE per "${nom}". Richiede verifica manuale o re-invio all'AI.`;
+      warnings.push(msg);
+      onLog?.(msg);
+      continue;
+    }
+
+    const puntStr = String(punt).trim();
+    if (!italianNumberRegex.test(puntStr)) {
+      flaggedCount++;
+      const msg = `[Post-Processing Verifica] ⚠️ Punteggio ANOMALO o formato non conforme ("${puntStr}") per "${nom}". Verifica formato numerico italiano (es. XX,XX).`;
+      warnings.push(msg);
+      onLog?.(msg);
+    } else {
+      validCount++;
+    }
+  }
+
+  return { validCount, flaggedCount, warnings };
 }

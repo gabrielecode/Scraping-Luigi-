@@ -1232,10 +1232,10 @@ export async function searchGraduatoriaPages(
   initialContent?: string,
   initialDoc?: Document
 ): Promise<ExploredGraduatoriaPage[]> {
-  onLog?.(`🔎 Cerco in graduatoria...`);
+  onLog?.(`🔎 Avvio scansione profonda ricorsiva delle pagine...`);
   const exploredPages: ExploredGraduatoriaPage[] = [];
   const visitedUrls = new Set<string>();
-  const MAX_PAGES = 5;
+  const MAX_PAGES = 15;
 
   // Marca la homepage come visitata per non rianalizzarla inutilmente
   visitedUrls.add(baseUrl);
@@ -2526,10 +2526,12 @@ export async function extractWithOpenRouter(
   }
 
   const candidateModels = [
+    "anthropic/claude-3.5-sonnet",
+    "google/gemini-2.5-pro",
+    "deepseek/deepseek-chat",
+    "openai/gpt-4o",
     "google/gemini-2.0-flash-001",
-    "google/gemini-flash-1.5",
-    "google/gemini-2.5-flash",
-    "meta-llama/llama-3.3-70b-instruct"
+    "google/gemini-flash-1.5"
   ];
 
   let lastError = "";
@@ -2551,7 +2553,7 @@ export async function extractWithOpenRouter(
             { role: "user", content: prompt }
           ],
           temperature: 0.1,
-          max_tokens: 1000
+          max_tokens: 4000
         })
       });
 
