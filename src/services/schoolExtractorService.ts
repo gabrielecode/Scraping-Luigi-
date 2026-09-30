@@ -120,8 +120,8 @@ export function deduceSchoolOrderAndProfile(schoolName: string): {
 export function extractScoreRobust(line: string): number | null {
   if (!line) return null;
 
-  // 1. Prefisso: punti 14.50, pt. 45, totale: 38.2
-  const m1 = line.match(/(?:punteggio|punti|pt\.?|p\.ti|votazione|valutazione|totale\s*punti|totale)[:=\s]+([0-9]{1,3}(?:[.,][0-9]{1,2})?)/i);
+  // 1. Prefisso: punti 14.50, pt. 45, totale: 38.2, punteggio 112,50, voto 95
+  const m1 = line.match(/(?:punteggio|punti|pt\.?|p\.ti|votazione|valutazione|totale\s*punti|totale|voto)[:=\s]+([0-9]{1,3}(?:[.,][0-9]{1,2})?)/i);
   if (m1) {
     const v = parseFloat(m1[1].replace(',', '.'));
     if (!isNaN(v) && v > 0 && v <= 300) return Number(v.toFixed(2));
@@ -134,14 +134,21 @@ export function extractScoreRobust(line: string): number | null {
     if (!isNaN(v) && v > 0 && v <= 300) return Number(v.toFixed(2));
   }
 
-  // 3. 'con punti 15' o 'avente 18 punti'
-  const m3 = line.match(/(?:con|avente)\s+([0-9]{1,3}(?:[.,][0-9]{1,2})?)\s+punti/i);
+  // 3. 'con punti 15' o 'avente 18 punti' o 'punteggio di 45.50'
+  const m3 = line.match(/(?:con|avente|punteggio\s*di)\s+([0-9]{1,3}(?:[.,][0-9]{1,2})?)\s*(?:punti)?/i);
   if (m3) {
     const v = parseFloat(m3[1].replace(',', '.'));
     if (!isNaN(v) && v > 0 && v <= 300) return Number(v.toFixed(2));
   }
 
-  // 4. Numero decimale tipico in riga tabellare (esclude date come 12/05/1990 o orari 18/36 ore)
+  // 4. Pattern tabellare con separatori (es. "1 | Rossi Mario | 48,50")
+  const tableMatch = line.match(/(?:[\|\-–—]|^)\s*([0-9]{1,3}[.,][0-9]{1,2})\s*(?:[\|\-–—]|$)/);
+  if (tableMatch) {
+    const v = parseFloat(tableMatch[1].replace(',', '.'));
+    if (!isNaN(v) && v >= 2.0 && v <= 300.0) return Number(v.toFixed(2));
+  }
+
+  // 5. Numero decimale tipico in riga tabellare (esclude date come 12/05/1990 o orari 18/36 ore)
   const cleanLine = line
     .replace(/[0-9]{1,2}[\/-][0-9]{1,2}[\/-][0-9]{2,4}/g, ' ')
     .replace(/[0-9]{1,2}\s*(?:ore|h\b|anni|mesi|giorni)/gi, ' ')
@@ -726,6 +733,111 @@ export function extractSchoolNameFromHtml(html: string): string {
 }
 
 /**
+ * Handler universale per piattaforme scolastiche e gestionali italiane
+ * (Spaggiari, Madisoft, Axios, Argo, Albi Pretori Cloud, Trasparenza).
+ * Rileva automaticamente portali simili e naviga repository, albo, circolari e documenti.
+ */
+export async function handleSchoolPlatformPortal(
+  portalUrl: string,
+  initialHtml: string,
+  fetchSubPageFn: (url: string) => Promise<string>,
+  onLog?: (msg: string) => void
+): Promise<string> {
+  let combined = initialHtml || "";
+  if (!portalUrl) return combined;
+
+  const lowerUrl = portalUrl.toLowerCase();
+  const supportedPlatforms = [
+    "web.spaggiari.eu",
+    "madisoft.it",
+    "axioscloud.it",
+    "argo-enti.it",
+    "portaleargo.it",
+    "albipretorionline.com",
+    "halley.it",
+    "maggioli.it",
+    "urbi.it",
+    "trasparenza",
+    "albo",
+    "cloud"
+  ];
+
+  const isMatchedPlatform = supportedPlatforms.some(p => lowerUrl.includes(p));
+  if (!isMatchedPlatform) {
+    return combined;
+  }
+
+  try {
+    const baseObj = new URL(portalUrl.startsWith("http") ? portalUrl : `https://${portalUrl}`);
+    const origin = baseObj.origin;
+    const pathname = baseObj.pathname;
+
+    const candidatePaths = [
+      `${origin}${pathname.replace(/\/+$/, '')}/archivio`,
+      `${origin}${pathname.replace(/\/+$/, '')}/albo`,
+      `${origin}${pathname.replace(/\/+$/, '')}/circolari`,
+      `${origin}${pathname.replace(/\/+$/, '')}/documenti`,
+      `${origin}${pathname.replace(/\/+$/, '')}/trasparenza`,
+      `${origin}/sportal/tutti_i_documenti`,
+      `${origin}/sportal/albo_pretorio`,
+      `${origin}/sportal/archivio`,
+      `${origin}/sportal/circolari`,
+      `${origin}/albo_pretorio`,
+      `${origin}/amministrazione_trasparente`,
+      `${origin}/archivio_circolari`,
+      `${origin}/documenti_pubblici`
+    ];
+
+    const hrefMatches = initialHtml.match(/href="([^"]*(?:albo|documenti|circolari|archivio|trasparenza|sportal|bando|avviso|nomina|interpello)[^"]*)"/gi) || [];
+    const discoveredUrls: string[] = [];
+    for (const m of hrefMatches) {
+      const match = m.match(/href="([^"]+)"/i);
+      if (match && match[1]) {
+        let sub = match[1];
+        if (sub.startsWith("/")) {
+          sub = `${origin}${sub}`;
+        } else if (!sub.startsWith("http")) {
+          sub = `${origin}/${sub}`;
+        }
+        try {
+          const subObj = new URL(sub);
+          const subHost = subObj.hostname.toLowerCase();
+          const baseHost = baseObj.hostname.toLowerCase();
+          if ((subHost === baseHost || subHost.includes("spaggiari") || subHost.includes("madisoft") || subHost.includes("argo") || subHost.includes("axios") || subHost.includes("albipretorio")) && !discoveredUrls.includes(sub)) {
+            discoveredUrls.push(sub);
+          }
+        } catch {
+          // ignora
+        }
+      }
+    }
+
+    const targets = Array.from(new Set([...candidatePaths, ...discoveredUrls.slice(0, 8)]));
+
+    for (const targetUrl of targets) {
+      try {
+        onLog?.(`School Platform Handler (${baseObj.hostname}): Navigazione ${targetUrl}...`);
+        const subHtml = await fetchSubPageFn(targetUrl);
+        if (subHtml && subHtml.length > 200) {
+          const cleanSub = subHtml
+            .replace(/<script\b[^<]*(?:(?!<\/script>)<[^<]*)*<\/script>/gi, " ")
+            .replace(/<style\b[^<]*(?:(?!<\/style>)<[^<]*)*<\/style>/gi, " ");
+          combined += `\n\n--- PLATFORM REPOSITORY (${targetUrl}) ---\n` + cleanSub;
+        }
+      } catch {
+        // Ignora singoli fallimenti
+      }
+    }
+  } catch (err) {
+    onLog?.(`School Platform Handler Errore: ${err instanceof Error ? err.message : String(err)}`);
+  }
+
+  return combined;
+}
+
+export const handleSpaggiariPortal = handleSchoolPlatformPortal;
+
+/**
  * Estrae e analizza i dati di una scuola esplorando la homepage, le sezioni chiave, PDF e graduatorie.
  */
 export async function extractSchoolData(
@@ -745,6 +857,12 @@ export async function extractSchoolData(
   let aggregatedText = (homepageHtml || "")
     .replace(/<script\b[^<]*(?:(?!<\/script>)<[^<]*)*<\/script>/gi, " ")
     .replace(/<style\b[^<]*(?:(?!<\/style>)<[^<]*)*<\/style>/gi, " ");
+
+  // 0. School Platform / Portal Handler: naviga direttamente i repository di Spaggiari, Madisoft, Argo, Axios, Albi Pretori e Trasparenza
+  if (fetchSubPageFn) {
+    const platformContent = await handleSchoolPlatformPortal(url, homepageHtml, fetchSubPageFn);
+    aggregatedText += "\n" + platformContent;
+  }
 
   // 1. Ricerca web avanzata per interrogare sia interpelli sia graduatorie definitive con punteggi
   if (effectiveNome) {
