@@ -1,6 +1,13 @@
 import { ExtractionResult } from "../types";
 import { deriveCertainScore } from "../services/schoolExtractorService";
 
+function safeFormatFixed(val: any, decimals = 2, fallback = "0.00"): string {
+  if (val === null || val === undefined) return fallback;
+  const num = typeof val === "number" ? val : parseFloat(String(val).replace(",", "."));
+  if (isNaN(num)) return fallback;
+  return num.toFixed(decimals);
+}
+
 export function generateUnifiedCsvContent(results: ExtractionResult[]): string {
   const headers = [
     "URL",
@@ -71,7 +78,7 @@ export function generateUnifiedCsvContent(results: ExtractionResult[]): string {
           }
         }
 
-        const puntVal = puntNum.toFixed(2);
+        const puntVal = safeFormatFixed(puntNum, 2);
 
         rows.push([
           escapeCsvField(r.url || ""),
@@ -127,7 +134,7 @@ export function generateUnifiedCsvContent(results: ExtractionResult[]): string {
           if (!origVal || origVal === "Non disponibile") origVal = derived.origine;
         }
 
-        const puntVal = puntNum.toFixed(2);
+        const puntVal = safeFormatFixed(puntNum, 2);
 
         rows.push([
           escapeCsvField(r.url || ""),
@@ -174,7 +181,7 @@ export function generateUnifiedCsvContent(results: ExtractionResult[]): string {
           escapeCsvField("Materie Curricolari / Sostegno"),
           escapeCsvField("comune"),
           escapeCsvField(`Interpello aperto (${data.convocazioni_docenti} avvisi)`),
-          escapeCsvField(derivedDoc.punteggio.toFixed(2)),
+          escapeCsvField(safeFormatFixed(derivedDoc?.punteggio, 2)),
           escapeCsvField(derivedDoc.origine),
           escapeCsvField("Pos. 1"),
           escapeCsvField("Prima Fascia GaE / GPS"),
@@ -207,7 +214,7 @@ export function generateUnifiedCsvContent(results: ExtractionResult[]): string {
           escapeCsvField("CS"),
           escapeCsvField("comune"),
           escapeCsvField(data.convocazioni_collaboratore_scolastico ? `Convocazione aperta (${data.convocazioni_collaboratore_scolastico} posti)` : "Convocazione ATA"),
-          escapeCsvField(derivedAta.punteggio.toFixed(2)),
+          escapeCsvField(safeFormatFixed(derivedAta?.punteggio, 2)),
           escapeCsvField(derivedAta.origine),
           escapeCsvField("Pos. 1"),
           escapeCsvField("Prima Fascia (24 Mesi)"),
