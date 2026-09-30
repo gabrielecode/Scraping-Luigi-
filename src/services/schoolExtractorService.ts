@@ -152,7 +152,10 @@ export function deriveCertainScore(posStr: string, tipologia: string, fascia: st
  */
 export function extractGraduatoriaTableEntries(text: string, schoolUrl: string): NominaContrattoItem[] {
   const items: NominaContrattoItem[] = [];
-  const lines = text.split(/(?:\r?\n){1,2}|<br\s*\/?>|<\/tr>|<\/li>|##\s+/i);
+  const processedText = (text || "")
+    .replace(/<\/td>\s*<td[^>]*>/gi, " | ")
+    .replace(/<\/tr>\s*<tr[^>]*>/gi, " | ");
+  const lines = processedText.split(/(?:\r?\n){1,2}|<br\s*\/?>|<\/tr>|<\/li>|##\s+/i);
   const seen = new Set<string>();
 
   for (const rawLine of lines) {
@@ -201,7 +204,8 @@ export function extractGraduatoriaTableEntries(text: string, schoolUrl: string):
       let originePunteggio: string = puntDetected !== null ? (lower.includes("decreto") ? "Decreto di Individuazione" : "Graduatoria Ufficiale") : "Non disponibile";
 
       // Nominativo
-      const nomMatch = line.match(/[-–]\s*([A-Z\s]{4,30})\s*[-–]/) ||
+      const nomMatch = line.match(/\|\s*([A-ZÀÈÉÌÒÙ\s]{4,30})\s*\|/) ||
+                       line.match(/[-–]\s*([A-Z\s]{4,30})\s*[-–]/) ||
                        line.match(/(?:candidat[oa]|nominat[oa]|individuato|a favore di|al sig\.?|alla sig\.?ra)[:\s]+([A-Z][a-zàèéìòù]+(?:\s+[A-Z][a-zàèéìòù]+){1,3})/i);
       const nominativo = nomMatch ? nomMatch[1].trim() : "Non disponibile";
 
@@ -261,6 +265,10 @@ export function analyzeSchoolContentHeuristic(
   };
   nomine: NominaContrattoItem[];
 } {
+  const processedText = (text || "")
+    .replace(/<\/td>\s*<td[^>]*>/gi, " | ")
+    .replace(/<\/tr>\s*<tr[^>]*>/gi, " | ");
+
   const conv = {
     collaboratore_scolastico: 0,
     assistente_amministrativo: 0,
@@ -282,7 +290,7 @@ export function analyzeSchoolContentHeuristic(
   const nomine: NominaContrattoItem[] = [];
 
   // 1. Estrazione tabellare di graduatorie e decreti
-  const tableEntries = extractGraduatoriaTableEntries(text, url);
+  const tableEntries = extractGraduatoriaTableEntries(processedText, url);
   for (const entry of tableEntries) {
     nomine.push(entry);
     if (entry.tipologia_personale === "DOCENTE") conv.docenti++;
@@ -292,7 +300,7 @@ export function analyzeSchoolContentHeuristic(
   }
 
   // 2. Spezza il testo in blocchi per analisi semantica e conteggi
-  const blocks = text.split(/(?:\r?\n){1,2}|<br\s*\/?>|<\/p>|<\/li>|<\/tr>|##\s+/i)
+  const blocks = processedText.split(/(?:\r?\n){1,2}|<br\s*\/?>|<\/p>|<\/li>|<\/tr>|##\s+/i)
     .map(b => b.replace(/<[^>]+>/g, " ").replace(/\[([^\]]+)\]\([^)]+\)/g, "$1").replace(/\s+/g, " ").trim())
     .filter(b => b.length > 15);
 
@@ -516,7 +524,10 @@ export function findSchoolInternalLinks(html: string, baseUrl: string): string[]
         resolvedHost.includes("portaleargo.it") ||
         resolvedHost.includes("axioscloud.it") ||
         resolvedHost.includes("spaggiari.eu") ||
-        resolvedHost.includes("trasparenzascuole.it");
+        resolvedHost.includes("trasparenzascuole.it") ||
+        resolvedHost.includes("nuvola.madisoft.it") ||
+        resolvedHost.includes("web.spaggiari.eu") ||
+        resolvedHost.includes("argofamiglia.it");
 
       if (!isAllowedDomain) continue;
 
@@ -529,12 +540,16 @@ export function findSchoolInternalLinks(html: string, baseUrl: string): string[]
         combined.includes("graduatorie") ||
         combined.includes("interpelli") ||
         combined.includes("bandi") ||
-        combined.includes("trasparenza");
+        combined.includes("trasparenza") ||
+        combined.includes("personale") ||
+        combined.includes("supplenze") ||
+        combined.includes("nomine") ||
+        combined.includes("graduatorie di istituto");
 
       if (isRelevant && !seen.has(resolved)) {
         seen.add(resolved);
         links.push(resolved);
-        if (links.length >= 4) break;
+        if (links.length >= 8) break;
       }
     } catch {
       // Ignora URL non validi
@@ -587,6 +602,43 @@ export async function searchSchoolActsFallback(
 }
 
 /**
+ * Estrae il nome reale della scuola dall'HTML cercando og:site_name, title ripulito o primo h1.
+ */
+export function extractSchoolNameFromHtml(html: string): string {
+  if (!html) return "";
+  
+  const ogMatch = html.match(/<meta\s+property=["']og:site_name["']\s+content=["']([^"']+)["']/i) ||
+                  html.match(/<meta\s+content=["']([^"']+)["']\s+property=["']og:site_name["']/i);
+  if (ogMatch && ogMatch[1].trim()) {
+    return ogMatch[1].trim();
+  }
+
+  const titleMatch = html.match(/<title[^>]*>(.*?)<\/title>/is);
+  if (titleMatch && titleMatch[1]) {
+    let titleText = titleMatch[1].replace(/<[^>]+>/g, " ").replace(/\s+/g, " ").trim();
+    if (titleText) {
+      titleText = titleText
+        .replace(/\s*[-|–—]\s*(?:home|homepage|sito ufficiale|registro elettronico|istruzione|scuola).*$/i, "")
+        .replace(/\s*\|\s*.*$/, "")
+        .trim();
+      if (titleText.length >= 3) {
+        return titleText;
+      }
+    }
+  }
+
+  const h1Match = html.match(/<h1[^>]*>(.*?)<\/h1>/is);
+  if (h1Match && h1Match[1]) {
+    const h1Text = h1Match[1].replace(/<[^>]+>/g, " ").replace(/\s+/g, " ").trim();
+    if (h1Text && h1Text.length >= 3) {
+      return h1Text;
+    }
+  }
+
+  return "";
+}
+
+/**
  * Estrae e analizza i dati di una scuola esplorando la homepage, le sezioni chiave, PDF e graduatorie.
  */
 export async function extractSchoolData(
@@ -600,7 +652,7 @@ export async function extractSchoolData(
 ): Promise<ExtractionData> {
   const mainInstituteName = extractMainInstituteName(initialHint?.nome_istituto) || initialHint?.nome_istituto || "";
   const detectedMecc = initialHint?.codice_meccanografico || extractCodiceMeccanograficoFromText(homepageHtml, url);
-  let effectiveNome = mainInstituteName || url.replace(/^https?:\/\//, "").replace(/\/.*$/, "");
+  let effectiveNome = mainInstituteName || extractSchoolNameFromHtml(homepageHtml) || url.replace(/^https?:\/\//, "").replace(/\/.*$/, "");
   let effectiveUrl = url;
 
   let aggregatedText = (homepageHtml || "")
@@ -621,7 +673,7 @@ export async function extractSchoolData(
   // 2. Se abbiamo un fetcher per sottopagine, esplora le sezioni interne (Albo / Circolari / Graduatorie)
   if (fetchSubPageFn && aggregatedText.length > 200) {
     const internalLinks = findSchoolInternalLinks(homepageHtml, effectiveUrl);
-    for (const subLink of internalLinks.slice(0, 3)) {
+    for (const subLink of internalLinks.slice(0, 8)) {
       try {
         const subHtml = await fetchSubPageFn(subLink);
         if (subHtml && subHtml.length > 100) {
@@ -638,6 +690,68 @@ export async function extractSchoolData(
 
   // 3. Esegui analisi euristica ad alta precisione
   let heuristicResult = analyzeSchoolContentHeuristic(aggregatedText, effectiveUrl, singleNominativo, effectiveNome);
+
+  let targetAiNomine: NominaContrattoItem[] = [];
+  const totalConvocazioni = Object.values(heuristicResult.convocazioni).reduce((a, b) => a + b, 0);
+  const hasValidNomine = heuristicResult.nomine.some(n => n.nominativo && n.nominativo !== "Non disponibile");
+
+  if (apiKey && apiKey.trim() && totalConvocazioni > 0 && !hasValidNomine) {
+    try {
+      const targetedSample = aggregatedText.slice(0, 15000);
+      const targetedPrompt = `Estrai ESCLUSIVAMENTE le righe tabellari di graduatorie, convocazioni o decreti dalla seguente pagina della scuola "${effectiveNome}". Ignora completamente qualsiasi testo narrativo, preamboli o comunicati generali.
+Per ogni riga tabellare valida, restituisci SOLO JSON valido:
+{
+  "nomine": [
+    {
+      "nominativo": "Nome Cognome",
+      "punteggio": 48.5,
+      "posizione_graduatoria": "Pos. 1",
+      "tipologia_personale": "DOCENTE o ATA",
+      "profilo_lavorativo": "Docente o Collaboratore scolastico",
+      "fascia": "Prima Fascia"
+    }
+  ]
+}
+
+Testo:
+"""${targetedSample}"""`;
+
+      const targetedResponse = await extractWithOpenRouter(
+        targetedPrompt,
+        apiKey.trim(),
+        "Sei un parser di tabelle scolastiche. Estrai solo dati tabellari strutturati in JSON."
+      );
+
+      const cleanTargetedJson = targetedResponse.replace(/```json/g, "").replace(/```/g, "").trim();
+      const parsedTargeted = JSON.parse(cleanTargetedJson);
+      if (Array.isArray(parsedTargeted?.nomine)) {
+        for (const n of parsedTargeted.nomine) {
+          if (n.nominativo && n.nominativo !== "Non disponibile") {
+            targetAiNomine.push({
+              nome_istituto: effectiveNome,
+              codice_meccanografico: detectedMecc || "",
+              nominativo: n.nominativo,
+              tipologia_personale: n.tipologia_personale === "DOCENTE" ? "DOCENTE" : "ATA",
+              profilo_lavorativo: n.profilo_lavorativo || "Non disponibile",
+              classe_concorso_area_lab: "Non disponibile",
+              tipo_posto: "comune",
+              punteggio: typeof n.punteggio === "number" ? n.punteggio : null,
+              origine_punteggio: typeof n.punteggio === "number" ? "Graduatoria Definitiva d'Istituto" : "Non disponibile",
+              posizione_graduatoria: n.posizione_graduatoria || "Non disponibile",
+              fascia: n.fascia || "Non disponibile",
+              ore_settimanali: "Non disponibile",
+              decorrenza_contratto: "Non disponibile",
+              durata_contratto_mesi: "",
+              durata_contratto_giorni: "",
+              link_del_documento: effectiveUrl
+            });
+          }
+        }
+      }
+    } catch {
+      // Ignored
+    }
+  }
 
   // 4. Se è configurata una chiave AI, affina i risultati
   let aiNomine: NominaContrattoItem[] = [];
@@ -693,9 +807,9 @@ Testo:
             classe_concorso_area_lab: n.classe_concorso_area_lab || (n.tipologia_personale === "DOCENTE" ? "Curricolare" : "CS"),
             tipo_posto: "comune",
             punteggio: typeof n.punteggio === "number" ? n.punteggio : null,
-            origine_punteggio: typeof n.punteggio === "number" ? (n.origine_punteggio || "Decreto di Individuazione") : "Graduatoria Definitiva d'Istituto",
-            posizione_graduatoria: n.posizione_graduatoria || "Pos. 1",
-            fascia: n.fascia || "Prima Fascia",
+            origine_punteggio: typeof n.punteggio === "number" ? (n.origine_punteggio || "Decreto di Individuazione") : "Non disponibile",
+            posizione_graduatoria: n.posizione_graduatoria || "Non disponibile",
+            fascia: n.fascia || "Non disponibile",
             ore_settimanali: n.ore_settimanali || (n.tipologia_personale === "DOCENTE" ? "18 ore settimanali" : "36 ore settimanali"),
             decorrenza_contratto: n.decorrenza_contratto || "Fino al termine delle attività didattiche (30/06/2026)",
             durata_contratto_mesi: "",
@@ -713,7 +827,7 @@ Testo:
   const combinedNomine: NominaContrattoItem[] = [];
   const seenNomine = new Set<string>();
 
-  for (const n of [...heuristicResult.nomine, ...aiNomine]) {
+  for (const n of [...heuristicResult.nomine, ...targetAiNomine, ...aiNomine]) {
     n.nome_istituto = effectiveNome;
     n.codice_meccanografico = detectedMecc || "";
     const key = `${n.tipologia_personale}_${n.profilo_lavorativo}_${n.classe_concorso_area_lab}_${n.nominativo || ''}`;
@@ -736,9 +850,9 @@ Testo:
         classe_concorso_area_lab: heuristicResult.convocazioni.docenti > heuristicResult.convocazioni.collaboratore_scolastico ? "Curricolare" : "CS",
         tipo_posto: "comune",
         punteggio: null,
-        origine_punteggio: "Graduatoria Definitiva d'Istituto",
-        posizione_graduatoria: "Pos. 1",
-        fascia: "Prima Fascia",
+        origine_punteggio: "Non disponibile",
+        posizione_graduatoria: "Non disponibile",
+        fascia: "Non disponibile",
         ore_settimanali: "",
         decorrenza_contratto: "",
         durata_contratto_mesi: "",
@@ -783,10 +897,10 @@ Testo:
     classe_concorso_area_lab: firstNom?.classe_concorso_area_lab || "",
     tipo_posto: firstNom?.tipo_posto || "comune",
     punteggio: firstNom?.punteggio !== undefined ? firstNom.punteggio : null,
-    origine_punteggio: firstNom?.origine_punteggio || "Graduatoria Definitiva d'Istituto",
+    origine_punteggio: firstNom?.origine_punteggio || "Non disponibile",
     confidence: firstNom?.confidence,
-    posizione_graduatoria: firstNom?.posizione_graduatoria || "Pos. 1",
-    graduatoria_fascia: firstNom?.fascia || "Prima Fascia",
+    posizione_graduatoria: firstNom?.posizione_graduatoria || "Non disponibile",
+    graduatoria_fascia: firstNom?.fascia || "Non disponibile",
     ore_settimanali: firstNom?.ore_settimanali || "",
     decorrenza_contratto: firstNom?.decorrenza_contratto || "",
     note_cross_reference: firstNom?.note_cross_reference || ""
