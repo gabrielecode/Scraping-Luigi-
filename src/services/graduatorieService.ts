@@ -78,12 +78,30 @@ export function escapeCsvField(val: any): string {
 }
 
 /**
+ * Converte in modo sicuro un valore numerico o stringa in un float con decimali definiti, oppure null.
+ */
+export function safeToFixed(val: any, decimals = 2): number | null {
+  if (val === null || val === undefined) return null;
+  const num = typeof val === "number" ? val : parseFloat(String(val).replace(",", "."));
+  if (isNaN(num)) return null;
+  return Number(num.toFixed(decimals));
+}
+
+/**
+ * Formatta in modo sicuro un numero con decimali in stringa, con fallback.
+ */
+export function safeFormatFixed(val: any, decimals = 2, fallback = "0.00"): string {
+  const num = safeToFixed(val, decimals);
+  return num !== null ? num.toFixed(decimals) : fallback;
+}
+
+/**
  * Normalizza il punteggio garantendo float valido con 2 decimali, oppure null
  */
 export function normalizePunteggio(val: any): number | null {
   if (val === null || val === undefined) return null;
   if (typeof val === "number") {
-    return isNaN(val) ? null : Number(val.toFixed(2));
+    return isNaN(val) ? null : safeToFixed(val, 2);
   }
   if (typeof val === "string") {
     const s = val.trim().toLowerCase();
@@ -105,8 +123,7 @@ export function normalizePunteggio(val: any): number | null {
     }
     const clean = s.replace(",", ".").replace(/[^\d.-]/g, "");
     if (!clean) return null;
-    const num = parseFloat(clean);
-    return isNaN(num) ? null : Number(num.toFixed(2));
+    return safeToFixed(clean, 2);
   }
   return null;
 }
@@ -268,7 +285,7 @@ export function lookupPunteggioGraduatoria(
             }
           }
           matched.push({
-            punteggio: Number(entry.punteggio.toFixed(2)),
+            punteggio: safeToFixed(entry.punteggio, 2)!,
             entry,
             graduatoriaMatched: g,
             origine_punteggio: origine,
@@ -301,7 +318,7 @@ export function lookupPunteggioGraduatoria(
         const entry = g.graduatoria.find(e => e.cognome_nome && isNameMatch(criteri.nominativo!, e.cognome_nome));
         if (entry && typeof entry.punteggio === "number" && !isNaN(entry.punteggio)) {
           matched.push({
-            punteggio: Number(entry.punteggio.toFixed(2)),
+            punteggio: safeToFixed(entry.punteggio, 2)!,
             entry,
             graduatoriaMatched: g,
             origine_punteggio: origine,
@@ -402,7 +419,7 @@ export function crossReferenceNomina<T extends NominaContrattoItem | AlboPretori
         punteggio: match.punteggio,
         origine_punteggio: origine,
         confidence: conf,
-        note_cross_reference: `Punteggio incrociato${confStr} con ${nomeGrad} (${match.graduatoriaMatched?.profilo_o_cdc}, Fascia ${match.graduatoriaMatched?.fascia}): pos. ${matchedPos} = ${match.punteggio.toFixed(2)} pt${match.entry?.cognome_nome ? ` [${match.entry.cognome_nome}]` : ""}${sogliaSuffix}`,
+        note_cross_reference: `Punteggio incrociato${confStr} con ${nomeGrad} (${match.graduatoriaMatched?.profilo_o_cdc}, Fascia ${match.graduatoriaMatched?.fascia}): pos. ${matchedPos} = ${safeFormatFixed(match.punteggio, 2)} pt${match.entry?.cognome_nome ? ` [${match.entry.cognome_nome}]` : ""}${sogliaSuffix}`,
       } as any;
     }
   }
@@ -2719,6 +2736,58 @@ export async function filterSchoolDocument(
     matchedPositive,
     matchedExact
   };
+}
+
+/**
+ * Funzione di "validazione intelligente" tramite Gemini per verificare se la pagina caricata
+ * contiene effettivamente graduatorie, atti, interpelli o convocazioni, scartando i siti
+ * che risultano essere home page generiche prima dell'estrazione completa.
+ */
+export async function validateSchoolPageWithAi(
+  htmlContent: string,
+  schoolUrl: string,
+  apiKey: string
+): Promise<{ hasGraduatorie: boolean; reason?: string }> {
+  if (!htmlContent || htmlContent.length < 100 || !apiKey || !apiKey.trim()) {
+    return { hasGraduatorie: true };
+  }
+
+  try {
+    const textSample = htmlContent
+      .replace(/<script\b[^<]*(?:(?!<\/script>)<[^<]*)*<\/script>/gi, " ")
+      .replace(/<style\b[^<]*(?:(?!<\/style>)<[^<]*)*<\/style>/gi, " ")
+      .replace(/<[^>]+>/g, " ")
+      .replace(/\s+/g, " ")
+      .slice(0, 4000);
+
+    const prompt = `Analizza il seguente estratto di testo tratto dal sito scolastico "${schoolUrl}".
+Valuta se la pagina contiene riferimenti a graduatorie (es. graduatorie d'istituto, GPS, GAE, prima/seconda/terza fascia), avvisi di convocazione, interpelli, decreti di nomina o bandi di reclutamento personale DOCENTE o ATA.
+Se la pagina è una home page generica (es. presentazione della scuola, organigramma generico, circolari generali senza graduatorie, cookie policy o home istituzionale senza atti di personale), rispondi "false". Altrimenti rispondi "true".
+
+Rispondi ESCLUSIVAMENTE in JSON valido con questo schema:
+{
+  "hasGraduatorie": true o false,
+  "reason": "breve motivazione"
+}
+
+Testo:
+"""${textSample}"""`;
+
+    const response = await extractWithOpenRouter(
+      prompt,
+      apiKey.trim(),
+      "Sei un validatore di contenuti scolastici. Rispondi solo in JSON."
+    );
+
+    const cleanJson = response.replace(/```json/g, "").replace(/```/g, "").trim();
+    const parsed = JSON.parse(cleanJson);
+    return {
+      hasGraduatorie: typeof parsed?.hasGraduatorie === "boolean" ? parsed.hasGraduatorie : true,
+      reason: parsed?.reason
+    };
+  } catch {
+    return { hasGraduatorie: true };
+  }
 }
 
 

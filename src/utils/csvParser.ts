@@ -104,6 +104,101 @@ export function cleanAndValidateUrl(rawVal: string): string | null {
 }
 
 /**
+ * Controllo regex lato client ad alte prestazioni per verificare se un URL o stringa
+ * corrisponde a un dominio scolastico valido (.edu.it, .gov.it, .it) o piattaforme scolastiche autorizzate,
+ * escludendo link corrotti o non pertinenti prima di qualsiasi elaborazione batch.
+ */
+export function isValidSchoolDomainRegex(urlStr: string): boolean {
+  if (!urlStr || typeof urlStr !== 'string') return false;
+  const clean = urlStr.trim().toLowerCase();
+  
+  const schoolDomainRegex = /^(?:https?:\/\/)?(?:[a-z0-9](?:[a-z0-9-]{0,61}[a-z0-9])?\.)+(?:edu\.it|gov\.it|it|eu|com|org)(?:\/.*)?$/i;
+  
+  if (!schoolDomainRegex.test(clean)) {
+    return false;
+  }
+
+  const excludedKeywords = [
+    "facebook.com", "instagram.com", "twitter.com", "x.com", "youtube.com",
+    "linkedin.com", "wikipedia.org", "google.com", "gmail.com", "microsoft.com",
+    "apple.com", "whatsapp.com", "telegram.org", "pinterest.com", "adobe.com",
+    "microsoftonline.com", "office.com"
+  ];
+
+  if (excludedKeywords.some(ex => clean.includes(ex))) {
+    return false;
+  }
+
+  const hasValidExt = 
+    clean.includes(".edu.it") || 
+    clean.includes(".gov.it") || 
+    clean.includes("spaggiari.eu") ||
+    clean.includes("madisoft.it") ||
+    clean.includes("argo-enti.it") ||
+    clean.includes("axioscloud.it") ||
+    clean.includes("albipretorionline.com") ||
+    clean.includes("portaleargo.it") ||
+    /\b[a-z]{4}[0-9]{5}[a-z0-9]\b/i.test(clean) ||
+    clean.includes("ic") || 
+    clean.includes("is") || 
+    clean.includes("iiss") || 
+    clean.includes("liceo") || 
+    clean.includes("istituto") ||
+    clean.includes("comprensivo");
+
+  return hasValidExt;
+}
+
+/**
+ * Canonizza un URL rimuovendo tracking queries, trailing slashes e filtrando domini non pertinenti o social.
+ */
+export function canonicalizeUrl(urlStr: string): string | null {
+  if (!isValidSchoolDomainRegex(urlStr)) return null;
+  const validated = cleanAndValidateUrl(urlStr);
+  if (!validated) return null;
+
+  try {
+    const parsed = new URL(validated);
+    let host = parsed.hostname.toLowerCase().replace(/^www\./, "");
+    let pathname = parsed.pathname.replace(/\/+$/, "");
+    if (!pathname) pathname = "";
+
+    const excludedDomains = [
+      "facebook.com", "instagram.com", "twitter.com", "x.com", "youtube.com", 
+      "linkedin.com", "wikipedia.org", "google.com", "gmail.com", "microsoft.com",
+      "apple.com", "whatsapp.com", "telegram.org", "pinterest.com"
+    ];
+    if (excludedDomains.some(d => host === d || host.endsWith("." + d))) {
+      return null;
+    }
+
+    const isSchoolOrAuthorized = 
+      host.endsWith(".edu.it") || 
+      host.endsWith(".gov.it") || 
+      host.endsWith(".it") ||
+      host.includes("spaggiari.eu") ||
+      host.includes("madisoft.it") ||
+      host.includes("argo-enti.it") ||
+      host.includes("axioscloud.it") ||
+      host.includes("albipretorionline.com") ||
+      host.includes("portaleargo.it");
+
+    if (!isSchoolOrAuthorized) {
+      return null;
+    }
+
+    const searchParams = new URLSearchParams(parsed.search);
+    const trackingKeys = ["utm_source", "utm_medium", "utm_campaign", "utm_term", "utm_content", "fbclid", "gclid", "ref"];
+    trackingKeys.forEach(k => searchParams.delete(k));
+    const search = searchParams.toString() ? `?${searchParams.toString()}` : "";
+
+    return `https://${host}${pathname}${search}`;
+  } catch {
+    return null;
+  }
+}
+
+/**
  * Estrae l'elenco degli URL dal testo CSV, cercando nelle colonne appropriate.
  */
 export function parseSchoolUrlsFromCsv(csvText: string): ParsedSchoolUrlItem[] {
@@ -214,9 +309,9 @@ export function parseSchoolUrlsFromCsv(csvText: string): ParsedSchoolUrlItem[] {
     }
 
     if (extractedUrl) {
-      const normalizedUrl = extractedUrl.toLowerCase().replace(/\/+$/, '');
-      if (!seenUrls.has(normalizedUrl)) {
-        seenUrls.add(normalizedUrl);
+      const canonical = canonicalizeUrl(extractedUrl);
+      if (canonical && !seenUrls.has(canonical)) {
+        seenUrls.add(canonical);
         items.push({
           url: extractedUrl,
           codice_meccanografico: codiceMecc,

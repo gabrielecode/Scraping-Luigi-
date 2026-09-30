@@ -32,7 +32,8 @@ import {
   saveStoredGraduatorie, 
   crossReferenceNomina, 
   extractWithOpenRouter,
-  findGraduatoriaCandidateLinks
+  findGraduatoriaCandidateLinks,
+  validateSchoolPageWithAi
 } from "./services/graduatorieService";
 import { extractSchoolData, analyzeSchoolContentHeuristic } from "./services/schoolExtractorService";
 import { extractTextFromPdfBuffer, extractPdfsFromHtml } from "./services/pdfService";
@@ -268,6 +269,13 @@ export default function App() {
             html = await fetchWithProxyText(item.url);
           } catch {
             // Se l'URL del plesso non risponde, prosegui: extractSchoolData risolverà l'istituto madre e gli atti via web
+          }
+
+          if (html && html.length > 200 && openRouterApiKey.trim()) {
+            const validation = await validateSchoolPageWithAi(html, item.url, openRouterApiKey.trim());
+            if (!validation.hasGraduatorie) {
+              setBatchLiveLog(prev => [...prev, `[Validazione AI] Pagina identificata come home page generica (${validation.reason || "nessun atto esplicito"}). Attivazione fallback ricerca web atti...`]);
+            }
           }
 
           try {

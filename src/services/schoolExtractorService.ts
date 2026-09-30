@@ -259,32 +259,60 @@ export function extractGraduatoriaTableEntries(text: string, schoolUrl: string):
         nominativo = isPlausibleName(rNom) ? rNom : "Non disponibile";
       }
 
-      const key = `${tipologia}_${profilo}_${punteggio}_${posStr}_${nominativo}`;
-      if (!seen.has(key)) {
-        seen.add(key);
-        items.push({
-          nome_istituto: "",
-          codice_meccanografico: "",
-          nominativo,
-          tipologia_personale: tipologia,
-          profilo_lavorativo: profilo,
-          classe_concorso_area_lab: cdc,
-          tipo_posto: tipoPosto,
-          punteggio,
-          origine_punteggio: originePunteggio,
-          posizione_graduatoria: posStr,
-          fascia: fasciaStr,
-          ore_settimanali: oreStr,
-          decorrenza_contratto: "Non disponibile",
-          durata_contratto_mesi: "Non disponibile",
-          durata_contratto_giorni: "",
-          link_del_documento: schoolUrl
-        });
+      if (nominativo !== "Non disponibile" && isPlausibleName(nominativo)) {
+        const key = `${tipologia}_${profilo}_${punteggio}_${posStr}_${nominativo}`;
+        if (!seen.has(key)) {
+          seen.add(key);
+          items.push({
+            nome_istituto: "",
+            codice_meccanografico: "",
+            nominativo,
+            tipologia_personale: tipologia,
+            profilo_lavorativo: profilo,
+            classe_concorso_area_lab: cdc,
+            tipo_posto: tipoPosto,
+            punteggio,
+            origine_punteggio: originePunteggio,
+            posizione_graduatoria: posStr,
+            fascia: fasciaStr,
+            ore_settimanali: oreStr,
+            decorrenza_contratto: "Non disponibile",
+            durata_contratto_mesi: "Non disponibile",
+            durata_contratto_giorni: "",
+            link_del_documento: schoolUrl
+          });
+        }
       }
     }
   }
 
   return items;
+}
+
+/**
+ * Identifies and extracts common 'Albo Pretorio' or 'Trasparenza' CSS patterns/containers
+ * (like .albo-list, .trasparenza-links, #albo-pretorio, etc.) to prioritize scraping
+ * specific content containers instead of the full HTML body.
+ */
+export function extractAlboPretorioContainer(htmlOrText: string): string {
+  if (!htmlOrText) return "";
+
+  const containerPatterns = [
+    /class=["'][^"']*\b(?:albo[-_]?list|albo[-_]?pretorio|trasparenza[-_]?links|amministrazione[-_]?trasparente|elenco[-_]?atti|atti[-_]?pubblici|graduatorie[-_]?container)\b[^"']*["'][^>]*>([\s\S]*?)<\/(?:div|section|article|main|ul)>?/gi,
+    /id=["'][^"']*\b(?:albo[-_]?pretorio|trasparenza|atti|graduatorie)\b[^"']*["'][^>]*>([\s\S]*?)<\/(?:div|section|article|main|ul)>?/gi
+  ];
+
+  let extractedContent = "";
+  for (const pattern of containerPatterns) {
+    let match: RegExpExecArray | null;
+    while ((match = pattern.exec(htmlOrText)) !== null) {
+      if (match[1] && match[1].length > 50) {
+        extractedContent += "\n" + match[1];
+      }
+    }
+  }
+
+  return extractedContent.trim().length > 100 ? extractedContent : htmlOrText;
 }
 
 /**
@@ -315,7 +343,8 @@ export function analyzeSchoolContentHeuristic(
   };
   nomine: NominaContrattoItem[];
 } {
-  const processedText = (text || "")
+  const prioritizedText = extractAlboPretorioContainer(text);
+  const processedText = (prioritizedText || "")
     .replace(/<\/td>\s*<td[^>]*>/gi, " | ")
     .replace(/<\/tr>\s*<tr[^>]*>/gi, " | ");
 
@@ -744,6 +773,33 @@ export async function extractSchoolData(
         // procedi
       }
     }
+
+    // Estrai in profondità i documenti PDF collegati (Albo Pretorio, Graduatorie, Decreti)
+    const pdfLinks = extractPdfsFromHtml(homepageHtml, effectiveUrl);
+    for (const pdfItem of pdfLinks.slice(0, 5)) {
+      try {
+        const pdfRes = await fetchSubPageFn(pdfItem.url);
+        if (pdfRes) {
+          let buffer: ArrayBuffer;
+          const resObj = pdfRes as any;
+          if (typeof pdfRes === "string") {
+            buffer = new TextEncoder().encode(pdfRes).buffer;
+          } else if (resObj instanceof ArrayBuffer) {
+            buffer = resObj;
+          } else if (resObj instanceof Uint8Array) {
+            buffer = resObj.buffer;
+          } else {
+            buffer = new TextEncoder().encode(String(pdfRes)).buffer;
+          }
+          const pdfExtracted = await extractTextFromPdfBuffer(buffer, 30);
+          if (pdfExtracted && pdfExtracted.text.length > 50) {
+            aggregatedText += `\n--- PDF SCOLASTICO APPROFONDITO (${pdfItem.title}) ---\n${pdfExtracted.text}`;
+          }
+        }
+      } catch {
+        // Ignored
+      }
+    }
   }
 
   // 3. Esegui analisi euristica ad alta precisione
@@ -889,13 +945,18 @@ Testo:
     }
   }
 
-  // 5. Combina le nomine trovate
+  // 5. Combina le nomine trovate e filtra rigorosamente per dati reali e verificati (nominativo plausibile)
   const combinedNomine: NominaContrattoItem[] = [];
   const seenNomine = new Set<string>();
 
   for (const n of [...heuristicResult.nomine, ...targetAiNomine, ...aiNomine]) {
     n.nome_istituto = effectiveNome;
     n.codice_meccanografico = detectedMecc || "";
+
+    if (!singleNominativo && (!n.nominativo || n.nominativo === "Non disponibile" || !isPlausibleName(n.nominativo))) {
+      continue;
+    }
+
     const key = `${n.tipologia_personale}_${n.profilo_lavorativo}_${n.classe_concorso_area_lab}_${n.nominativo || ''}`;
     if (!seenNomine.has(key)) {
       seenNomine.add(key);
