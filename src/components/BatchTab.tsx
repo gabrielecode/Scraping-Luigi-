@@ -286,38 +286,39 @@ export function BatchTab({
               </thead>
               <tbody className="divide-y divide-slate-900 text-slate-200">
                 {batchResults.flatMap((r, rIdx) => {
-                  const totalConvAta = (r.data.convocazioni_collaboratore_scolastico || 0) +
-                    (r.data.convocazioni_assistente_amministrativo || 0) +
-                    (r.data.convocazioni_assistente_tecnico || 0) +
-                    (r.data.convocazioni_cuoco || 0) +
-                    (r.data.convocazioni_assistente_agrario || 0);
+                  const data = (r?.data || {}) as any;
+                  const totalConvAta = (data.convocazioni_collaboratore_scolastico || 0) +
+                    (data.convocazioni_assistente_amministrativo || 0) +
+                    (data.convocazioni_assistente_tecnico || 0) +
+                    (data.convocazioni_cuoco || 0) +
+                    (data.convocazioni_assistente_agrario || 0);
 
-                  const totalPensAta = (r.data.pensionamenti_collaboratore_scolastico || 0) +
-                    (r.data.pensionamenti_assistente_amministrativo || 0) +
-                    (r.data.pensionamenti_assistente_tecnico || 0) +
-                    (r.data.pensionamenti_cuoco || 0) +
-                    (r.data.pensionamenti_assistente_agrario || 0);
+                  const totalPensAta = (data.pensionamenti_collaboratore_scolastico || 0) +
+                    (data.pensionamenti_assistente_amministrativo || 0) +
+                    (data.pensionamenti_assistente_tecnico || 0) +
+                    (data.pensionamenti_cuoco || 0) +
+                    (data.pensionamenti_assistente_agrario || 0);
 
                   // Se sono presenti posizioni dettagliate censite per la scuola, mostrale tutte
-                  const itemsToShow = (r.data.nomine_contratti && r.data.nomine_contratti.length > 0)
-                    ? r.data.nomine_contratti
+                  const itemsToShow = (Array.isArray(data.nomine_contratti) && data.nomine_contratti.length > 0)
+                    ? data.nomine_contratti
                     : [{
-                        tipologia_personale: r.data.tipologia_personale || ((r.data.convocazioni_docenti || 0) > 0 ? "DOCENTE" : "ATA"),
-                        profilo_lavorativo: r.data.profilo_lavorativo || r.data.profilo_professionale || ((r.data.convocazioni_docenti || 0) > 0 ? "Docente Scuola Secondaria / Primaria" : "Collaboratore Scolastico"),
-                        classe_concorso_area_lab: r.data.classe_concorso_area_lab || ((r.data.convocazioni_docenti || 0) > 0 ? "Curricolare" : "CS"),
-                        tipo_posto: r.data.tipo_posto || "comune",
-                        nominativo: r.data.nominativo || ((r.data.convocazioni_docenti || 0) > 0 ? "Interpello aperto Docenti" : "Convocazione aperta ATA"),
-                        punteggio: r.data.punteggio !== null && r.data.punteggio !== undefined ? r.data.punteggio : deriveCertainScore("Pos. 1", (r.data.convocazioni_docenti || 0) > 0 ? "DOCENTE" : "ATA", "Prima Fascia").punteggio,
-                        origine_punteggio: r.data.origine_punteggio || deriveCertainScore("Pos. 1", (r.data.convocazioni_docenti || 0) > 0 ? "DOCENTE" : "ATA", "Prima Fascia").origine,
-                        posizione_graduatoria: r.data.posizione_graduatoria || "Pos. 1",
-                        fascia: r.data.graduatoria_fascia || "Prima Fascia",
-                        ore_settimanali: r.data.ore_settimanali || ((r.data.convocazioni_docenti || 0) > 0 ? "18 ore settimanali (Cattedra)" : "36 ore settimanali (Tempo pieno)"),
-                        decorrenza_contratto: r.data.decorrenza_contratto || (r.data.decorrenza_da ? `${r.data.decorrenza_da}${r.data.decorrenza_a ? ` - ${r.data.decorrenza_a}` : ""}` : "Fino al termine delle attività didattiche (30/06/2026)")
+                        tipologia_personale: data.tipologia_personale || ((data.convocazioni_docenti || 0) > 0 ? "DOCENTE" : "ATA"),
+                        profilo_lavorativo: data.profilo_lavorativo || data.profilo_professionale || ((data.convocazioni_docenti || 0) > 0 ? "Docente Scuola Secondaria / Primaria" : "Collaboratore Scolastico"),
+                        classe_concorso_area_lab: data.classe_concorso_area_lab || ((data.convocazioni_docenti || 0) > 0 ? "Curricolare" : "CS"),
+                        tipo_posto: data.tipo_posto || "comune",
+                        nominativo: data.nominativo || ((data.convocazioni_docenti || 0) > 0 ? "Interpello aperto Docenti" : "Convocazione aperta ATA"),
+                        punteggio: data.punteggio !== null && data.punteggio !== undefined ? data.punteggio : deriveCertainScore("Pos. 1", (data.convocazioni_docenti || 0) > 0 ? "DOCENTE" : "ATA", "Prima Fascia").punteggio,
+                        origine_punteggio: data.origine_punteggio || deriveCertainScore("Pos. 1", (data.convocazioni_docenti || 0) > 0 ? "DOCENTE" : "ATA", "Prima Fascia").origine,
+                        posizione_graduatoria: data.posizione_graduatoria || "Pos. 1",
+                        fascia: data.graduatoria_fascia || "Prima Fascia",
+                        ore_settimanali: data.ore_settimanali || ((data.convocazioni_docenti || 0) > 0 ? "18 ore settimanali (Cattedra)" : "36 ore settimanali (Tempo pieno)"),
+                        decorrenza_contratto: data.decorrenza_contratto || (data.decorrenza_da ? `${data.decorrenza_da}${data.decorrenza_a ? ` - ${data.decorrenza_a}` : ""}` : "Fino al termine delle attività didattiche (30/06/2026)")
                       }];
 
                   return itemsToShow.map((item, itemIdx) => {
                     const posText = item.posizione_graduatoria && item.posizione_graduatoria !== "Non disponibile" ? item.posizione_graduatoria : "Pos. 1";
-                    const fasciaText = item.fascia || r.data.graduatoria_fascia || (item.tipologia_personale === "DOCENTE" ? "Prima Fascia GaE / GPS" : "Prima Fascia (24 Mesi)");
+                    const fasciaText = item.fascia || data.graduatoria_fascia || (item.tipologia_personale === "DOCENTE" ? "Prima Fascia GaE / GPS" : "Prima Fascia (24 Mesi)");
                     
                     let numScore: number;
                     let origText = item.origine_punteggio || "";
@@ -333,11 +334,11 @@ export function BatchTab({
 
                     return (
                       <tr key={`${rIdx}-${itemIdx}`} className="hover:bg-slate-900/50 transition-colors">
-                        <td className="px-4 py-3 font-medium text-white max-w-[200px] truncate" title={r.data.nome_istituto}>
-                          {r.data.nome_istituto || r.url}
+                        <td className="px-4 py-3 font-medium text-white max-w-[200px] truncate" title={data.nome_istituto}>
+                          {data.nome_istituto || r?.url}
                         </td>
                         <td className="px-4 py-3 text-center font-mono font-bold text-blue-400">
-                          {isValidCodiceMeccanografico(r.data.codice_meccanografico) ? normalizeCodiceMeccanografico(r.data.codice_meccanografico) : (r.data.codice_meccanografico || "-")}
+                          {isValidCodiceMeccanografico(data.codice_meccanografico) ? normalizeCodiceMeccanografico(data.codice_meccanografico) : (data.codice_meccanografico || "-")}
                         </td>
                         <td className="px-4 py-3 text-center">
                           <span className={`px-2 py-0.5 rounded text-[10px] font-bold ${item.tipologia_personale === "DOCENTE" ? "bg-amber-500/10 text-amber-400 border border-amber-500/20" : "bg-blue-500/10 text-blue-400 border border-blue-500/20"}`}>
@@ -373,13 +374,13 @@ export function BatchTab({
                         <td className="px-4 py-3 text-center text-slate-300 font-medium text-sm">
                           {fasciaText}
                         </td>
-                        <td className="px-4 py-3 text-center font-bold text-amber-300 text-sm">{r.data.convocazioni_docenti ?? 0}</td>
+                        <td className="px-4 py-3 text-center font-bold text-amber-300 text-sm">{data.convocazioni_docenti ?? 0}</td>
                         <td className="px-4 py-3 text-center font-bold text-blue-300 text-sm">{totalConvAta}</td>
-                        <td className="px-4 py-3 text-center font-bold text-amber-300 text-sm">{r.data.pensionamenti_docenti ?? 0}</td>
+                        <td className="px-4 py-3 text-center font-bold text-amber-300 text-sm">{data.pensionamenti_docenti ?? 0}</td>
                         <td className="px-4 py-3 text-center font-bold text-blue-300 text-sm">{totalPensAta}</td>
                         <td className="px-4 py-3 text-center text-slate-300 font-medium text-sm">{item.ore_settimanali || (item.tipologia_personale === "DOCENTE" ? "18 ore settimanali" : "36 ore settimanali")}</td>
                         <td className="px-4 py-3 text-center text-slate-300 font-medium text-xs whitespace-nowrap">
-                          {item.decorrenza_contratto || r.data.decorrenza_contratto || (r.data.decorrenza_da ? `${r.data.decorrenza_da}${r.data.decorrenza_a ? ` - ${r.data.decorrenza_a}` : ""}` : "Fino al 30/06/2026")}
+                          {item.decorrenza_contratto || data.decorrenza_contratto || (data.decorrenza_da ? `${data.decorrenza_da}${data.decorrenza_a ? ` - ${data.decorrenza_a}` : ""}` : "Fino al 30/06/2026")}
                         </td>
                       </tr>
                     );

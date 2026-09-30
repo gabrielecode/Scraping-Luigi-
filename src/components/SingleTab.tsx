@@ -146,7 +146,10 @@ export function SingleTab({
         )}
       </div>
 
-      {singleResult && (
+      {singleResult && (() => {
+        const data = singleResult.data || {};
+        const logs = Array.isArray(singleResult.logs) ? singleResult.logs : [];
+        return (
         <div className="space-y-6 animate-fadeIn">
           {/* Logs Card */}
           <div className="bg-slate-900 border border-slate-800 rounded-lg p-6 space-y-3">
@@ -155,7 +158,7 @@ export function SingleTab({
               Log di Navigazione e Scansione
             </h3>
             <div className="font-mono text-xs max-h-64 overflow-auto bg-slate-950 border border-slate-800 rounded-md p-4 text-slate-400 space-y-1.5">
-              {singleResult.logs.map((log, idx) => (
+              {logs.map((log, idx) => (
                 <div key={idx} className="flex items-start gap-2">
                   <span className="text-blue-400">›</span>
                   <span>{log}</span>
@@ -392,7 +395,8 @@ export function SingleTab({
             )}
           </div>
         </div>
-      )}
+      );
+      })()}
     </div>
   );
 }

@@ -10,6 +10,28 @@ import {
 import { extractTextFromPdfBuffer, extractPdfsFromHtml } from "./pdfService";
 
 /**
+ * Verifica se un nominativo è plausibile secondo i criteri definiti.
+ */
+function isPlausibleName(str?: string | null): boolean {
+  if (!str) return false;
+  const trimmed = str.trim();
+  const words = trimmed.split(/\s+/);
+  if (words.length < 2) return false;
+  if (/\d/.test(trimmed)) return false;
+
+  const forbidden = new Set([
+    "pon", "fse", "fesr", "pnrr", "miur", "usr", "ata", "ptof", "pof", "gae", "gps", "sidi", "inps", "inpdap",
+    "interpello", "convocazione", "avviso", "graduatoria", "elenco", "pubblicazione", "nomina", "decreto"
+  ]);
+
+  for (const w of words) {
+    if (w.length < 2 || w.length > 20) return false;
+    if (forbidden.has(w.toLowerCase())) return false;
+  }
+  return true;
+}
+
+/**
  * Normalizza il nome della scuola estraendo l'Istituto Principale / Comprensivo
  * quando il record si riferisce a un singolo plesso (es. "ALTINO - IC CASOLI" -> "IC CASOLI")
  */
@@ -164,7 +186,10 @@ export function extractGraduatoriaTableEntries(text: string, schoolUrl: string):
     const lower = line.toLowerCase();
 
     // Rileva riga con posizione e/o punteggio
-    const posMatch = line.match(/(?:pos(?:izione)?\.?|posto|n\.)\s*[:=\s#]*([0-9]{1,4})\b/i);
+    let posMatch = line.match(/(?:pos(?:izione)?\.?|posto)\s*[:=\s#]*([0-9]{1,4})\b/i);
+    if (!posMatch && (lower.includes("graduatoria") || lower.includes("fascia"))) {
+      posMatch = line.match(/\bn\.\s*([0-9]{1,4})\b/i);
+    }
     const puntDetected = extractScoreRobust(line);
     const fasciaMatch = line.match(/(?:prima|seconda|terza|[1-3]\^?|[1-3]°)\s*fascia\b/i);
     const oreMatch = line.match(/([0-9]{1,2}(?:\/[0-9]{1,2})?)\s*(?:ore|h\b|settimanali)/i);
@@ -207,7 +232,8 @@ export function extractGraduatoriaTableEntries(text: string, schoolUrl: string):
       const nomMatch = line.match(/\|\s*([A-ZÀÈÉÌÒÙ\s]{4,30})\s*\|/) ||
                        line.match(/[-–]\s*([A-Z\s]{4,30})\s*[-–]/) ||
                        line.match(/(?:candidat[oa]|nominat[oa]|individuato|a favore di|al sig\.?|alla sig\.?ra)[:\s]+([A-Z][a-zàèéìòù]+(?:\s+[A-Z][a-zàèéìòù]+){1,3})/i);
-      const nominativo = nomMatch ? nomMatch[1].trim() : "Non disponibile";
+      const rawNom = nomMatch ? nomMatch[1].trim() : "Non disponibile";
+      const nominativo = isPlausibleName(rawNom) ? rawNom : "Non disponibile";
 
       const key = `${tipologia}_${profilo}_${punteggio}_${posStr}_${nominativo}`;
       if (!seen.has(key)) {
@@ -400,7 +426,10 @@ export function analyzeSchoolContentHeuristic(
       // Estrai dettagli numerici esatti
       const puntDetected = extractScoreRobust(block);
 
-      const posMatch = block.match(/(?:pos(?:izione)?\.?|posto|graduatoria n\.?)[:\s#]+([0-9]{1,4})/i);
+      let posMatch = block.match(/(?:pos(?:izione)?\.?|posto)\s*[:=\s#]*([0-9]{1,4})\b/i);
+      if (!posMatch && (lower.includes("graduatoria") || lower.includes("fascia"))) {
+        posMatch = block.match(/(?:graduatoria\s+)?n\.\s*([0-9]{1,4})\b/i);
+      }
       let posStr = posMatch ? `Pos. ${posMatch[1]}` : "Non disponibile";
 
       const fasciaMatch = block.match(/(?:fascia|graduatoria di)[:\s]+([1-3]|prima|seconda|terza|I|II|III)\b/i);
@@ -454,10 +483,8 @@ export function analyzeSchoolContentHeuristic(
       let originePunteggio: string = puntDetected !== null ? (lower.includes("decreto") ? "Decreto di Individuazione" : "Graduatoria Ufficiale") : "Non disponibile";
 
       // Nominativo
-      let candidateName = targetNominativo || (block.match(/(?:nominativo|candidat[oa]|docente|supplente|alla sig\.?ra|al sig\.?|individuato|assegnato a)[:\s]+([A-Z][a-zàèéìòù]+(?:\s+[A-Z][a-zàèéìòù]+){1,3})/)?.[1]);
-      if (!candidateName) {
-        candidateName = "Non disponibile";
-      }
+      let rawCandidate = targetNominativo || (block.match(/(?:nominativo|candidat[oa]|docente|supplente|alla sig\.?ra|al sig\.?|individuato|assegnato a)[:\s]+([A-Z][a-zàèéìòù]+(?:\s+[A-Z][a-zàèéìòù]+){1,3})/)?.[1]);
+      let candidateName = isPlausibleName(rawCandidate) ? rawCandidate.trim() : "Non disponibile";
 
       const key = `${tipologia}_${profilo}_${cdc}_${decStr}`;
       if (!seenNomineKeys.has(key)) {
@@ -703,15 +730,17 @@ Per ogni riga tabellare valida, restituisci SOLO JSON valido:
 {
   "nomine": [
     {
-      "nominativo": "Nome Cognome",
-      "punteggio": 48.5,
-      "posizione_graduatoria": "Pos. 1",
-      "tipologia_personale": "DOCENTE o ATA",
-      "profilo_lavorativo": "Docente o Collaboratore scolastico",
-      "fascia": "Prima Fascia"
+      "nominativo": "<stringa o null>",
+      "punteggio": null,
+      "posizione_graduatoria": "<stringa o null>",
+      "tipologia_personale": "<stringa o null>",
+      "profilo_lavorativo": "<stringa o null>",
+      "fascia": "<stringa o null>"
     }
   ]
 }
+
+Se un campo non è esplicitamente presente nel testo, restituisci null. Non inventare né dedurre valori. Il nominativo deve essere un nome e cognome reali, mai una sigla o un codice progetto.
 
 Testo:
 """${targetedSample}"""`;
@@ -726,17 +755,19 @@ Testo:
       const parsedTargeted = JSON.parse(cleanTargetedJson);
       if (Array.isArray(parsedTargeted?.nomine)) {
         for (const n of parsedTargeted.nomine) {
-          if (n.nominativo && n.nominativo !== "Non disponibile") {
+          const rawNom = n.nominativo || "";
+          const nominativo = isPlausibleName(rawNom) ? rawNom.trim() : "Non disponibile";
+          if (nominativo !== "Non disponibile") {
             targetAiNomine.push({
               nome_istituto: effectiveNome,
               codice_meccanografico: detectedMecc || "",
-              nominativo: n.nominativo,
+              nominativo,
               tipologia_personale: n.tipologia_personale === "DOCENTE" ? "DOCENTE" : "ATA",
               profilo_lavorativo: n.profilo_lavorativo || "Non disponibile",
               classe_concorso_area_lab: "Non disponibile",
               tipo_posto: "comune",
               punteggio: typeof n.punteggio === "number" ? n.punteggio : null,
-              origine_punteggio: typeof n.punteggio === "number" ? "Graduatoria Definitiva d'Istituto" : "Non disponibile",
+              origine_punteggio: typeof n.punteggio === "number" ? (n.origine_punteggio || "Non disponibile") : "Non disponibile",
               posizione_graduatoria: n.posizione_graduatoria || "Non disponibile",
               fascia: n.fascia || "Non disponibile",
               ore_settimanali: "Non disponibile",
@@ -771,19 +802,21 @@ Rispondi SOLO in JSON:
   "codice_meccanografico": "${detectedMecc || ''}",
   "nomine": [
     {
-      "nominativo": "Nome Cognome o Interpello aperto",
-      "tipologia_personale": "DOCENTE o ATA",
-      "profilo_lavorativo": "Docente Scuola Secondaria / Collaboratore scolastico",
-      "classe_concorso_area_lab": "A-22 o CS o AA",
-      "punteggio": 48.5,
-      "origine_punteggio": "Decreto di Individuazione o Graduatoria Definitiva",
-      "posizione_graduatoria": "Pos. 1",
-      "fascia": "Prima Fascia (24 Mesi) o Seconda Fascia o Terza Fascia",
-      "ore_settimanali": "18 ore settimanali",
-      "decorrenza_contratto": "30/06/2026"
+      "nominativo": "<stringa o null>",
+      "tipologia_personale": "<stringa o null>",
+      "profilo_lavorativo": "<stringa o null>",
+      "classe_concorso_area_lab": "<stringa o null>",
+      "punteggio": null,
+      "origine_punteggio": "<stringa o null>",
+      "posizione_graduatoria": "<stringa o null>",
+      "fascia": "<stringa o null>",
+      "ore_settimanali": "<stringa o null>",
+      "decorrenza_contratto": "<stringa o null>"
     }
   ]
 }
+
+Se un campo non è esplicitamente presente nel testo, restituisci null. Non inventare né dedurre valori. Il nominativo deve essere un nome e cognome reali, mai una sigla o un codice progetto.
 
 Testo:
 """${sampleForAi}"""`;
@@ -798,20 +831,22 @@ Testo:
       const parsedAi = JSON.parse(cleanJson);
       if (Array.isArray(parsedAi?.nomine)) {
         for (const n of parsedAi.nomine) {
+          const rawNom = n.nominativo || singleNominativo || "";
+          const nominativo = isPlausibleName(rawNom) ? rawNom.trim() : "Non disponibile";
           aiNomine.push({
             nome_istituto: effectiveNome,
             codice_meccanografico: detectedMecc || "",
-            nominativo: n.nominativo || singleNominativo || "Interpello aperto / Convocazione",
+            nominativo,
             tipologia_personale: n.tipologia_personale === "DOCENTE" ? "DOCENTE" : "ATA",
-            profilo_lavorativo: n.profilo_lavorativo || (n.tipologia_personale === "DOCENTE" ? "Docente" : "Collaboratore scolastico"),
-            classe_concorso_area_lab: n.classe_concorso_area_lab || (n.tipologia_personale === "DOCENTE" ? "Curricolare" : "CS"),
+            profilo_lavorativo: n.profilo_lavorativo || "Non disponibile",
+            classe_concorso_area_lab: n.classe_concorso_area_lab || "Non disponibile",
             tipo_posto: "comune",
             punteggio: typeof n.punteggio === "number" ? n.punteggio : null,
-            origine_punteggio: typeof n.punteggio === "number" ? (n.origine_punteggio || "Decreto di Individuazione") : "Non disponibile",
+            origine_punteggio: typeof n.punteggio === "number" ? (n.origine_punteggio || "Non disponibile") : "Non disponibile",
             posizione_graduatoria: n.posizione_graduatoria || "Non disponibile",
             fascia: n.fascia || "Non disponibile",
-            ore_settimanali: n.ore_settimanali || (n.tipologia_personale === "DOCENTE" ? "18 ore settimanali" : "36 ore settimanali"),
-            decorrenza_contratto: n.decorrenza_contratto || "Fino al termine delle attività didattiche (30/06/2026)",
+            ore_settimanali: n.ore_settimanali || "Non disponibile",
+            decorrenza_contratto: n.decorrenza_contratto || "Non disponibile",
             durata_contratto_mesi: "",
             durata_contratto_giorni: "",
             link_del_documento: effectiveUrl
