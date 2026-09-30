@@ -813,11 +813,7 @@ Testo:
       fetchAiFn: async (promptText: string, sysPrompt: string) => {
         if (!apiKey || !apiKey.trim()) throw new Error("API Key mancante");
         const resStr = await extractWithOpenRouter(promptText, apiKey, sysPrompt);
-        try {
-          return JSON.parse(resStr);
-        } catch {
-          return resStr;
-        }
+        return { choices: [{ message: { content: resStr } }] };
       },
       pdfTextExtractor: async (buffer: ArrayBuffer, maxPages?: number) => {
         const res = await extractTextFromPdfBuffer(new Uint8Array(buffer), maxPages);
